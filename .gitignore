@@ -1,0 +1,26 @@
+node_modules/
+dist/
+*.js.map
+*.d.ts.map
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# CodeGraph index (regenerated per project)
+.codegraph/
+
+# Hermes agent source (used only as reference during development)
+hermes-agent/
+
+# Pi agent state
+.pi/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
