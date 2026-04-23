@@ -1,0 +1,182 @@
+# Tasks — Pi Hermes Memory Extension
+
+> **Workflow**: When you start a task, change `[ ]` to `[~]`. When done, change to `[x]` and note the commit hash.
+> Progress is tracked per-epic. Each epic has a clear definition of done.
+
+---
+
+## Epic 1: Project Scaffold & Repo Setup
+
+_Done when: repo is on GitHub, TypeScript compiles clean, extension loads in Pi without errors._
+
+- [x] `PLAN.md` — Full implementation plan with Hermes source file reference map — `efddcc4`
+- [x] `AGENTS.md` — Project context and architecture docs — `efddcc4`
+- [x] `.gitignore` — Exclude node_modules, dist, .codegraph, hermes-agent — `efddcc4`
+- [x] `package.json` — Minimal config, no runtime deps — `efddcc4`
+- [x] `tsconfig.json` — Strict TypeScript config — `efddcc4`
+- [x] `src/types.ts` — Shared interfaces (`MemoryConfig`, `MemoryResult`, `MemorySnapshot`) — `efddcc4`
+- [x] `src/constants.ts` — Prompts, defaults, delimiter — `efddcc4`
+- [x] `src/content-scanner.ts` — Injection/exfiltration pattern detection — `efddcc4`
+- [x] `src/memory-store.ts` — Core `MemoryStore` class with CRUD, atomic writes, frozen snapshot — `efddcc4`
+- [x] `src/memory-tool.ts` — `registerMemoryTool()` with Pi tool API — `efddcc4`
+- [x] `src/background-review.ts` — Learning loop via `pi.exec()` — `efddcc4`
+- [x] `src/session-flush.ts` — Pre-compaction/shutdown flush — `efddcc4`
+- [x] `src/insights.ts` — `/memory-insights` command — `efddcc4`
+- [x] `src/index.ts` — Extension entry point wiring everything — `efddcc4`
+- [x] GitHub repo created and initial commit pushed — `efddcc4`
+- [ ] `npm install` + `npm run check` passes with zero errors
+- [ ] Extension loads in Pi via `pi -e ./src/index.ts` without runtime errors
+
+---
+
+## Epic 2: Core Memory — Store & Tool
+
+_Done when: agent can add/replace/remove entries, they persist to disk, and survive a Pi session restart._
+
+- [ ] `MemoryStore.loadFromDisk()` correctly reads existing MEMORY.md and USER.md
+- [ ] `MemoryStore.add()` validates content, enforces char limit, persists atomically
+- [ ] `MemoryStore.replace()` finds entry by substring, replaces, re-checks limit
+- [ ] `MemoryStore.remove()` finds entry by substring, removes, persists
+- [ ] `MemoryStore.formatForSystemPrompt()` returns frozen snapshot (not live state)
+- [ ] Atomic write works: temp file → `fs.rename()` (verify no corruption on crash simulation)
+- [ ] Character limits enforced: reject writes that exceed `memoryCharLimit` / `userCharLimit`
+- [ ] Deduplication: adding an identical entry is a no-op
+- [ ] Multi-match ambiguity: replace/remove error when multiple distinct entries match
+- [ ] `memory` tool shows up in Pi's tool list when extension is loaded
+- [ ] LLM can call `memory` tool with `add` action and entry appears in MEMORY.md
+- [ ] LLM can call `memory` tool with `target: "user"` and entry appears in USER.md
+- [ ] Tool returns JSON with `usage` field showing char budget (e.g. `"45% — 990/2200 chars"`)
+
+---
+
+## Epic 3: Content Scanning & Security
+
+_Done when: all injection/exfiltration patterns are blocked, invisible unicode is blocked, and safe content passes through._
+
+- [ ] `scanContent()` blocks prompt injection patterns (e.g. "ignore previous instructions")
+- [ ] `scanContent()` blocks role hijacking (e.g. "you are now...")
+- [ ] `scanContent()` blocks secret exfiltration (e.g. `curl ${API_KEY...`)
+- [ ] `scanContent()` blocks invisible unicode (U+200B, U+FEFF, U+202A-U+202E)
+- [ ] `scanContent()` returns `null` for safe/normal content
+- [ ] Blocked writes return `{ success: false, error: "Blocked: ..." }` to the LLM
+- [ ] Edge case: empty string passes (handled by empty check before scanner)
+- [ ] Edge case: very long content with pattern at end is still caught
+
+---
+
+## Epic 4: System Prompt Injection
+
+_Done when: memory snapshot appears in system prompt at session start and does NOT update mid-session._
+
+- [ ] `before_agent_start` handler appends memory block to `event.systemPrompt`
+- [ ] Memory block includes header with usage percentage and char count
+- [ ] Block format matches Hermes: `═` separator, header line, then content
+- [ ] Frozen snapshot: write to memory mid-session → system prompt unchanged
+- [ ] Empty memory files → no block appended (system prompt untouched)
+- [ ] Second session: memory saved in session 1 appears in session 2's system prompt
+
+---
+
+## Epic 5: Background Learning Loop
+
+_Done when: after N turns, a background pi process reviews the conversation and saves notable facts automatically._
+
+- [ ] Turn counter increments on each `turn_end` event
+- [ ] User turn counter increments only on user messages (not assistant/tool)
+- [ ] Review triggers at `nudgeInterval` (default 10) turns
+- [ ] Review does NOT trigger if `reviewEnabled` is false
+- [ ] Review does NOT trigger if fewer than 3 user turns
+- [ ] Review does NOT trigger if already in progress (`reviewInProgress` guard)
+- [ ] `pi.exec("pi", ["-p", "--no-session", ...])` is called with correct review prompt
+- [ ] Review prompt includes current memory + user profile + conversation snapshot
+- [ ] Successful auto-save shows `💾 Memory auto-reviewed and updated` notification
+- [ ] "Nothing to save" response → no notification shown
+- [ ] Background review failure does NOT crash or block the main agent
+- [ ] Counter resets to 0 after review triggers
+
+---
+
+## Epic 6: Session Flush
+
+_Done when: before compaction and session shutdown, agent gets one turn to save memories._
+
+- [ ] `session_before_compact` event triggers flush when `flushOnCompact` is true
+- [ ] `session_shutdown` event triggers flush when `flushOnShutdown` is true
+- [ ] Flush skips if user turn count < `flushMinTurns` (default 6)
+- [ ] Flush builds conversation snapshot from `ctx.sessionManager.getBranch()`
+- [ ] Flush uses `pi.exec("pi", ["-p", "--no-session", ...])` with flush prompt
+- [ ] Flush failure does NOT prevent compaction or session shutdown
+- [ ] After flush, any saved memories are available in next session
+
+---
+
+## Epic 7: Insights Command & UX Polish
+
+_Done when: `/memory-insights` shows formatted output and the extension is polished for users._
+
+- [ ] `/memory-insights` command registered and appears in Pi command list
+- [ ] Shows MEMORY section with numbered entries (truncated to 100 chars)
+- [ ] Shows USER PROFILE section with numbered entries
+- [ ] Shows "(empty)" when no entries exist
+- [ ] Formatted with box drawing characters (╔══╗, etc.)
+- [ ] Notification displays correctly in Pi's TUI
+
+---
+
+## Epic 8: Configuration & Settings
+
+_Done when: users can customize behavior via Pi's settings.json._
+
+- [ ] Read config from Pi's `settings.json` under a `hermes-memory` key
+- [ ] All `MemoryConfig` fields are configurable
+- [ ] Missing keys fall back to defaults
+- [ ] Documented in README.md
+
+---
+
+## Epic 9: Testing
+
+_Done when: all core paths have automated tests and the extension passes a manual smoke test._
+
+### Unit Tests
+- [ ] `content-scanner.ts` — test each threat pattern returns error
+- [ ] `content-scanner.ts` — test invisible unicode returns error
+- [ ] `content-scanner.ts` — test safe content returns null
+- [ ] `memory-store.ts` — test `add` success and persistence
+- [ ] `memory-store.ts` — test `add` duplicate → no-op
+- [ ] `memory-store.ts` — test `add` exceeds char limit → error
+- [ ] `memory-store.ts` — test `replace` success
+- [ ] `memory-store.ts` — test `replace` no match → error
+- [ ] `memory-store.ts` — test `replace` multi-match → error
+- [ ] `memory-store.ts` — test `remove` success
+- [ ] `memory-store.ts` — test `remove` no match → error
+- [ ] `memory-store.ts` — test frozen snapshot doesn't update after add
+- [ ] `memory-store.ts` — test `loadFromDisk` reads existing files
+- [ ] `memory-store.ts` — test `loadFromDisk` handles missing files gracefully
+
+### Integration Tests
+- [ ] Extension loads in Pi via `pi -e ./src/index.ts` — no errors
+- [ ] `memory` tool callable by LLM — add entry, verify in MEMORY.md
+- [ ] `memory` tool — replace entry, verify file updated
+- [ ] `memory` tool — remove entry, verify file updated
+- [ ] System prompt contains memory block after `session_start`
+- [ ] `/memory-insights` command runs and shows output
+- [ ] Survives Pi session restart — memory persists across `/new`
+
+### Manual Smoke Tests
+- [ ] Full E2E: install → use 10+ turns → verify auto-review saves memory
+- [ ] Full E2E: long conversation → trigger compaction → verify flush saves memory
+- [ ] Full E2E: session 1 saves memory → quit → session 2 recalls it
+- [ ] Security: try injecting "ignore previous instructions" → verify blocked
+- [ ] Security: try saving `curl ${API_KEY}` → verify blocked
+
+---
+
+## Epic 10: Documentation & Distribution
+
+_Done when: extension is installable via `pi install` and has user-facing docs._
+
+- [ ] `README.md` — What it does, installation, usage, configuration
+- [ ] `README.md` — Example screenshots of `/memory-insights` output
+- [ ] Verify `pi install github:chandra447/pi-hermes-memory` works end-to-end
+- [ ] Tag v0.1.0 release on GitHub

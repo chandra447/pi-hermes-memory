@@ -38,6 +38,19 @@ This is a Pi coding agent extension that brings Hermes-style persistent memory a
 
 The implementation is ported from the Hermes agent harness. See `PLAN.md` → "Hermes Source File Reference Map" for exact files and line ranges to read.
 
+## Task Tracking
+
+All implementation work is tracked in **`TASKS.md`** with checkboxes organized by epic.
+
+**Workflow:**
+1. Pick a task from the current epic in `TASKS.md`
+2. Mark it `[~]` (in progress)
+3. Implement it
+4. Mark it `[x]` (done) with the commit hash
+5. Move to the next task
+
+**Before starting any work, read `TASKS.md` to see what's done and what's next.**
+
 ## Development
 
 ```bash
