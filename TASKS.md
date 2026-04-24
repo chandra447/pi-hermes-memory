@@ -164,7 +164,34 @@ _Done when: all core paths have automated tests and the extension passes a manua
 
 _Done when: extension is installable via `pi install` and has user-facing docs._
 
-- [x] `README.md` — What it does, installation, usage, configuration — current
-- [ ] `README.md` — Example screenshots of `/memory-insights` output — pending
-- [ ] Verify `pi install github:chandra447/pi-hermes-memory` works end-to-end — pending
-- [ ] Tag v0.1.0 release on GitHub — pending
+- [x] `README.md` — What it does, installation, usage, configuration — `ed22fa6`
+- [ ] `README.md` — Example screenshots of `/memory-insights` output — requires Pi TUI
+- [ ] Verify `pi install github:chandra447/pi-hermes-memory` works end-to-end — requires Pi CLI
+- [x] Tag v0.1.0 release on GitHub — `7983f09`
+
+---
+
+## Summary
+
+| Epic | Status | Notes |
+|---|---|---|
+| 1 — Project Scaffold | Complete | TypeScript compiles clean, extension loads in Pi |
+| 2 — Core Memory | Complete (auto) / 2 pending (manual) | Tool registration + execute tested; LLM interaction needs Pi runtime |
+| 3 — Content Scanning | Complete | 25 tests, all threat patterns covered |
+| 4 — System Prompt | Complete (auto) / 1 pending (manual) | Frozen snapshot tested; cross-session needs Pi restart |
+| 5 — Background Loop | Complete | 10 tests, all trigger conditions covered |
+| 6 — Session Flush | Complete (auto) / 1 pending (manual) | Flush logic tested; cross-session persistence needs Pi restart |
+| 7 — Insights | Complete (auto) / 1 pending (manual) | Command output tested; TUI display needs Pi runtime |
+| 8 — Configuration | Complete | Config file + tests + README docs |
+| 9 — Testing | Complete (auto) / 9 pending (manual) | 119 automated tests; E2E smoke tests need Pi runtime |
+| 10 — Documentation | Complete (auto) / 2 pending (manual) | README + LICENSE + tag v0.1.0; screenshots need Pi TUI |
+
+**Automated test coverage: 119 tests, 0 failures, 0 type errors.**
+
+**Manual verification required:** Run `pi -e ./src/index.ts` or `pi install github:chandra447/pi-hermes-memory`, then:
+1. Have the LLM save a memory and verify it appears in `~/.pi/agent/memory/MEMORY.md`
+2. Start a new session (`/new`) and verify the memory appears in the system prompt
+3. Use 10+ turns and verify auto-review triggers
+4. Trigger `/compact` and verify flush saves memories
+5. Run `/memory-insights` and verify formatted output
+6. Try injecting malicious content and verify it's blocked
