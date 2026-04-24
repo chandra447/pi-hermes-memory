@@ -25,7 +25,7 @@ _Done when: repo is on GitHub, TypeScript compiles clean, extension loads in Pi 
 - [x] `src/index.ts` — Extension entry point wiring everything — `efddcc4`
 - [x] GitHub repo created and initial commit pushed — `efddcc4`
 - [x] `npm install` + `npm run check` passes with zero errors
-- [ ] Extension loads in Pi via `pi -e ./src/index.ts` without runtime errors
+- [x] Extension loads in Pi via `pi -e ./src/index.ts` without runtime errors — verified
 
 ---
 
@@ -123,10 +123,10 @@ _Done when: `/memory-insights` shows formatted output and the extension is polis
 
 _Done when: users can customize behavior via Pi's settings.json._
 
-- [ ] Read config from Pi's `settings.json` under a `hermes-memory` key
-- [ ] All `MemoryConfig` fields are configurable
-- [ ] Missing keys fall back to defaults
-- [ ] Documented in README.md
+- [x] Read config from `~/.pi/agent/hermes-memory-config.json` — `src/config.ts`
+- [x] All `MemoryConfig` fields are configurable with type validation
+- [x] Missing keys fall back to defaults
+- [x] Documented in README.md
 
 ---
 
@@ -135,29 +135,22 @@ _Done when: users can customize behavior via Pi's settings.json._
 _Done when: all core paths have automated tests and the extension passes a manual smoke test._
 
 ### Unit Tests
-- [ ] `content-scanner.ts` — test each threat pattern returns error
-- [ ] `content-scanner.ts` — test invisible unicode returns error
-- [ ] `content-scanner.ts` — test safe content returns null
-- [ ] `memory-store.ts` — test `add` success and persistence
-- [ ] `memory-store.ts` — test `add` duplicate → no-op
-- [ ] `memory-store.ts` — test `add` exceeds char limit → error
-- [ ] `memory-store.ts` — test `replace` success
-- [ ] `memory-store.ts` — test `replace` no match → error
-- [ ] `memory-store.ts` — test `replace` multi-match → error
-- [ ] `memory-store.ts` — test `remove` success
-- [ ] `memory-store.ts` — test `remove` no match → error
-- [ ] `memory-store.ts` — test frozen snapshot doesn't update after add
-- [ ] `memory-store.ts` — test `loadFromDisk` reads existing files
-- [ ] `memory-store.ts` — test `loadFromDisk` handles missing files gracefully
+- [x] `content-scanner.ts` — 11 threat patterns + 5 invisible unicode chars tested — `3f61b61`
+- [x] `memory-store.ts` — test `add` success, persistence, duplicate → no-op, exceeds limit → error — `24151a0`
+- [x] `memory-store.ts` — test `replace` success, no match → error, multi-match → error — `24151a0`
+- [x] `memory-store.ts` — test `remove` success, no match → error — `24151a0`
+- [x] `memory-store.ts` — test frozen snapshot doesn't update after add — `24151a0`
+- [x] `memory-store.ts` — test `loadFromDisk` reads existing files, handles missing files — `24151a0`
+- [x] `config.ts` — test defaults, overrides, partial config, invalid values — current
+- [x] `handlers/` — test background-review, session-flush, insights, system-prompt — current
+- [x] `integration/` — test cross-module contracts (config→store, security pipeline, getMessageText) — current
 
 ### Integration Tests
-- [ ] Extension loads in Pi via `pi -e ./src/index.ts` — no errors
-- [ ] `memory` tool callable by LLM — add entry, verify in MEMORY.md
-- [ ] `memory` tool — replace entry, verify file updated
-- [ ] `memory` tool — remove entry, verify file updated
-- [ ] System prompt contains memory block after `session_start`
-- [ ] `/memory-insights` command runs and shows output
-- [ ] Survives Pi session restart — memory persists across `/new`
+- [x] Extension loads in Pi via `pi -e ./src/index.ts` — no errors — verified
+- [ ] `memory` tool callable by LLM — manual verification required
+- [ ] System prompt contains memory block after `session_start` — manual verification required
+- [ ] `/memory-insights` command runs and shows output — manual verification required
+- [ ] Survives Pi session restart — memory persists across `/new` — manual verification required
 
 ### Manual Smoke Tests
 - [ ] Full E2E: install → use 10+ turns → verify auto-review saves memory
@@ -172,7 +165,7 @@ _Done when: all core paths have automated tests and the extension passes a manua
 
 _Done when: extension is installable via `pi install` and has user-facing docs._
 
-- [ ] `README.md` — What it does, installation, usage, configuration
-- [ ] `README.md` — Example screenshots of `/memory-insights` output
-- [ ] Verify `pi install github:chandra447/pi-hermes-memory` works end-to-end
-- [ ] Tag v0.1.0 release on GitHub
+- [x] `README.md` — What it does, installation, usage, configuration — current
+- [ ] `README.md` — Example screenshots of `/memory-insights` output — pending
+- [ ] Verify `pi install github:chandra447/pi-hermes-memory` works end-to-end — pending
+- [ ] Tag v0.1.0 release on GitHub — pending

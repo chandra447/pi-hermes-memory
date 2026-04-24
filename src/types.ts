@@ -19,6 +19,8 @@ export interface MemoryConfig {
   flushOnShutdown: boolean;
   /** Minimum user turns before flush triggers. Default: 6 */
   flushMinTurns: number;
+  /** Override memory directory. Default: ~/.pi/agent/memory */
+  memoryDir?: string;
 }
 
 export interface MemoryResult {

@@ -11,6 +11,7 @@ import * as os from "node:os";
 import * as assert from "node:assert/strict";
 import { describe, it, before, after, beforeEach, afterEach } from "node:test";
 
+
 import { MemoryStore } from "../../src/store/memory-store.js";
 import {
   ENTRY_DELIMITER,
@@ -23,8 +24,8 @@ import type { MemoryConfig } from "../../src/types.js";
 
 // ─── Helpers (module-level) ───
 
-const MEMORY_DIR = path.join(os.homedir(), ".pi", "agent", "memory");
 const TEST_MARKER = "[MEMORY-TEST]";
+let MEMORY_DIR = "";
 
 function makeConfig(overrides?: Partial<MemoryConfig>): MemoryConfig {
   return {
@@ -35,6 +36,7 @@ function makeConfig(overrides?: Partial<MemoryConfig>): MemoryConfig {
     flushOnCompact: false,
     flushOnShutdown: false,
     flushMinTurns: 6,
+    memoryDir: MEMORY_DIR,
     ...overrides,
   };
 }
@@ -61,35 +63,21 @@ async function removeFile(filePath: string): Promise<void> {
 
 // ─── Tests ───
 
-describe("MemoryStore", () => {
-  const memoryPath = path.join(MEMORY_DIR, MEMORY_FILE);
-  const userPath = path.join(MEMORY_DIR, USER_FILE);
-
-  // Back up existing files and restore after all tests
-  let memoryBackup = "";
-  let userBackup = "";
-  let memoryExisted = false;
-  let userExisted = false;
+describe("MemoryStore", { concurrency: 1 }, () => {
+  let memoryPath = "";
+  let userPath = "";
 
   before(async () => {
-    await fs.mkdir(MEMORY_DIR, { recursive: true });
-    memoryBackup = await readRaw(memoryPath);
-    userBackup = await readRaw(userPath);
-    memoryExisted = memoryBackup.length > 0;
-    userExisted = userBackup.length > 0;
+    MEMORY_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "pi-memory-test-"));
+    memoryPath = path.join(MEMORY_DIR, MEMORY_FILE);
+    userPath = path.join(MEMORY_DIR, USER_FILE);
   });
 
   after(async () => {
-    if (memoryExisted) {
-      await writeRaw(memoryPath, memoryBackup);
-    } else {
-      await removeFile(memoryPath);
-    }
-    if (userExisted) {
-      await writeRaw(userPath, userBackup);
-    } else {
-      await removeFile(userPath);
-    }
+    // Clean up temp directory
+    try {
+      await fs.rm(MEMORY_DIR, { recursive: true, force: true });
+    } catch { /* ignore */ }
   });
 
   /** Wait for fire-and-forget atomic write to settle. */
@@ -251,11 +239,13 @@ describe("MemoryStore", () => {
       await store.loadFromDisk();
 
       const r1 = store.add("memory", `${TEST_MARKER} first entry`);
-      const r2 = store.add("memory", `${TEST_MARKER} second entry`);
+      assert.ok(r1.success, `First add failed: ${r1.error}`);
       await settle();
 
-      assert.ok(r1.success);
-      assert.ok(r2.success);
+      const r2 = store.add("memory", `${TEST_MARKER} second entry`);
+      assert.ok(r2.success, `Second add failed: ${r2.error}`);
+      await settle();
+
       assert.equal(r2.entry_count, 2);
 
       const raw = await readRaw(memoryPath);

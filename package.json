@@ -10,7 +10,8 @@
     ]
   },
   "scripts": {
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "npx tsx --test 'tests/**/*.test.ts' --test-concurrency=1"
   },
   "keywords": [
     "pi",

@@ -34,7 +34,7 @@ export class MemoryStore {
   // ─── Path helpers ───
 
   private get memoryDir(): string {
-    return path.join(os.homedir(), ".pi", "agent", "memory");
+    return this.config.memoryDir ?? path.join(os.homedir(), ".pi", "agent", "memory");
   }
 
   private pathFor(target: "memory" | "user"): string {
