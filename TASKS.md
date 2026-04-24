@@ -33,15 +33,15 @@ _Done when: repo is on GitHub, TypeScript compiles clean, extension loads in Pi 
 
 _Done when: agent can add/replace/remove entries, they persist to disk, and survive a Pi session restart._
 
-- [ ] `MemoryStore.loadFromDisk()` correctly reads existing MEMORY.md and USER.md
-- [ ] `MemoryStore.add()` validates content, enforces char limit, persists atomically
-- [ ] `MemoryStore.replace()` finds entry by substring, replaces, re-checks limit
-- [ ] `MemoryStore.remove()` finds entry by substring, removes, persists
-- [ ] `MemoryStore.formatForSystemPrompt()` returns frozen snapshot (not live state)
-- [ ] Atomic write works: temp file → `fs.rename()` (verify no corruption on crash simulation)
-- [ ] Character limits enforced: reject writes that exceed `memoryCharLimit` / `userCharLimit`
-- [ ] Deduplication: adding an identical entry is a no-op
-- [ ] Multi-match ambiguity: replace/remove error when multiple distinct entries match
+- [x] `MemoryStore.loadFromDisk()` correctly reads existing MEMORY.md and USER.md — `24151a0`
+- [x] `MemoryStore.add()` validates content, enforces char limit, persists atomically — `24151a0`
+- [x] `MemoryStore.replace()` finds entry by substring, replaces, re-checks limit — `24151a0`
+- [x] `MemoryStore.remove()` finds entry by substring, removes, persists — `24151a0`
+- [x] `MemoryStore.formatForSystemPrompt()` returns frozen snapshot (not live state) — `24151a0`
+- [x] Atomic write works: temp file → `fs.rename()` (verify no corruption on crash simulation) — `24151a0`
+- [x] Character limits enforced: reject writes that exceed `memoryCharLimit` / `userCharLimit` — `24151a0`
+- [x] Deduplication: adding an identical entry is a no-op — `24151a0`
+- [x] Multi-match ambiguity: replace/remove error when multiple distinct entries match — `24151a0`
 - [ ] `memory` tool shows up in Pi's tool list when extension is loaded
 - [ ] LLM can call `memory` tool with `add` action and entry appears in MEMORY.md
 - [ ] LLM can call `memory` tool with `target: "user"` and entry appears in USER.md
@@ -53,14 +53,14 @@ _Done when: agent can add/replace/remove entries, they persist to disk, and surv
 
 _Done when: all injection/exfiltration patterns are blocked, invisible unicode is blocked, and safe content passes through._
 
-- [ ] `scanContent()` blocks prompt injection patterns (e.g. "ignore previous instructions")
-- [ ] `scanContent()` blocks role hijacking (e.g. "you are now...")
-- [ ] `scanContent()` blocks secret exfiltration (e.g. `curl ${API_KEY...`)
-- [ ] `scanContent()` blocks invisible unicode (U+200B, U+FEFF, U+202A-U+202E)
-- [ ] `scanContent()` returns `null` for safe/normal content
-- [ ] Blocked writes return `{ success: false, error: "Blocked: ..." }` to the LLM
-- [ ] Edge case: empty string passes (handled by empty check before scanner)
-- [ ] Edge case: very long content with pattern at end is still caught
+- [x] `scanContent()` blocks prompt injection patterns (e.g. "ignore previous instructions") — `3f61b61`
+- [x] `scanContent()` blocks role hijacking (e.g. "you are now...") — `3f61b61`
+- [x] `scanContent()` blocks secret exfiltration (e.g. `curl ${API_KEY...`) — `3f61b61`
+- [x] `scanContent()` blocks invisible unicode (U+200B, U+FEFF, U+202A-U+202E) — `3f61b61`
+- [x] `scanContent()` returns `null` for safe/normal content — `3f61b61`
+- [x] Blocked writes return `{ success: false, error: "Blocked: ..." }` to the LLM — `3f61b61`
+- [x] Edge case: empty string passes (handled by empty check before scanner) — `3f61b61`
+- [x] Edge case: very long content with pattern at end is still caught — `3f61b61`
 
 ---
 
