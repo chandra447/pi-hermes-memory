@@ -18,25 +18,10 @@ import { registerMemoryTool } from "./tools/memory-tool.js";
 import { setupBackgroundReview } from "./handlers/background-review.js";
 import { setupSessionFlush } from "./handlers/session-flush.js";
 import { registerInsightsCommand } from "./handlers/insights.js";
-import type { MemoryConfig } from "./types.js";
-import {
-  DEFAULT_MEMORY_CHAR_LIMIT,
-  DEFAULT_USER_CHAR_LIMIT,
-  DEFAULT_NUDGE_INTERVAL,
-  DEFAULT_FLUSH_MIN_TURNS,
-} from "./constants.js";
+import { loadConfig } from "./config.js";
 
 export default function (pi: ExtensionAPI) {
-  // Configuration (future: read from Pi settings.json)
-  const config: MemoryConfig = {
-    memoryCharLimit: DEFAULT_MEMORY_CHAR_LIMIT,
-    userCharLimit: DEFAULT_USER_CHAR_LIMIT,
-    nudgeInterval: DEFAULT_NUDGE_INTERVAL,
-    reviewEnabled: true,
-    flushOnCompact: true,
-    flushOnShutdown: true,
-    flushMinTurns: DEFAULT_FLUSH_MIN_TURNS,
-  };
+  const config = loadConfig();
 
   const store = new MemoryStore(config);
 
