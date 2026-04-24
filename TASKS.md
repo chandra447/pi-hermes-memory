@@ -42,10 +42,10 @@ _Done when: agent can add/replace/remove entries, they persist to disk, and surv
 - [x] Character limits enforced: reject writes that exceed `memoryCharLimit` / `userCharLimit` — `24151a0`
 - [x] Deduplication: adding an identical entry is a no-op — `24151a0`
 - [x] Multi-match ambiguity: replace/remove error when multiple distinct entries match — `24151a0`
-- [ ] `memory` tool shows up in Pi's tool list when extension is loaded
-- [ ] LLM can call `memory` tool with `add` action and entry appears in MEMORY.md
-- [ ] LLM can call `memory` tool with `target: "user"` and entry appears in USER.md
-- [ ] Tool returns JSON with `usage` field showing char budget (e.g. `"45% — 990/2200 chars"`)
+- [x] `memory` tool registered with correct name, parameters, and guidelines — `tests/tools/memory-tool.test.ts`
+- [x] Tool execute returns JSON with `usage` field showing char budget — `tests/tools/memory-tool.test.ts`
+- [ ] LLM can call `memory` tool with `add` action and entry appears in MEMORY.md — **manual verification required**
+- [ ] LLM can call `memory` tool with `target: "user"` and entry appears in USER.md — **manual verification required**
 
 ---
 
@@ -121,8 +121,7 @@ _Done when: `/memory-insights` shows formatted output and the extension is polis
 
 ## Epic 8: Configuration & Settings
 
-_Done when: users can customize behavior via Pi's settings.json._
-
+_Done when: users can customize behavior via `~/.pi/agent/hermes-memory-config.json`._
 - [x] Read config from `~/.pi/agent/hermes-memory-config.json` — `src/config.ts`
 - [x] All `MemoryConfig` fields are configurable with type validation
 - [x] Missing keys fall back to defaults

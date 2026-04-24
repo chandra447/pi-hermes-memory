@@ -182,19 +182,17 @@ The agent decides **what to save** and **when to save it** — you'll see it hap
 
 ## Configuration
 
-Add to `~/.pi/agent/settings.json`:
+Create `~/.pi/agent/hermes-memory-config.json`:
 
 ```json
 {
-  "hermes-memory": {
-    "memoryCharLimit": 2200,
-    "userCharLimit": 1375,
-    "nudgeInterval": 10,
-    "reviewEnabled": true,
-    "flushOnCompact": true,
-    "flushOnShutdown": true,
-    "flushMinTurns": 6
-  }
+  "memoryCharLimit": 2200,
+  "userCharLimit": 1375,
+  "nudgeInterval": 10,
+  "reviewEnabled": true,
+  "flushOnCompact": true,
+  "flushOnShutdown": true,
+  "flushMinTurns": 6
 }
 ```
 
