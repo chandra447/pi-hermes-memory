@@ -68,59 +68,55 @@ _Done when: all injection/exfiltration patterns are blocked, invisible unicode i
 
 _Done when: memory snapshot appears in system prompt at session start and does NOT update mid-session._
 
-- [ ] `before_agent_start` handler appends memory block to `event.systemPrompt`
-- [ ] Memory block includes header with usage percentage and char count
-- [ ] Block format matches Hermes: `═` separator, header line, then content
-- [ ] Frozen snapshot: write to memory mid-session → system prompt unchanged
-- [ ] Empty memory files → no block appended (system prompt untouched)
+- [x] `before_agent_start` handler appends memory block to `event.systemPrompt` — `028c5ad`
+- [x] Memory block includes header with usage percentage and char count — `028c5ad`
+- [x] Block format matches Hermes: `═` separator, header line, then content — `028c5ad`
+- [x] Frozen snapshot: write to memory mid-session → system prompt unchanged — `028c5ad`
+- [x] Empty memory files → no block appended (system prompt untouched) — `028c5ad`
 - [ ] Second session: memory saved in session 1 appears in session 2's system prompt
-
 ---
 
 ## Epic 5: Background Learning Loop
 
 _Done when: after N turns, a background pi process reviews the conversation and saves notable facts automatically._
 
-- [ ] Turn counter increments on each `turn_end` event
-- [ ] User turn counter increments only on user messages (not assistant/tool)
-- [ ] Review triggers at `nudgeInterval` (default 10) turns
-- [ ] Review does NOT trigger if `reviewEnabled` is false
-- [ ] Review does NOT trigger if fewer than 3 user turns
-- [ ] Review does NOT trigger if already in progress (`reviewInProgress` guard)
-- [ ] `pi.exec("pi", ["-p", "--no-session", ...])` is called with correct review prompt
-- [ ] Review prompt includes current memory + user profile + conversation snapshot
-- [ ] Successful auto-save shows `💾 Memory auto-reviewed and updated` notification
-- [ ] "Nothing to save" response → no notification shown
-- [ ] Background review failure does NOT crash or block the main agent
-- [ ] Counter resets to 0 after review triggers
-
+- [x] Turn counter increments on each `turn_end` event — `164eef9`
+- [x] User turn counter increments only on user messages (not assistant/tool) — `164eef9`
+- [x] Review triggers at `nudgeInterval` (default 10) turns — `164eef9`
+- [x] Review does NOT trigger if `reviewEnabled` is false — `164eef9`
+- [x] Review does NOT trigger if fewer than 3 user turns — `164eef9`
+- [x] Review does NOT trigger if already in progress (`reviewInProgress` guard) — `164eef9`
+- [x] `pi.exec("pi", ["-p", "--no-session", ...])` is called with correct review prompt — `164eef9`
+- [x] Review prompt includes current memory + user profile + conversation snapshot — `164eef9`
+- [x] Successful auto-save shows `💾 Memory auto-reviewed and updated` notification — `164eef9`
+- [x] "Nothing to save" response → no notification shown — `164eef9`
+- [x] Background review failure does NOT crash or block the main agent — `164eef9`
+- [x] Counter resets to 0 after review triggers — `164eef9`
 ---
 
 ## Epic 6: Session Flush
 
 _Done when: before compaction and session shutdown, agent gets one turn to save memories._
 
-- [ ] `session_before_compact` event triggers flush when `flushOnCompact` is true
-- [ ] `session_shutdown` event triggers flush when `flushOnShutdown` is true
-- [ ] Flush skips if user turn count < `flushMinTurns` (default 6)
-- [ ] Flush builds conversation snapshot from `ctx.sessionManager.getBranch()`
-- [ ] Flush uses `pi.exec("pi", ["-p", "--no-session", ...])` with flush prompt
-- [ ] Flush failure does NOT prevent compaction or session shutdown
+- [x] `session_before_compact` event triggers flush when `flushOnCompact` is true — `001a8d4`
+- [x] `session_shutdown` event triggers flush when `flushOnShutdown` is true — `001a8d4`
+- [x] Flush skips if user turn count < `flushMinTurns` (default 6) — `001a8d4`
+- [x] Flush builds conversation snapshot from `ctx.sessionManager.getBranch()` — `001a8d4`
+- [x] Flush uses `pi.exec("pi", ["-p", "--no-session", ...])` with flush prompt — `001a8d4`
+- [x] Flush failure does NOT prevent compaction or session shutdown — `001a8d4`
 - [ ] After flush, any saved memories are available in next session
-
 ---
 
 ## Epic 7: Insights Command & UX Polish
 
 _Done when: `/memory-insights` shows formatted output and the extension is polished for users._
 
-- [ ] `/memory-insights` command registered and appears in Pi command list
-- [ ] Shows MEMORY section with numbered entries (truncated to 100 chars)
-- [ ] Shows USER PROFILE section with numbered entries
-- [ ] Shows "(empty)" when no entries exist
-- [ ] Formatted with box drawing characters (╔══╗, etc.)
+- [x] `/memory-insights` command registered and appears in Pi command list — `543e262`
+- [x] Shows MEMORY section with numbered entries (truncated to 100 chars) — `543e262`
+- [x] Shows USER PROFILE section with numbered entries — `543e262`
+- [x] Shows "(empty)" when no entries exist — `543e262`
+- [x] Formatted with box drawing characters (╔══╗, etc.) — `543e262`
 - [ ] Notification displays correctly in Pi's TUI
-
 ---
 
 ## Epic 8: Configuration & Settings
