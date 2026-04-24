@@ -176,14 +176,17 @@ pi-hermes-memory/
 ├── package.json              # For pi install
 ├── src/
 │   ├── index.ts              # Extension entry point — wires everything together
-│   ├── memory-store.ts       # Core MemoryStore class (CRUD, persistence, snapshot)
-│   ├── memory-tool.ts        # registerMemoryTool() — LLM tool definition
-│   ├── background-review.ts  # setupBackgroundReview() — learning loop via pi.exec
-│   ├── session-flush.ts      # setupSessionFlush() — pre-compaction/shutdown flush
-│   ├── content-scanner.ts    # scanContent() — injection/exfiltration detection
-│   ├── insights.ts           # registerInsightsCommand() — /memory-insights
-│   ├── types.ts              # Shared TypeScript interfaces
-│   └── constants.ts          # Prompts, defaults, delimiter
+│   ├── types.ts              # Shared TypeScript interfaces + getMessageText helper
+│   ├── constants.ts          # Prompts, defaults, delimiter
+│   ├── store/
+│   │   ├── memory-store.ts   # Core MemoryStore class (CRUD, persistence, snapshot)
+│   │   └── content-scanner.ts # scanContent() — injection/exfiltration detection
+│   ├── tools/
+│   │   └── memory-tool.ts    # registerMemoryTool() — LLM tool definition
+│   └── handlers/
+│       ├── background-review.ts # setupBackgroundReview() — learning loop via pi.exec
+│       ├── session-flush.ts     # setupSessionFlush() — pre-compaction/shutdown flush
+│       └── insights.ts         # registerInsightsCommand() — /memory-insights
 └── README.md                 # Installation and usage docs
 ```
 

@@ -3,7 +3,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { MemoryStore } from "./memory-store.js";
+import { MemoryStore } from "../store/memory-store.js";
 
 export function registerInsightsCommand(pi: ExtensionAPI, store: MemoryStore): void {
   pi.registerCommand("memory-insights", {

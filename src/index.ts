@@ -13,11 +13,11 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { MemoryStore } from "./memory-store.js";
-import { registerMemoryTool } from "./memory-tool.js";
-import { setupBackgroundReview } from "./background-review.js";
-import { setupSessionFlush } from "./session-flush.js";
-import { registerInsightsCommand } from "./insights.js";
+import { MemoryStore } from "./store/memory-store.js";
+import { registerMemoryTool } from "./tools/memory-tool.js";
+import { setupBackgroundReview } from "./handlers/background-review.js";
+import { setupSessionFlush } from "./handlers/session-flush.js";
+import { registerInsightsCommand } from "./handlers/insights.js";
 import type { MemoryConfig } from "./types.js";
 import {
   DEFAULT_MEMORY_CHAR_LIMIT,

@@ -14,17 +14,17 @@ _Done when: repo is on GitHub, TypeScript compiles clean, extension loads in Pi 
 - [x] `.gitignore` — Exclude node_modules, dist, .codegraph, hermes-agent — `efddcc4`
 - [x] `package.json` — Minimal config, no runtime deps — `efddcc4`
 - [x] `tsconfig.json` — Strict TypeScript config — `efddcc4`
-- [x] `src/types.ts` — Shared interfaces (`MemoryConfig`, `MemoryResult`, `MemorySnapshot`) — `efddcc4`
+- [x] `src/types.ts` — Shared interfaces (`MemoryConfig`, `MemoryResult`, `MemorySnapshot`) + `getMessageText()` helper — `efddcc4`
 - [x] `src/constants.ts` — Prompts, defaults, delimiter — `efddcc4`
-- [x] `src/content-scanner.ts` — Injection/exfiltration pattern detection — `efddcc4`
-- [x] `src/memory-store.ts` — Core `MemoryStore` class with CRUD, atomic writes, frozen snapshot — `efddcc4`
-- [x] `src/memory-tool.ts` — `registerMemoryTool()` with Pi tool API — `efddcc4`
-- [x] `src/background-review.ts` — Learning loop via `pi.exec()` — `efddcc4`
-- [x] `src/session-flush.ts` — Pre-compaction/shutdown flush — `efddcc4`
-- [x] `src/insights.ts` — `/memory-insights` command — `efddcc4`
+- [x] `src/store/content-scanner.ts` — Injection/exfiltration pattern detection — `efddcc4`
+- [x] `src/store/memory-store.ts` — Core `MemoryStore` class with CRUD, atomic writes, frozen snapshot — `efddcc4`
+- [x] `src/tools/memory-tool.ts` — `registerMemoryTool()` with Pi tool API — `efddcc4`
+- [x] `src/handlers/background-review.ts` — Learning loop via `pi.exec()` — `efddcc4`
+- [x] `src/handlers/session-flush.ts` — Pre-compaction/shutdown flush — `efddcc4`
+- [x] `src/handlers/insights.ts` — `/memory-insights` command — `efddcc4`
 - [x] `src/index.ts` — Extension entry point wiring everything — `efddcc4`
 - [x] GitHub repo created and initial commit pushed — `efddcc4`
-- [ ] `npm install` + `npm run check` passes with zero errors
+- [x] `npm install` + `npm run check` passes with zero errors
 - [ ] Extension loads in Pi via `pi -e ./src/index.ts` without runtime errors
 
 ---

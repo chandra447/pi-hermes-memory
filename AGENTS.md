@@ -14,16 +14,16 @@ This is a Pi coding agent extension that brings Hermes-style persistent memory a
 ## Key Files
 
 | File | Purpose |
-|---|---|
+|---|---
 | `src/index.ts` | Extension entry point — wires all components together |
-| `src/memory-store.ts` | Core `MemoryStore` class — CRUD, persistence, frozen snapshot |
-| `src/memory-tool.ts` | `registerMemoryTool()` — LLM tool definition |
-| `src/background-review.ts` | `setupBackgroundReview()` — learning loop via `pi.exec` |
-| `src/session-flush.ts` | `setupSessionFlush()` — pre-compaction/shutdown flush |
-| `src/content-scanner.ts` | `scanContent()` — injection/exfiltration detection |
-| `src/insights.ts` | `registerInsightsCommand()` — `/memory-insights` command |
-| `src/types.ts` | Shared TypeScript interfaces |
+| `src/types.ts` | Shared TypeScript interfaces + `getMessageText()` helper |
 | `src/constants.ts` | Prompts, defaults, delimiter |
+| `src/store/memory-store.ts` | Core `MemoryStore` class — CRUD, persistence, frozen snapshot |
+| `src/store/content-scanner.ts` | `scanContent()` — injection/exfiltration detection |
+| `src/tools/memory-tool.ts` | `registerMemoryTool()` — LLM tool definition |
+| `src/handlers/background-review.ts` | `setupBackgroundReview()` — learning loop via `pi.exec` |
+| `src/handlers/session-flush.ts` | `setupSessionFlush()` — pre-compaction/shutdown flush |
+| `src/handlers/insights.ts` | `registerInsightsCommand()` — `/memory-insights` command |
 | `PLAN.md` | Full implementation plan with Hermes source file reference map |
 
 ## Design Decisions

@@ -2,6 +2,8 @@
  * Shared TypeScript types for the Hermes Memory extension.
  */
 
+import type { TextContent } from "@mariozechner/pi-ai";
+
 export interface MemoryConfig {
   /** Max chars for MEMORY.md (agent notes). Default: 2200 */
   memoryCharLimit: number;
@@ -33,4 +35,30 @@ export interface MemoryResult {
 export interface MemorySnapshot {
   memory: string;
   user: string;
+}
+
+/**
+ * Extract displayable text from a Pi session entry message.
+ *
+ * Accepts any value — returns null for non-message entries (BashExecutionMessage,
+ * NotificationMessage, etc.) that lack a `content` property.
+ *
+ * Returns the concatenated text, truncated to `maxLength` chars.
+ */
+export function getMessageText(msg: unknown, maxLength = 500): string | null {
+  if (typeof msg !== "object" || msg === null) return null;
+  const { role, content } = msg as Record<string, unknown>;
+  if (typeof role !== "string") return null;
+
+  if (typeof content === "string") {
+    return content.slice(0, maxLength);
+  }
+  if (Array.isArray(content)) {
+    const text = (content as TextContent[])
+      .filter((block): block is TextContent => block.type === "text" && typeof block.text === "string")
+      .map((block) => block.text)
+      .join("\n");
+    return text.length > 0 ? text.slice(0, maxLength) : null;
+  }
+  return null;
 }

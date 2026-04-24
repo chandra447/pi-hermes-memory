@@ -8,9 +8,10 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { MemoryStore } from "./memory-store.js";
-import { COMBINED_REVIEW_PROMPT } from "./constants.js";
-import type { MemoryConfig } from "./types.js";
+import { MemoryStore } from "../store/memory-store.js";
+import { COMBINED_REVIEW_PROMPT } from "../constants.js";
+import type { MemoryConfig } from "../types.js";
+import { getMessageText } from "../types.js";
 
 export function setupBackgroundReview(
   pi: ExtensionAPI,
@@ -46,13 +47,11 @@ export function setupBackgroundReview(
       for (const entry of entries) {
         if (entry.type !== "message") continue;
         const msg = entry.message;
-        if (msg.role === "user" && typeof msg.content === "string") {
-          parts.push(`[USER]: ${msg.content.slice(0, 500)}`);
-        } else if (msg.role === "assistant" && typeof msg.content === "string") {
-          parts.push(`[ASSISTANT]: ${msg.content.slice(0, 500)}`);
-        }
+        const text = getMessageText(msg);
+        if (!text) continue;
+        const prefix = msg.role === "user" ? "[USER]" : "[ASSISTANT]";
+        parts.push(`${prefix}: ${text}`);
       }
-
       if (parts.length < 4) return; // Not enough conversation to review
 
       const currentMemory = store.getMemoryEntries().join("\n§\n");

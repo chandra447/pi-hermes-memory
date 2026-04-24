@@ -21,8 +21,8 @@ import {
   DEFAULT_USER_CHAR_LIMIT,
   MEMORY_FILE,
   USER_FILE,
-} from "./constants.js";
-import type { MemoryConfig, MemoryResult, MemorySnapshot } from "./types.js";
+} from "../constants.js";
+import type { MemoryConfig, MemoryResult, MemorySnapshot } from "../types.js";
 
 export class MemoryStore {
   private memoryEntries: string[] = [];

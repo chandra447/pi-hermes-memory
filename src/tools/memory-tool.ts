@@ -7,8 +7,8 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
-import { MemoryStore } from "./memory-store.js";
-import { MEMORY_TOOL_DESCRIPTION } from "./constants.js";
+import { MemoryStore } from "../store/memory-store.js";
+import { MEMORY_TOOL_DESCRIPTION } from "../constants.js";
 
 export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore): void {
   pi.registerTool({

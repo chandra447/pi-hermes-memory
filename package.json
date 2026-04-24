@@ -2,9 +2,12 @@
   "name": "pi-hermes-memory",
   "version": "0.1.0",
   "description": "Hermes-style persistent memory and learning loop for Pi coding agent",
+  "type": "module",
   "main": "src/index.ts",
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
   "scripts": {
     "check": "tsc --noEmit"
@@ -17,5 +20,11 @@
     "agent",
     "hermes"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.70.0",
+    "@mariozechner/pi-coding-agent": "^0.70.0",
+    "typebox": "^1.1.33",
+    "typescript": "^6.0.3"
+  }
 }
