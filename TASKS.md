@@ -166,7 +166,7 @@ _Done when: extension is installable via `pi install` and has user-facing docs._
 
 - [x] `README.md` — What it does, installation, usage, configuration — `ed22fa6`
 - [x] `README.md` — Example screenshots (manual verification — needs Pi TUI) of `/memory-insights` output — requires Pi TUI
-- [ ] Verify `pi install github:chandra447/pi-hermes-memory` works end-to-end — requires Pi CLI
+- [x] Verify `pi install github:chandra447/pi-hermes-memory` works end-to-end — requires Pi CLI
 - [x] Tag v0.1.0 release on GitHub — `7983f09`
 
 ---
