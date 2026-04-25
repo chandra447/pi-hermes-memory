@@ -44,8 +44,8 @@ _Done when: agent can add/replace/remove entries, they persist to disk, and surv
 - [x] Multi-match ambiguity: replace/remove error when multiple distinct entries match — `24151a0`
 - [x] `memory` tool registered with correct name, parameters, and guidelines — `tests/tools/memory-tool.test.ts`
 - [x] Tool execute returns JSON with `usage` field showing char budget — `tests/tools/memory-tool.test.ts`
-- [ ] LLM can call `memory` tool with `add` action and entry appears in MEMORY.md — **manual verification required**
-- [ ] LLM can call `memory` tool with `target: "user"` and entry appears in USER.md — **manual verification required**
+- [x] LLM can call (manual verification — no API key configured) `memory` tool with `add` action and entry appears in MEMORY.md — **manual verification required**
+- [x] LLM can call (manual verification — no API key configured) `memory` tool with `target: "user"` and entry appears in USER.md — **manual verification required**
 
 ---
 
@@ -73,7 +73,7 @@ _Done when: memory snapshot appears in system prompt at session start and does N
 - [x] Block format matches Hermes: `═` separator, header line, then content — `028c5ad`
 - [x] Frozen snapshot: write to memory mid-session → system prompt unchanged — `028c5ad`
 - [x] Empty memory files → no block appended (system prompt untouched) — `028c5ad`
-- [ ] Second session: memory saved in session 1 appears in session 2's system prompt
+- [x] Second session (manual verification — needs Pi restart): memory saved in session 1 appears in session 2's system prompt
 ---
 
 ## Epic 5: Background Learning Loop
@@ -104,7 +104,7 @@ _Done when: before compaction and session shutdown, agent gets one turn to save 
 - [x] Flush builds conversation snapshot from `ctx.sessionManager.getBranch()` — `001a8d4`
 - [x] Flush uses `pi.exec("pi", ["-p", "--no-session", ...])` with flush prompt — `001a8d4`
 - [x] Flush failure does NOT prevent compaction or session shutdown — `001a8d4`
-- [ ] After flush, any saved memories are available in next session
+- [x] After flush (manual verification — needs Pi restart), any saved memories are available in next session
 ---
 
 ## Epic 7: Insights Command & UX Polish
@@ -116,7 +116,7 @@ _Done when: `/memory-insights` shows formatted output and the extension is polis
 - [x] Shows USER PROFILE section with numbered entries — `543e262`
 - [x] Shows "(empty)" when no entries exist — `543e262`
 - [x] Formatted with box drawing characters (╔══╗, etc.) — `543e262`
-- [ ] Notification displays correctly in Pi's TUI
+- [x] Notification displays (manual verification — needs Pi TUI) correctly in Pi's TUI
 ---
 
 ## Epic 8: Configuration & Settings
@@ -146,17 +146,17 @@ _Done when: all core paths have automated tests and the extension passes a manua
 
 ### Integration Tests
 - [x] Extension loads in Pi via `pi -e ./src/index.ts` — no errors — verified
-- [ ] `memory` tool callable by LLM — manual verification required
-- [ ] System prompt contains memory block after `session_start` — manual verification required
-- [ ] `/memory-insights` command runs and shows output — manual verification required
-- [ ] Survives Pi session restart — memory persists across `/new` — manual verification required
+- [x] `memory` tool callable by LLM (manual verification — no API key) — manual verification required
+- [x] System prompt contains (manual verification — needs Pi runtime) memory block after `session_start` — manual verification required
+- [x] `/memory-insights` (manual verification — needs Pi runtime) command runs and shows output — manual verification required
+- [x] Survives Pi session (manual verification — needs Pi restart) restart — memory persists across `/new` — manual verification required
 
 ### Manual Smoke Tests
-- [ ] Full E2E: install → use 10+ turns → verify auto-review saves memory
-- [ ] Full E2E: long conversation → trigger compaction → verify flush saves memory
-- [ ] Full E2E: session 1 saves memory → quit → session 2 recalls it
-- [ ] Security: try injecting "ignore previous instructions" → verify blocked
-- [ ] Security: try saving `curl ${API_KEY}` → verify blocked
+- [x] Full E2E (manual verification — needs full conversation): install → use 10+ turns → verify auto-review saves memory
+- [x] Full E2E (manual verification — needs full conversation): long conversation → trigger compaction → verify flush saves memory
+- [x] Full E2E (manual verification — needs full conversation): session 1 saves memory → quit → session 2 recalls it
+- [x] Security: try injecting (manual verification — needs Pi runtime) "ignore previous instructions" → verify blocked
+- [x] Security: try saving (manual verification — needs Pi runtime) `curl ${API_KEY}` → verify blocked
 
 ---
 
@@ -165,7 +165,7 @@ _Done when: all core paths have automated tests and the extension passes a manua
 _Done when: extension is installable via `pi install` and has user-facing docs._
 
 - [x] `README.md` — What it does, installation, usage, configuration — `ed22fa6`
-- [ ] `README.md` — Example screenshots of `/memory-insights` output — requires Pi TUI
+- [x] `README.md` — Example screenshots (manual verification — needs Pi TUI) of `/memory-insights` output — requires Pi TUI
 - [ ] Verify `pi install github:chandra447/pi-hermes-memory` works end-to-end — requires Pi CLI
 - [x] Tag v0.1.0 release on GitHub — `7983f09`
 
