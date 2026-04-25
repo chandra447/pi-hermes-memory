@@ -80,9 +80,14 @@ export function setupBackgroundReview(
         if (output && !output.toLowerCase().includes("nothing to save")) {
           ctx.ui.notify("💾 Memory auto-reviewed and updated", "info");
         }
+      } else {
+        ctx.ui.notify(
+          `[hermes] auto-review failed (exit=${result.code}): ${result.stderr?.slice(0, 200) || "unknown error"}`,
+          "error",
+        );
       }
-    } catch {
-      // Background review is best-effort — never block the main agent
+    } catch (err) {
+      ctx.ui.notify(`[hermes] auto-review error: ${String(err).slice(0, 200)}`, "error");
     } finally {
       reviewInProgress = false;
     }
