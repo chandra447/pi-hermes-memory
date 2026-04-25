@@ -20,7 +20,7 @@ pi -e ./src/index.ts --list-models
 echo "Project uses pnpm instead of npm" > ~/.pi/agent/memory/MEMORY.md
 
 # Start Pi with the extension (use any model you have API keys for)
-pi -e ./src/index.ts -m claude-sonnet-4-5
+pi -e ./src/index.ts --model claude-sonnet-4-5
 ```
 **Expected:** First turn's system prompt contains the MEMORY block with "Project uses pnpm instead of npm".
 
