@@ -19,6 +19,7 @@ export function setupBackgroundReview(
   config: MemoryConfig,
 ): void {
   let turnsSinceReview = 0;
+  let toolCallsSinceReview = 0;
   let userTurnCount = 0;
   let reviewInProgress = false;
 
@@ -33,10 +34,35 @@ export function setupBackgroundReview(
 
     if (!config.reviewEnabled) return;
     if (reviewInProgress) return;
-    if (turnsSinceReview < config.nudgeInterval) return;
+
+    // Count tool-use entries from the branch for tool-call-aware nudge
+    try {
+      const branch = ctx.sessionManager.getBranch();
+      for (const entry of branch) {
+        if (entry.type === "message" && entry.message?.role === "assistant") {
+          const content = entry.message?.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block && typeof block === "object" && block.type === "toolCall") {
+                toolCallsSinceReview++;
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // If we can't count tool calls, fall back to turn-based only
+    }
+
+    // Trigger on EITHER turn count OR tool call count
+    const turnThresholdMet = turnsSinceReview >= config.nudgeInterval;
+    const toolCallThresholdMet = toolCallsSinceReview >= config.nudgeToolCalls;
+
+    if (!turnThresholdMet && !toolCallThresholdMet) return;
     if (userTurnCount < 3) return;
 
     turnsSinceReview = 0;
+    toolCallsSinceReview = 0;
     reviewInProgress = true;
 
     try {

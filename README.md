@@ -9,7 +9,10 @@ Your Pi agent normally forgets everything when you close a session. This extensi
 | Feature | What happens |
 |---|---|
 | **Persistent Memory** | The agent saves facts, preferences, and lessons to markdown files that survive restarts |
-| **Background Learning** | Every 10 turns the agent reviews your conversation and proactively saves what it learned about you |
+| **Procedural Skills** | The agent saves *how* it solved problems as reusable skill documents |
+| **Background Learning** | Every 10 turns (or 15 tool calls) the agent reviews your conversation and proactively saves what it learned |
+| **Correction Detection** | When you correct the agent ("no, don't do that"), it saves immediately — no waiting |
+| **Auto-Consolidation** | When memory hits capacity, the agent automatically merges and prunes entries instead of erroring |
 | **Session Flush** | Before context is compressed or the session ends, the agent gets one last chance to save anything worth remembering |
 | **Insights Command** | `/memory-insights` shows everything the agent has remembered about you and your environment |
 
@@ -26,13 +29,13 @@ sequenceDiagram
 
     Note over Pi,Disk: ── Session Start ──
     Pi->>Extension: session_start event
-    Extension->>Disk: loadFromDisk() — read MEMORY.md + USER.md
-    Extension-->>Extension: Capture frozen snapshot
+    Extension->>Disk: loadFromDisk() — read MEMORY.md + USER.md + skills/
+    Extension-->>Extension: Capture frozen snapshot (memory + skill index)
 
     Note over Pi,Disk: ── System Prompt Injection ──
     Pi->>Extension: before_agent_start event
-    Extension-->>Pi: systemPrompt + frozen memory block
-    Note right of Pi: Agent now "remembers"<br/>everything from past sessions
+    Extension-->>Pi: systemPrompt + frozen memory block + skill index
+    Note right of Pi: Agent now "remembers"<br/>facts AND procedures<br/>from past sessions
 
     Note over Pi,Disk: ── Agent Loop ──
     User->>Pi: "Remember I prefer vim"
@@ -41,11 +44,21 @@ sequenceDiagram
     Extension->>Disk: Atomic write to USER.md
     Extension-->>Pi: { success: true, usage: "3% — 41/1375" }
 
-    Note over Pi,Disk: ── Background Review (every 10 turns) ──
-    Pi->>Extension: turn_end event (turn 10)
+    Note over Pi,Disk: ── User Correction ──
+    User->>Pi: "No, don't use npm — use pnpm"
+    Extension->>Extension: isCorrection() = true
+    Extension->>Pi: pi.exec("pi -p", correctionPrompt)
+    Note right of Pi: Immediate save<br/>no waiting for nudge
+
+    Note over Pi,Disk: ── Complex Task (8+ tool calls) ──
+    Pi->>Extension: turn_end (8 tool calls, 3 tool types)
+    Extension->>Pi: pi.exec("pi -p", skillExtractionPrompt)
+    Note right of Pi: Extract reusable<br/>procedure as skill
+
+    Note over Pi,Disk: ── Background Review (10 turns or 15 tool calls) ──
+    Pi->>Extension: turn_end event
     Extension->>Pi: pi.exec("pi -p", reviewPrompt)
-    Note right of Pi: Child agent reviews<br/>conversation and decides<br/>what to save
-    Pi-->>User: 💾 Memory auto-reviewed and updated
+    Note right of Pi: Reviews conversation<br/>saves memories AND skills
 
     Note over Pi,Disk: ── Session End ──
     Pi->>Extension: session_shutdown event
@@ -53,80 +66,72 @@ sequenceDiagram
     Note right of Pi: One last turn to flush<br/>anything worth saving
 ```
 
-### Background Review Cost
+### Memory + Skills Architecture
 
-Each auto-review spawns a child `pi -p` process, which makes one full LLM API call. With the default `nudgeInterval` of 10, this happens roughly once per 10 turns. The child process does NOT inherit extensions — it receives a review prompt and returns structured text. The parent extension decides what to save.
+The extension manages three types of knowledge:
 
-### Memory Architecture
+| Type | What | Storage | Token cost |
+|---|---|---|---|
+| **Memory** (MEMORY.md) | Facts — env details, project conventions, tool quirks | 2,200 chars max | Fixed per session |
+| **User Profile** (USER.md) | Who you are — name, preferences, communication style | 1,375 chars max | Fixed per session |
+| **Skills** (skills/*.md) | Procedures — *how* to do something, reusable across sessions | Unlimited | ~3K for index, full on demand |
 
 ```mermaid
 graph TB
     subgraph "Persistent Storage"
-        MEM["MEMORY.md<br/><i>Agent's personal notes</i><br/>━━━━━━━━━━<br/>project uses pnpm §<br/>tests go in __tests__ §<br/>user prefers dark theme"]
-        USR["USER.md<br/><i>User profile</i><br/>━━━━━━━━━━<br/>name: Chandrateja §<br/>prefers concise answers §<br/>codes in TypeScript"]
+        MEM["MEMORY.md<br/><i>Agent's notes</i>"]
+        USR["USER.md<br/><i>User profile</i>"]
+        SKL["skills/<br/><i>Procedural memory</i><br/>debug-ts.md<br/>deploy-checklist.md"]
     end
 
-    subgraph "In-Memory (per session)"
-        SNAP["Frozen Snapshot<br/><i>Captured once at session start</i><br/>Never mutated mid-session"]
-        LIVE["Live State<br/><i>Updated by tool calls</i><br/>Persisted to disk immediately"]
+    subgraph "System Prompt (frozen snapshot)"
+        SMEM["Memory block<br/>Full content"]
+        SUSR["User block<br/>Full content"]
+        SSKL["Skill index<br/>Names + descriptions only"]
     end
 
-    subgraph "Pi Extension Events"
-        SS["session_start"]
-        BAS["before_agent_start"]
-        TC["tool_call<br/>(memory add/replace/remove)"]
-        TE["turn_end<br/>(background review)"]
-        SC["session_before_compact<br/>(flush)"]
-        SH["session_shutdown<br/>(flush)"]
+    subgraph "On Demand (via skill tool)"
+        FULL["Full skill content<br/>Loaded when needed"]
     end
 
-    MEM -->|"loadFromDisk()"| SNAP
-    USR -->|"loadFromDisk()"| SNAP
-    SNAP -->|"formatForSystemPrompt()"| BAS
+    MEM --> SMEM
+    USR --> SUSR
+    SKL --> SSKL
+    SSKL -.->|"skill view"| FULL
 
-    TC -->|"validate + scan"| LIVE
-    LIVE -->|"atomic write"| MEM
-    LIVE -->|"atomic write"| USR
-
-    TE -->|"pi.exec() child review"| TC
-    SC -->|"pi.exec() flush"| TC
-    SH -->|"pi.exec() flush"| TC
-
-    style SNAP fill:#1a1a2e,stroke:#e94560,color:#fff
-    style LIVE fill:#16213e,stroke:#0f3460,color:#fff
-    style MEM fill:#0a1128,stroke:#1282a2,color:#fff
-    style USR fill:#0a1128,stroke:#1282a2,color:#fff
+    style SMEM fill:#1a1a2e,stroke:#e94560,color:#fff
+    style SUSR fill:#1a1a2e,stroke:#e94560,color:#fff
+    style SSKL fill:#16213e,stroke:#0f3460,color:#fff
+    style FULL fill:#0a1128,stroke:#1282a2,color:#fff
 ```
 
 ### Security: Content Scanning
 
-Every write passes through a scanner before being accepted. This prevents the LLM from being tricked into storing malicious content that would later be injected into the system prompt.
+Every write — memory and skills — passes through a scanner before being accepted. This prevents the LLM from being tricked into storing malicious content that would later be injected into the system prompt.
 
 ```mermaid
 flowchart LR
-    A["LLM calls<br/>memory add"] --> B{scanContent}
-    B -->|Blocked| C["❌ Return error<br/>to LLM"]
+    A["LLM calls<br/>memory or skill"] --> B{scanContent}
+    B -->|Blocked| C["❌ Return error"]
     B -->|Safe| D{Char limit<br/>check}
-    D -->|Exceeds| E["❌ Return budget<br/>error to LLM"]
-    D -->|Within limit| F["✅ Write to disk<br/>via atomic rename"]
+    D -->|Exceeds| E{autoConsolidate?}
+    E -->|Yes| G["🔄 Merge & prune<br/>then retry"]
+    E -->|No| F["❌ Return budget error"]
+    D -->|Within limit| H["✅ Write to disk"]
 
     subgraph "Blocked Patterns"
         P1["'ignore previous instructions'"]
-        P2["'you are now...'"]
-        P3["'curl ${API_KEY}'"]
-        P4["Zero-width chars U+200B"]
-        P5["'cat .env'"]
+        P2["'curl ${API_KEY}'"]
+        P3["Zero-width chars"]
     end
 
     B -.- P1
     B -.- P2
     B -.- P3
-    B -.- P4
-    B -.- P5
 
     style C fill:#3d0000,stroke:#ff4444,color:#fff
-    style E fill:#3d2e00,stroke:#ffaa00,color:#fff
-    style F fill:#003d00,stroke:#44ff44,color:#fff
+    style G fill:#003d3d,stroke:#00cccc,color:#fff
+    style H fill:#003d00,stroke:#44ff44,color:#fff
 ```
 
 ## Installation
@@ -149,7 +154,7 @@ pi -e /path/to/pi-hermes-memory/src/index.ts
 
 ## Usage
 
-Once installed, the extension works automatically. You don't need to do anything special.
+Once installed, the extension works automatically. You don't need to do anything special — the agent will start saving memories and skills on its own.
 
 ### The `memory` Tool
 
@@ -161,16 +166,102 @@ The agent gets a `memory` tool it can call proactively:
 | `replace` | `memory` or `user` | Update an existing entry (matched by substring) |
 | `remove` | `memory` or `user` | Delete an entry (matched by substring) |
 
-The agent decides **what to save** and **when to save it** — you'll see it happen naturally during conversations.
+### The `skill` Tool
 
-### Memory vs User Profile
+The agent also gets a `skill` tool for saving reusable procedures:
 
-| Store | File | What goes here | Char limit |
+| Action | What it does |
+|---|---|
+| `create` | Save a new skill (name, description, step-by-step body) |
+| `view` | Read a skill's full content, or list all skills if no name given |
+| `patch` | Update one section of an existing skill (e.g., just the Procedure section) |
+| `edit` | Replace the description and/or full body of a skill |
+| `delete` | Remove a skill |
+
+Skills are stored as `SKILL.md` files in `~/.pi/agent/memory/skills/`. Each has a structured body:
+
+```markdown
+---
+name: debug-typescript-errors
+description: Step-by-step approach to debugging TS errors in monorepos
+version: 1
+created: 2026-04-26
+updated: 2026-04-26
+---
+## When to Use
+When you see TypeScript compilation errors, especially in monorepo setups.
+
+## Procedure
+1. Read the error message carefully
+2. Check tsconfig.json extends chain
+3. Run tsc --noEmit to get full error list
+4. Fix errors bottom-up (dependencies first)
+
+## Pitfalls
+- Don't trust VSCode's error display — use the CLI
+
+## Verification
+Run `tsc --noEmit` and confirm zero errors.
+```
+
+### Memory vs User Profile vs Skills
+
+| Store | File | What goes here | Limit |
 |---|---|---|---|
-| **memory** | `MEMORY.md` | Agent's notes — env facts, project conventions, tool quirks, lessons learned | 2,200 |
-| **user** | `USER.md` | User profile — name, preferences, communication style, habits | 1,375 |
+| **memory** | `MEMORY.md` | Agent's notes — env facts, project conventions, tool quirks, lessons learned | 2,200 chars |
+| **user** | `USER.md` | User profile — name, preferences, communication style, habits | 1,375 chars |
+| **skills** | `skills/*.md` | Procedures — *how* to debug, deploy, test, or fix something | Unlimited |
 
-### The `/memory-insights` Command
+### Correction Detection
+
+When you correct the agent, it saves immediately — no waiting for the background review. Examples of corrections the agent detects:
+
+| You say | What happens |
+|---|---|
+| "don't do that" | ✅ Immediate save |
+| "no, use yarn instead" | ✅ Immediate save |
+| "actually, fix the test first" | ✅ Immediate save |
+| "I said use pnpm" | ✅ Immediate save |
+| "no worries" | ❌ Not a correction — ignored |
+| "actually looks great" | ❌ Not a correction — ignored |
+
+### Auto-Consolidation
+
+When memory or user profile hits its character limit, the extension automatically consolidates instead of returning an error:
+
+1. Spawns a one-shot `pi.exec()` process with a consolidation prompt
+2. The child agent merges related entries, removes outdated ones, keeps the most important facts
+3. Parent reloads from disk and retries the original save
+4. If consolidation fails, falls back to the original error
+
+You can also trigger this manually with `/memory-consolidate`.
+
+### Tool-Call-Aware Review
+
+Background review triggers based on **activity level**, not just turn count:
+
+- **Every 10 turns** — the default nudge interval
+- **OR every 15 tool calls** — catches complex tasks that involve many reads/edits/bash calls
+
+Both counters reset after each review.
+
+### Skill Auto-Extraction
+
+After a complex task (8+ tool calls using 2+ different tools in a single turn), the extension automatically asks the agent:
+
+> "This was a complex task — should we save a reusable procedure?"
+
+This means skills build up naturally over time without you having to ask.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `/memory-insights` | Shows everything stored in memory and user profile |
+| `/memory-skills` | Lists all agent-created skills |
+| `/memory-consolidate` | Manually trigger memory consolidation to free space |
+
+### `/memory-insights` Output
 
 ```
 ╔══════════════════════════════════════════════╗
@@ -190,6 +281,22 @@ The agent decides **what to save** and **when to save it** — you'll see it hap
 3. codes primarily in TypeScript
 ```
 
+### `/memory-skills` Output
+
+```
+╔══════════════════════════════════════════════╗
+║            🧠 Procedural Skills             ║
+╚══════════════════════════════════════════════╝
+
+📄 debug-typescript-errors
+   Step-by-step approach to debugging TS errors in monorepos
+   file: debug-typescript-errors.md
+
+📄 deploy-checklist
+   Pre-deploy verification steps for this project
+   file: deploy-checklist.md
+```
+
 ## Configuration
 
 Create `~/.pi/agent/hermes-memory-config.json`:
@@ -199,7 +306,10 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "memoryCharLimit": 2200,
   "userCharLimit": 1375,
   "nudgeInterval": 10,
+  "nudgeToolCalls": 15,
   "reviewEnabled": true,
+  "autoConsolidate": true,
+  "correctionDetection": true,
   "flushOnCompact": true,
   "flushOnShutdown": true,
   "flushMinTurns": 6
@@ -210,8 +320,11 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 |---|---|---|
 | `memoryCharLimit` | `2200` | Max characters in MEMORY.md |
 | `userCharLimit` | `1375` | Max characters in USER.md |
-| `nudgeInterval` | `10` | Turns between auto-reviews (0 = disable) |
+| `nudgeInterval` | `10` | Turns between auto-reviews |
+| `nudgeToolCalls` | `15` | Tool calls between auto-reviews (OR with turns) |
 | `reviewEnabled` | `true` | Enable/disable background learning loop |
+| `autoConsolidate` | `true` | Auto-merge when memory hits capacity |
+| `correctionDetection` | `true` | Detect user corrections and save immediately |
 | `flushOnCompact` | `true` | Flush memories before Pi compacts context |
 | `flushOnShutdown` | `true` | Flush memories when session ends |
 | `flushMinTurns` | `6` | Minimum turns before flush triggers |
@@ -220,18 +333,22 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 
 ```
 ~/.pi/agent/memory/
-├── MEMORY.md     ← Agent's personal notes (env facts, patterns, lessons)
-└── USER.md       ← User profile (name, preferences, habits)
+├── MEMORY.md          ← Agent's personal notes (env facts, patterns, lessons)
+├── USER.md            ← User profile (name, preferences, habits)
+└── skills/
+    ├── debug-typescript-errors.md
+    └── deploy-checklist.md
 ```
 
-These are plain markdown files. You can read and edit them directly if you want to curate what the agent remembers. Entries are separated by `§` (section sign).
+These are plain markdown files. You can read and edit them directly if you want to curate what the agent remembers. Memory entries are separated by `§` (section sign). Skills use standard SKILL.md format with frontmatter.
 
 ## Known Limitations
 
-- **`§` delimiter**: Entries are separated by `§` (section sign). If a memory entry naturally contains `§`, it will be split incorrectly on reload. This is rare in English text but possible. [Hermes uses the same delimiter.]
-- **Background review cost**: Each review cycle costs one full LLM API call via a child `pi -p` process.
-- **No search/indexing**: At the 2,200-char limit, the LLM can scan the entire block. Tag-based indexing is a potential v2 improvement.
+- **`§` delimiter**: Memory entries are separated by `§` (section sign). If an entry naturally contains `§`, it will be split incorrectly on reload. This is rare in English text but possible. [Hermes uses the same delimiter.]
+- **Background review cost**: Each review cycle costs one full LLM API call via a child `pi -p` process. Correction detection and skill auto-extraction add occasional extra calls.
+- **No search/indexing**: At the 2,200-char limit, the LLM can scan the entire block. Full-text search across sessions is planned for v0.3.
 - **System prompts are invisible**: Pi's TUI does not display the system prompt. Memory injection works but you won't see it in the interface — verify by asking the agent a question that relies on stored memory.
+- **Skills are agent-generated**: Skills are created by the agent based on its experience. They may not always be perfectly structured. You can edit or delete them in `~/.pi/agent/memory/skills/`.
 
 ## Architecture
 
@@ -239,34 +356,44 @@ These are plain markdown files. You can read and edit them directly if you want 
 graph LR
     subgraph "pi-hermes-memory/src/"
         IDX["index.ts<br/><i>Entry point</i>"]
-        MS["memory-store.ts<br/><i>CRUD + persistence</i>"]
-        MT["memory-tool.ts<br/><i>LLM tool</i>"]
+        MS["memory-store.ts<br/><i>Memory CRUD</i>"]
+        SS["skill-store.ts<br/><i>Skill CRUD</i>"]
+        MT["memory-tool.ts<br/><i>Memory LLM tool</i>"]
+        ST["skill-tool.ts<br/><i>Skill LLM tool</i>"]
         CS["content-scanner.ts<br/><i>Security</i>"]
         BR["background-review.ts<br/><i>Learning loop</i>"]
+        AC["auto-consolidate.ts<br/><i>Memory merge</i>"]
+        CD["correction-detector.ts<br/><i>Instant save</i>"]
+        SA["skill-auto-trigger.ts<br/><i>Skill extraction</i>"]
         SF["session-flush.ts<br/><i>Pre-compaction flush</i>"]
         IN["insights.ts<br/><i>/memory-insights</i>"]
-        CT["constants.ts<br/><i>Prompts + defaults</i>"]
-        TP["types.ts<br/><i>Interfaces</i>"]
+        SC["skills-command.ts<br/><i>/memory-skills</i>"]
     end
 
     IDX --> MS
+    IDX --> SS
     IDX --> MT
+    IDX --> ST
     IDX --> BR
+    IDX --> AC
+    IDX --> CD
+    IDX --> SA
     IDX --> SF
     IDX --> IN
+    IDX --> SC
     MT --> MS
+    ST --> SS
     MS --> CS
+    SS --> CS
     BR --> MS
-    SF --> MS
-    MS --> CT
-    MT --> CT
-    BR --> CT
-    SF --> CT
-    MS --> TP
-    MT --> TP
+    AC --> MS
+    CD --> MS
+    SA --> MS
+    SA --> SS
 
     style IDX fill:#e94560,stroke:#fff,color:#fff
     style MS fill:#0f3460,stroke:#fff,color:#fff
+    style SS fill:#0f3460,stroke:#fff,color:#fff
     style CS fill:#ff6600,stroke:#fff,color:#fff
 ```
 
@@ -285,4 +412,4 @@ MIT
 
 ---
 
-**[Full Roadmap →](docs/ROADMAP.md)** — v0.2 SQLite + search · v0.3 Mem0 + Honcho · v1.0 production substrate
+**[Full Roadmap →](docs/ROADMAP.md)** · **[Changelog →](CHANGELOG.md)**

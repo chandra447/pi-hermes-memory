@@ -22,14 +22,23 @@ import {
   MEMORY_FILE,
   USER_FILE,
 } from "../constants.js";
-import type { MemoryConfig, MemoryResult, MemorySnapshot } from "../types.js";
+import type { MemoryConfig, MemoryResult, MemorySnapshot, ConsolidationResult } from "../types.js";
 
 export class MemoryStore {
   private memoryEntries: string[] = [];
   private userEntries: string[] = [];
   private snapshot: MemorySnapshot = { memory: "", user: "" };
+  private consolidator: ((target: "memory" | "user", signal?: AbortSignal) => Promise<ConsolidationResult>) | null = null;
 
   constructor(private config: MemoryConfig) {}
+
+  /**
+   * Inject a consolidation function (avoids circular imports).
+   * Called from index.ts after both store and pi are available.
+   */
+  setConsolidator(fn: (target: "memory" | "user", signal?: AbortSignal) => Promise<ConsolidationResult>): void {
+    this.consolidator = fn;
+  }
 
   // ─── Path helpers ───
 
@@ -79,7 +88,7 @@ export class MemoryStore {
 
   // ─── CRUD ───
 
-  add(target: "memory" | "user", content: string): MemoryResult {
+  async add(target: "memory" | "user", content: string, signal?: AbortSignal): Promise<MemoryResult> {
     content = content.trim();
     if (!content) return { success: false, error: "Content cannot be empty." };
 
@@ -95,6 +104,20 @@ export class MemoryStore {
 
     const newTotal = [...entries, content].join(ENTRY_DELIMITER).length;
     if (newTotal > limit) {
+      // Auto-consolidate if configured and consolidator available
+      if (this.config.autoConsolidate && this.consolidator) {
+        try {
+          const result = await this.consolidator(target, signal);
+          if (result.consolidated) {
+            // CRITICAL: reload from disk — child process modified files, our arrays are stale
+            await this.loadFromDisk();
+            // Retry the add with fresh data
+            return this.add(target, content, signal);
+          }
+        } catch {
+          // Consolidation failed — fall through to error
+        }
+      }
       const current = this.charCount(target);
       return {
         success: false,

@@ -7,6 +7,7 @@ import {
   DEFAULT_USER_CHAR_LIMIT,
   DEFAULT_NUDGE_INTERVAL,
   DEFAULT_FLUSH_MIN_TURNS,
+  DEFAULT_NUDGE_TOOL_CALLS,
 } from "./constants.js";
 
 const DEFAULT_CONFIG: MemoryConfig = {
@@ -17,6 +18,9 @@ const DEFAULT_CONFIG: MemoryConfig = {
   flushOnCompact: true,
   flushOnShutdown: true,
   flushMinTurns: DEFAULT_FLUSH_MIN_TURNS,
+  autoConsolidate: true,
+  correctionDetection: true,
+  nudgeToolCalls: DEFAULT_NUDGE_TOOL_CALLS,
 };
 
 export const DEFAULT_CONFIG_PATH = path.join(
@@ -40,6 +44,9 @@ export function loadConfig(): MemoryConfig {
       if (typeof parsed.flushOnCompact === "boolean") config.flushOnCompact = parsed.flushOnCompact;
       if (typeof parsed.flushOnShutdown === "boolean") config.flushOnShutdown = parsed.flushOnShutdown;
       if (typeof parsed.flushMinTurns === "number") config.flushMinTurns = parsed.flushMinTurns;
+      if (typeof parsed.autoConsolidate === "boolean") config.autoConsolidate = parsed.autoConsolidate;
+      if (typeof parsed.correctionDetection === "boolean") config.correctionDetection = parsed.correctionDetection;
+      if (typeof parsed.nudgeToolCalls === "number") config.nudgeToolCalls = parsed.nudgeToolCalls;
       return config;
     }
   } catch {

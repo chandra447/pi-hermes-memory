@@ -36,6 +36,9 @@ function makeConfig(overrides?: Partial<MemoryConfig>): MemoryConfig {
     flushOnCompact: false,
     flushOnShutdown: false,
     flushMinTurns: 6,
+    autoConsolidate: false,
+    correctionDetection: false,
+    nudgeToolCalls: 15,
     memoryDir: MEMORY_DIR,
     ...overrides,
   };
@@ -111,7 +114,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
-      const result = store.add("memory", `${TEST_MARKER} project uses pnpm`);
+      const result = await await store.add("memory", `${TEST_MARKER} project uses pnpm`);
       await settle();
 
       assert.ok(result.success);
@@ -130,11 +133,11 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.loadFromDisk();
 
       const entry = `${TEST_MARKER} dup test entry`;
-      const r1 = store.add("memory", entry);
+      const r1 = await store.add("memory", entry);
       assert.ok(r1.success);
       assert.equal(r1.entry_count, 1);
 
-      const r2 = store.add("memory", entry);
+      const r2 = await store.add("memory", entry);
       await settle();
 
       assert.ok(r2.success);
@@ -150,7 +153,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig({ memoryCharLimit: 50 }));
       await store.loadFromDisk();
 
-      const result = store.add("memory", `${TEST_MARKER} ${"x".repeat(60)}`);
+      const result = await await store.add("memory", `${TEST_MARKER} ${"x".repeat(60)}`);
       await settle();
 
       assert.ok(!result.success);
@@ -159,10 +162,10 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.ok(result.error!.includes("chars"));
     });
 
-    it("returns error for empty content", () => {
+    it("returns error for empty content", async () => {
       const store = new MemoryStore(makeConfig());
 
-      const result = store.add("memory", "   ");
+      const result = await await store.add("memory", "   ");
       assert.ok(!result.success);
       assert.equal(result.error, "Content cannot be empty.");
     });
@@ -171,7 +174,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
-      const result = store.add("user", `${TEST_MARKER} prefers dark mode`);
+      const result = await await store.add("user", `${TEST_MARKER} prefers dark mode`);
       await settle();
 
       assert.ok(result.success);
@@ -188,7 +191,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
-      const result = store.add("memory", `${TEST_MARKER} uses node 22`);
+      const result = await await store.add("memory", `${TEST_MARKER} uses node 22`);
       await settle();
 
       assert.ok(result.success);
@@ -203,7 +206,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.loadFromDisk();
 
       const entry = `${TEST_MARKER} section divider${ENTRY_DELIMITER}continued`;
-      const result = store.add("memory", entry);
+      const result = await await store.add("memory", entry);
       await settle();
 
       assert.ok(result.success);
@@ -215,7 +218,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.loadFromDisk();
 
       const entry = `${TEST_MARKER} 日本語テスト 🧪`;
-      const result = store.add("memory", entry);
+      const result = await await store.add("memory", entry);
       await settle();
 
       assert.ok(result.success);
@@ -228,7 +231,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.loadFromDisk();
 
       const entry = `${TEST_MARKER} ${"a".repeat(limit - 50)}`;
-      const result = store.add("memory", entry);
+      const result = await await store.add("memory", entry);
       await settle();
 
       assert.ok(result.success, `Expected success but got error: ${result.error}`);
@@ -238,11 +241,11 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
-      const r1 = store.add("memory", `${TEST_MARKER} first entry`);
+      const r1 = await store.add("memory", `${TEST_MARKER} first entry`);
       assert.ok(r1.success, `First add failed: ${r1.error}`);
       await settle();
 
-      const r2 = store.add("memory", `${TEST_MARKER} second entry`);
+      const r2 = await store.add("memory", `${TEST_MARKER} second entry`);
       assert.ok(r2.success, `Second add failed: ${r2.error}`);
       await settle();
 
@@ -261,7 +264,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
-      store.add("memory", `${TEST_MARKER} uses vim`);
+      await store.add("memory", `${TEST_MARKER} uses vim`);
       await settle();
 
       const result = store.replace("memory", `${TEST_MARKER} uses vim`, `${TEST_MARKER} uses neovim`);
@@ -279,7 +282,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
-      store.add("memory", `${TEST_MARKER} some entry`);
+      await store.add("memory", `${TEST_MARKER} some entry`);
       await settle();
 
       const result = store.replace("memory", "nonexistent substring", "new content");
@@ -293,8 +296,8 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
-      store.add("memory", `${TEST_MARKER} config: port=8080`);
-      store.add("memory", `${TEST_MARKER} config: port=9090`);
+      await store.add("memory", `${TEST_MARKER} config: port=8080`);
+      await store.add("memory", `${TEST_MARKER} config: port=9090`);
       await settle();
 
       const result = store.replace("memory", "config:", `${TEST_MARKER} unified config`);
@@ -306,9 +309,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.equal(result.matches!.length, 2);
     });
 
-    it("returns error for empty old_text", () => {
+    it("returns error for empty old_text", async () => {
       const store = new MemoryStore(makeConfig());
-      store.add("memory", `${TEST_MARKER} some entry`);
+      await store.add("memory", `${TEST_MARKER} some entry`);
 
       const result = store.replace("memory", "  ", "new content");
 
@@ -316,9 +319,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.equal(result.error, "old_text cannot be empty.");
     });
 
-    it("returns error for empty new_content", () => {
+    it("returns error for empty new_content", async () => {
       const store = new MemoryStore(makeConfig());
-      store.add("memory", `${TEST_MARKER} some entry`);
+      await store.add("memory", `${TEST_MARKER} some entry`);
 
       const result = store.replace("memory", `${TEST_MARKER} some entry`, "   ");
 
@@ -334,8 +337,8 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
-      store.add("memory", `${TEST_MARKER} to be removed`);
-      store.add("memory", `${TEST_MARKER} to keep`);
+      await store.add("memory", `${TEST_MARKER} to be removed`);
+      await store.add("memory", `${TEST_MARKER} to keep`);
       await settle();
 
       const result = store.remove("memory", `${TEST_MARKER} to be removed`);
@@ -354,7 +357,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
-      store.add("memory", `${TEST_MARKER} existing`);
+      await store.add("memory", `${TEST_MARKER} existing`);
       await settle();
 
       const result = store.remove("memory", "nonexistent");
@@ -364,9 +367,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.ok(result.error!.includes("No entry matched"));
     });
 
-    it("returns error for empty old_text", () => {
+    it("returns error for empty old_text", async () => {
       const store = new MemoryStore(makeConfig());
-      store.add("memory", `${TEST_MARKER} some entry`);
+      await store.add("memory", `${TEST_MARKER} some entry`);
 
       const result = store.remove("memory", "  ");
 
@@ -430,7 +433,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.ok(before.includes(`${TEST_MARKER} original note`));
 
       // Add a new entry — this should NOT affect the snapshot
-      store.add("memory", `${TEST_MARKER} new note after load`);
+      await store.add("memory", `${TEST_MARKER} new note after load`);
 
       const after = store.formatForSystemPrompt();
       assert.equal(before, after, "Snapshot should not change after add");
@@ -473,9 +476,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
         `${TEST_MARKER} second atomic entry`,
       ];
 
-      store.add("memory", entries[0]);
+      await store.add("memory", entries[0]);
       await settle();
-      store.add("memory", entries[1]);
+      await store.add("memory", entries[1]);
       await settle();
 
 
@@ -489,7 +492,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
-      store.add("memory", `${TEST_MARKER} temporary entry`);
+      await store.add("memory", `${TEST_MARKER} temporary entry`);
       await settle();
 
       let raw = await readRaw(memoryPath);
@@ -510,8 +513,8 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
-      store.add("user", `${TEST_MARKER} user fact`);
-      store.add("memory", `${TEST_MARKER} memory fact`);
+      await store.add("user", `${TEST_MARKER} user fact`);
+      await store.add("memory", `${TEST_MARKER} memory fact`);
       await settle();
 
       const userRaw = await readRaw(userPath);

@@ -55,7 +55,7 @@ export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore): void {
               details: {},
             };
           }
-          result = store.add(target, content);
+          result = await store.add(target, content);
           break;
 
         case "replace":
