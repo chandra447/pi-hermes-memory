@@ -45,6 +45,8 @@ export function setupBackgroundReview(
     turnsSinceReview = 0;
     reviewInProgress = true;
 
+    ctx.ui.notify("[hermes] Review triggered — running pi.exec...", "info");
+
     try {
       // Build conversation snapshot from session entries
       const entries = ctx.sessionManager.getBranch();
@@ -58,7 +60,11 @@ export function setupBackgroundReview(
         const prefix = msg.role === "user" ? "[USER]" : "[ASSISTANT]";
         parts.push(`${prefix}: ${text}`);
       }
-      if (parts.length < 4) return; // Not enough conversation to review
+      ctx.ui.notify(`[hermes] Conversation parts: ${parts.length}`, "info");
+      if (parts.length < 4) {
+        ctx.ui.notify("[hermes] Skipped: < 4 conversation parts", "info");
+        return;
+      }
 
       const currentMemory = store.getMemoryEntries().join("\n§\n");
       const currentUser = store.getUserEntries().join("\n§\n");
@@ -81,10 +87,17 @@ export function setupBackgroundReview(
         timeout: 60000,
       });
 
+      ctx.ui.notify(
+        `[hermes] pi.exec done: exit=${result.code} stdout=${result.stdout?.length ?? 0}chars stderr=${result.stderr?.slice(0, 100) || "(none)"}`,
+        "info",
+      );
+
       if (result.code === 0 && result.stdout) {
         const output = result.stdout.trim();
         if (output && !output.toLowerCase().includes("nothing to save")) {
           ctx.ui.notify("💾 Memory auto-reviewed and updated", "info");
+        } else {
+          ctx.ui.notify(`[hermes] Review complete: nothing new to save (${output.length} chars)`, "info");
         }
       } else {
         ctx.ui.notify(
