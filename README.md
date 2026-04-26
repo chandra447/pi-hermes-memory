@@ -132,7 +132,13 @@ flowchart LR
 ## Installation
 
 ```bash
-pi install github:chandra447/pi-hermes-memory
+pi install npm:pi-hermes-memory
+```
+
+Or install from GitHub:
+
+```bash
+pi install git:github:chandra447/pi-hermes-memory
 ```
 
 Or test locally without installing:
