@@ -267,6 +267,6 @@ gantt
 
 ## How to Contribute
 
-See [TASKS.md](../TASKS.md) for current work. Pick an unchecked item, mark it `[~]`, implement, mark it `[x]` with the commit hash.
+See [TASKS.md](0.1/TASKS.md) for current work. Pick an unchecked item, mark it `[~]`, implement, mark it `[x]` with the commit hash.
 
 For roadmap items, open an issue with the version tag (e.g. `v0.2.0`) and describe what you want to work on.

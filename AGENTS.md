@@ -40,16 +40,16 @@ The implementation is ported from the Hermes agent harness. See `PLAN.md` → "H
 
 ## Task Tracking
 
-All implementation work is tracked in **`TASKS.md`** with checkboxes organized by epic.
+All implementation work is tracked in **`docs/0.1/TASKS.md`** with checkboxes organized by epic.
 
 **Workflow:**
-1. Pick a task from the current epic in `TASKS.md`
+1. Pick a task from the current epic in `docs/0.1/TASKS.md`
 2. Mark it `[~]` (in progress)
 3. Implement it
 4. Mark it `[x]` (done) with the commit hash
 5. Move to the next task
 
-**Before starting any work, read `TASKS.md` to see what's done and what's next.**
+**Before starting any work, read `docs/0.1/TASKS.md` to see what's done and what's next.**
 
 ## Development
 
