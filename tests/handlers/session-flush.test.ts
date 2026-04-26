@@ -124,6 +124,8 @@ describe("setupSessionFlush", () => {
     const ctx = { sessionManager: { getBranch: () => mockBranch(8) } };
     await emit(mockPi.handlers, "session_shutdown", {}, ctx);
 
+    // Shutdown flush is fire-and-forget — wait for microtask queue to settle
+    await new Promise(r => setTimeout(r, 10));
     assert.equal(mockPi.execCalls.length, 1, "exec should be called once");
   });
 
@@ -286,6 +288,7 @@ describe("setupSessionFlush", () => {
       emit(mockPi.handlers, "session_shutdown", {}, ctx),
     ]);
 
+    await new Promise(r => setTimeout(r, 10));
     assert.equal(mockPi.execCalls.length, 2, "both events should trigger flush");
   });
 
