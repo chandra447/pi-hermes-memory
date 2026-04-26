@@ -1,9 +1,15 @@
 {
   "name": "pi-hermes-memory",
   "version": "0.1.0",
-  "description": "Hermes-style persistent memory and learning loop for Pi coding agent",
+  "description": "Persistent memory and self-directed learning loop for Pi — ported from the Hermes agent harness. Security-first content scanning, real-time saves, and frozen snapshot injection.",
   "type": "module",
   "main": "src/index.ts",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "docs"
+  ],
   "pi": {
     "extensions": [
       "./src/index.ts"
@@ -14,14 +20,23 @@
     "test": "npx tsx --test 'tests/**/*.test.ts' --test-concurrency=1"
   },
   "keywords": [
-    "pi",
+    "pi-package",
     "pi-extension",
     "memory",
     "learning-loop",
     "agent",
-    "hermes"
+    "hermes",
+    "persistent-memory",
+    "content-scanner"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chandra447/pi-hermes-memory"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
   "devDependencies": {
     "@mariozechner/pi-ai": "^0.70.0",
     "@mariozechner/pi-coding-agent": "^0.70.0",
