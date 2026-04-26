@@ -1,6 +1,6 @@
 {
   "name": "pi-hermes-memory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Persistent memory and self-directed learning loop for Pi — ported from the Hermes agent harness. Security-first content scanning, real-time saves, and frozen snapshot injection.",
   "type": "module",
   "main": "src/index.ts",
