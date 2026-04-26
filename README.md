@@ -53,6 +53,10 @@ sequenceDiagram
     Note right of Pi: One last turn to flush<br/>anything worth saving
 ```
 
+### Background Review Cost
+
+Each auto-review spawns a child `pi -p` process, which makes one full LLM API call. With the default `nudgeInterval` of 10, this happens roughly once per 10 turns. The child process does NOT inherit extensions — it receives a review prompt and returns structured text. The parent extension decides what to save.
+
 ### Memory Architecture
 
 ```mermaid
@@ -215,6 +219,13 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 ```
 
 These are plain markdown files. You can read and edit them directly if you want to curate what the agent remembers. Entries are separated by `§` (section sign).
+
+## Known Limitations
+
+- **`§` delimiter**: Entries are separated by `§` (section sign). If a memory entry naturally contains `§`, it will be split incorrectly on reload. This is rare in English text but possible. [Hermes uses the same delimiter.]
+- **Background review cost**: Each review cycle costs one full LLM API call via a child `pi -p` process.
+- **No search/indexing**: At the 2,200-char limit, the LLM can scan the entire block. Tag-based indexing is a potential v2 improvement.
+- **System prompts are invisible**: Pi's TUI does not display the system prompt. Memory injection works but you won't see it in the interface — verify by asking the agent a question that relies on stored memory.
 
 ## Architecture
 
