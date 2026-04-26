@@ -286,11 +286,9 @@ describe("setupBackgroundReview", () => {
     }
     await settle();
 
-    assert.strictEqual(notifyCalls.length, 1, "notification should be shown when something is saved");
-    assert.ok(
-      notifyCalls[0].msg.includes("Memory auto-reviewed"),
-      "notification should mention auto-review",
-    );
+    // 10 diagnostic notifications + 1 auto-review notification
+    const reviewNotify = notifyCalls.find(n => n.msg.includes("Memory auto-reviewed"));
+    assert.ok(reviewNotify, "should have a 'Memory auto-reviewed' notification");
 
     // Reset and test "nothing to save" case
     handlers = {};
@@ -309,7 +307,8 @@ describe("setupBackgroundReview", () => {
     }
     await settle();
 
-    assert.strictEqual(notifyCalls.length, 0, "notification should NOT be shown for 'nothing to save'");
+    const reviewNotify2 = notifyCalls.find(n => n.msg.includes("Memory auto-reviewed"));
+    assert.strictEqual(reviewNotify2, undefined, "no 'Memory auto-reviewed' notification for 'nothing to save'");
   });
 
   it("does NOT crash agent when exec throws", async () => {

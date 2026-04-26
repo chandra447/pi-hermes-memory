@@ -31,6 +31,12 @@ export function setupBackgroundReview(
   pi.on("turn_end", async (event, ctx) => {
     turnsSinceReview++;
 
+    // Always show state so we can diagnose if review doesn't trigger
+    ctx.ui.notify(
+      `[hermes] turn_end #${turnsSinceReview} (need ${config.nudgeInterval}) | users=${userTurnCount} (need 3) | review=${config.reviewEnabled}`,
+      "info",
+    );
+
     if (!config.reviewEnabled) return;
     if (reviewInProgress) return;
     if (turnsSinceReview < config.nudgeInterval) return;
