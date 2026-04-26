@@ -276,3 +276,7 @@ Ported from the [Hermes agent](https://github.com/nousresearch/hermes-agent) by 
 ## License
 
 MIT
+
+---
+
+**[Full Roadmap →](docs/ROADMAP.md)** — v0.2 SQLite + search · v0.3 Mem0 + Honcho · v1.0 production substrate
