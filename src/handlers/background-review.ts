@@ -31,12 +31,6 @@ export function setupBackgroundReview(
   pi.on("turn_end", async (event, ctx) => {
     turnsSinceReview++;
 
-    // Always show state so we can diagnose if review doesn't trigger
-    ctx.ui.notify(
-      `[hermes] turn_end #${turnsSinceReview} (need ${config.nudgeInterval}) | users=${userTurnCount} (need 3) | review=${config.reviewEnabled}`,
-      "info",
-    );
-
     if (!config.reviewEnabled) return;
     if (reviewInProgress) return;
     if (turnsSinceReview < config.nudgeInterval) return;
@@ -44,8 +38,6 @@ export function setupBackgroundReview(
 
     turnsSinceReview = 0;
     reviewInProgress = true;
-
-    ctx.ui.notify("[hermes] Review triggered — running pi.exec...", "info");
 
     try {
       // Build conversation snapshot from session entries
@@ -60,11 +52,7 @@ export function setupBackgroundReview(
         const prefix = msg.role === "user" ? "[USER]" : "[ASSISTANT]";
         parts.push(`${prefix}: ${text}`);
       }
-      ctx.ui.notify(`[hermes] Conversation parts: ${parts.length}`, "info");
-      if (parts.length < 4) {
-        ctx.ui.notify("[hermes] Skipped: < 4 conversation parts", "info");
-        return;
-      }
+      if (parts.length < 4) return; // Not enough conversation to review
 
       const currentMemory = store.getMemoryEntries().join("\n§\n");
       const currentUser = store.getUserEntries().join("\n§\n");
@@ -87,17 +75,10 @@ export function setupBackgroundReview(
         timeout: 60000,
       });
 
-      ctx.ui.notify(
-        `[hermes] pi.exec done: exit=${result.code} stdout=${result.stdout?.length ?? 0}chars stderr=${result.stderr?.slice(0, 100) || "(none)"}`,
-        "info",
-      );
-
       if (result.code === 0 && result.stdout) {
         const output = result.stdout.trim();
         if (output && !output.toLowerCase().includes("nothing to save")) {
           ctx.ui.notify("💾 Memory auto-reviewed and updated", "info");
-        } else {
-          ctx.ui.notify(`[hermes] Review complete: nothing new to save (${output.length} chars)`, "info");
         }
       } else {
         ctx.ui.notify(
