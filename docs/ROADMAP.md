@@ -46,19 +46,21 @@ graph TB
 
 ```mermaid
 graph TB
-    subgraph "v0.2.0 — Structured Storage & Search"
+    subgraph "v0.2.0 — Structured Storage, Search & Onboarding"
         T2["memory tool<br/>(add / replace / remove / search)"]
         SC2["Content Scanner<br/>(v0.1.0 scanner unchanged)"]
         SA["Search Abstraction<br/>(MemoryBackend interface)"]
         SQL["SQLite Backend<br/>(FTS5 · key-value · confidence)"]
         PI2["Context-Aware Injection<br/>(relevance-filtered)"]
         PS["Project-Scoped Memory<br/>(keyed by cwd)"]
+        IV["/memory-interview<br/>(guided onboarding)"]
     end
 
     T2 --> SC2 --> SA
     SA --> SQL
     SQL --> PI2
     SQL --> PS
+    IV --> SC2
 
     style T2 fill:#e94560,stroke:#fff,color:#fff
     style SC2 fill:#ff6600,stroke:#fff,color:#fff
@@ -66,6 +68,7 @@ graph TB
     style SQL fill:#0f3460,stroke:#fff,color:#fff
     style PI2 fill:#16213e,stroke:#fff,color:#fff
     style PS fill:#16213e,stroke:#fff,color:#fff
+    style IV fill:#e94560,stroke:#fff,color:#fff
 ```
 
 ```mermaid
@@ -125,11 +128,30 @@ graph TB
 
 ---
 
-## v0.2.0 — Structured Storage & Search
+## v0.2.0 — Structured Storage, Search & Onboarding
 
-**Goal**: Replace flat markdown with SQLite. Add search. Keep the same tool interface.
+**Goal**: Replace flat markdown with SQLite. Add search. Solve the cold start problem. Keep the same tool interface.
 
-### `MemoryBackend` Interface
+### Onboarding: `/memory-interview` (Cold Start Fix)
+
+New users install the extension and memory starts empty — the LLM has to learn preferences over many sessions through trial and error. The interview command solves this:
+
+```
+/memory-interview
+```
+
+The LLM asks 5-7 structured questions:
+- **Communication style** — Direct or conversational
+- **Code structure** — Bullet points, step-by-step, or narrative
+- **Technical depth** — Beginner, intermediate, or expert
+- **Code quality focus** — Clarity, performance, tests, or minimal changes
+- **Collaboration style** — Make changes directly, propose options, or ask first
+- **Preferred stack** — Languages, frameworks, tools
+- **Environment** — OS, editor, package manager
+
+Each answer is saved to `USER.md` via the existing content scanner and `MemoryStore`. Users get immediate value on the very first session instead of waiting for the learning loop to accumulate preferences.
+
+Inspired by [Honcho's `/honcho:interview`](https://docs.honcho.dev/v3/guides/integrations/claude-code#the-interview) pattern.
 
 The core abstraction that makes everything after this possible:
 
@@ -161,7 +183,10 @@ Current `MemoryStore` becomes `MarkdownBackend` — the default, zero-dependency
 - [ ] Project-scoped memory — entries tagged with `cwd`, injected when matching
 - [ ] Context-aware injection — `formatForSystemPrompt(cwd, prompt)` filters by relevance
 - [ ] Config: `"backend": "markdown" | "sqlite"` (defaults to `markdown` for zero-dep install)
-- [ ] Migration tool: `markdown → sqlite` one-time import
+- [ ] Migration tool: markdown → sqlite one-time import
+- [ ] `/memory-interview` command — guided first-run interview that saves preferences to USER.md
+- [ ] Interview prompt in `src/constants.ts` — structured questions with save instructions
+- [ ] Content scanner validates interview answers (same as all writes)
 
 ### What Does NOT Change
 
@@ -323,9 +348,10 @@ gantt
     SQLite backend + FTS5 search                     :v02b, after v02a, 7d
     memory search tool + project scoping             :v02c, after v02b, 5d
     Context-aware injection                          :v02d, after v02c, 5d
+    /memory-interview onboarding command             :v02e, after v02d, 3d
 
     section v0.3.0
-    Mem0 backend                                     :v03a, after v02d, 7d
+    Mem0 backend                                     :v03a, after v02e, 7d
     Honcho backend                                   :v03b, after v03a, 7d
     Offline fallback + data export                   :v03c, after v03b, 5d
 
