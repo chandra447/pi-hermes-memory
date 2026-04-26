@@ -21,6 +21,12 @@ export interface MemoryConfig {
   flushMinTurns: number;
   /** Override memory directory. Default: ~/.pi/agent/memory */
   memoryDir?: string;
+  /** Auto-consolidate when memory is full instead of returning error. Default: true */
+  autoConsolidate: boolean;
+  /** Detect user corrections and trigger immediate memory save. Default: true */
+  correctionDetection: boolean;
+  /** Tool calls before triggering background review (in addition to turn count). Default: 15 */
+  nudgeToolCalls: number;
 }
 
 export interface MemoryResult {
@@ -37,6 +43,40 @@ export interface MemoryResult {
 export interface MemorySnapshot {
   memory: string;
   user: string;
+}
+
+export interface ConsolidationResult {
+  /** Whether consolidation succeeded */
+  consolidated: boolean;
+  /** Error message if consolidation failed */
+  error?: string;
+}
+
+export interface SkillIndex {
+  /** File name (slug.md) */
+  fileName: string;
+  /** Human-readable name */
+  name: string;
+  /** Short description for system prompt index */
+  description: string;
+}
+
+export interface SkillDocument extends SkillIndex {
+  /** Full markdown body (after frontmatter) */
+  body: string;
+  /** Version number */
+  version: number;
+  /** ISO date created */
+  created: string;
+  /** ISO date last updated */
+  updated: string;
+}
+
+export interface SkillResult {
+  success: boolean;
+  error?: string;
+  message?: string;
+  fileName?: string;
 }
 
 /**
