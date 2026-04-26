@@ -358,4 +358,198 @@ describe("setupBackgroundReview", () => {
 
     assert.strictEqual(execCalls.length, 0, "exec should NOT be called — no user messages");
   });
+
+  // ─── Tool-call-aware nudge tests (Epic 4) ───
+
+  it("triggers on tool call count threshold even with low turn count", async () => {
+    const config = { ...defaultConfig, nudgeToolCalls: 5 };
+    const pi = createMockPi();
+    setupBackgroundReview(pi, mockStore, config);
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+
+    // Branch with 5 toolCall blocks (meets tool call threshold)
+    const branchWithToolCalls = [
+      ...makeBranch(4),
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "tc1", name: "read", arguments: {} },
+            { type: "toolCall", id: "tc2", name: "bash", arguments: {} },
+            { type: "toolCall", id: "tc3", name: "edit", arguments: {} },
+            { type: "toolCall", id: "tc4", name: "read", arguments: {} },
+            { type: "toolCall", id: "tc5", name: "bash", arguments: {} },
+          ],
+          timestamp: 1,
+        },
+      },
+    ];
+
+    // Only 2 turn_end events (below turn threshold of 10)
+    fireTurnEnd(branchWithToolCalls);
+    fireTurnEnd(branchWithToolCalls);
+    await settle();
+
+    assert.ok(execCalls.length >= 1, "exec should be called due to tool call threshold");
+  });
+
+  it("triggers when both thresholds are met", async () => {
+    const config = { ...defaultConfig, nudgeToolCalls: 5 };
+    const pi = createMockPi();
+    setupBackgroundReview(pi, mockStore, config);
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+
+    const branchWithToolCalls = [
+      ...makeBranch(10),
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "tc1", name: "read", arguments: {} },
+            { type: "toolCall", id: "tc2", name: "bash", arguments: {} },
+          ],
+          timestamp: 1,
+        },
+      },
+    ];
+
+    // Fire 10 turns (meets turn threshold) with tool calls (meets tool threshold)
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(branchWithToolCalls);
+    }
+    await settle();
+
+    assert.ok(execCalls.length >= 1, "exec should be called when either threshold is met");
+  });
+
+  it("resets both counters after review", async () => {
+    const config = { ...defaultConfig, nudgeToolCalls: 3 };
+    const pi = createMockPi();
+    setupBackgroundReview(pi, mockStore, config);
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+
+    const branchWithToolCalls = [
+      ...makeBranch(6),
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "tc1", name: "read", arguments: {} },
+            { type: "toolCall", id: "tc2", name: "bash", arguments: {} },
+            { type: "toolCall", id: "tc3", name: "edit", arguments: {} },
+          ],
+          timestamp: 1,
+        },
+      },
+    ];
+
+    // Trigger first review via tool calls
+    fireTurnEnd(branchWithToolCalls);
+    await settle();
+    assert.strictEqual(execCalls.length, 1, "first review triggered");
+
+    // Trigger second review via turn count
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(makeBranch(10));
+    }
+    await settle();
+    assert.strictEqual(execCalls.length, 2, "second review should trigger after counter reset");
+  });
+
+  it("does not trigger when neither threshold is met", async () => {
+    const config = { ...defaultConfig, nudgeToolCalls: 15 };
+    const pi = createMockPi();
+    setupBackgroundReview(pi, mockStore, config);
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+
+    // Only 2 tool calls (below 15 threshold) and 5 turns (below 10 threshold)
+    const branchWithFewToolCalls = [
+      ...makeBranch(4),
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "tc1", name: "read", arguments: {} },
+            { type: "toolCall", id: "tc2", name: "bash", arguments: {} },
+          ],
+          timestamp: 1,
+        },
+      },
+    ];
+
+    for (let i = 0; i < 5; i++) {
+      fireTurnEnd(branchWithFewToolCalls);
+    }
+    await settle();
+
+    assert.strictEqual(execCalls.length, 0, "exec should NOT be called when neither threshold met");
+  });
+
+  it("ignores text blocks when counting tool calls", async () => {
+    const config = { ...defaultConfig, nudgeToolCalls: 3 };
+    const pi = createMockPi();
+    setupBackgroundReview(pi, mockStore, config);
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+
+    // Branch with text-only messages (no toolCall blocks)
+    const branchWithTextOnly = [
+      ...makeBranch(10),
+    ];
+
+    // Fire enough turns but no tool calls
+    for (let i = 0; i < 5; i++) {
+      fireTurnEnd(branchWithTextOnly);
+    }
+    await settle();
+
+    assert.strictEqual(execCalls.length, 0, "exec should NOT be called — no toolCall blocks, turn threshold not met");
+  });
+
+  it("falls back gracefully if getBranch throws", async () => {
+    const config = { ...defaultConfig, nudgeToolCalls: 3 };
+    const pi = createMockPi();
+    setupBackgroundReview(pi, mockStore, config);
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+
+    // getBranch throws — should not crash
+    const crashCtx = {
+      sessionManager: { getBranch: () => { throw new Error("session expired"); } },
+      signal: undefined as any,
+      ui: { notify: () => {} },
+    };
+
+    const h = handlers["turn_end"];
+    // Fire 10 turns with crashing getBranch
+    for (let i = 0; i < 10; i++) {
+      for (const fn of h) {
+        fn({}, crashCtx);
+      }
+    }
+    await settle();
+
+    // Should not throw — we got here = test passed
+    assert.ok(true, "no crash when getBranch throws");
+  });
 });
