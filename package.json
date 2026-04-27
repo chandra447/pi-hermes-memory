@@ -1,7 +1,7 @@
 {
   "name": "pi-hermes-memory",
   "version": "0.2.0",
-  "description": "Persistent memory and self-directed learning loop for Pi — ported from the Hermes agent harness. Security-first content scanning, real-time saves, and frozen snapshot injection.",
+  "description": "Your Pi agent remembers everything across sessions — your preferences, your stack, your corrections, and even how it solved problems. Zero-config install, works immediately.\n\n✅ Persistent memory (facts + user profile)\n✅ Procedural skills (reusable how-to docs from experience)\n✅ Auto-saves corrections immediately (no more repeating yourself)\n✅ Auto-consolidates when memory is full\n✅ Security-first content scanning","
   "type": "module",
   "main": "src/index.ts",
   "files": [
@@ -23,11 +23,14 @@
     "pi-package",
     "pi-extension",
     "memory",
+    "skills",
     "learning-loop",
     "agent",
     "hermes",
     "persistent-memory",
-    "content-scanner"
+    "content-scanner",
+    "correction-detection",
+    "auto-consolidation"
   ],
   "license": "MIT",
   "repository": {
