@@ -18,6 +18,7 @@ Your Pi agent normally forgets everything when you close a session. This extensi
 | **Context Fencing** | Memory blocks are wrapped in `<memory-context>` tags so the LLM never treats stored facts as user instructions |
 | **Memory Aging** | Entries carry timestamps — consolidation knows which facts are stale and which are fresh |
 | **Project Memory** | Per-project memory (`~/.pi/agent/<project>/MEMORY.md`) alongside your global memory |
+| **Secret Detection** | API keys, tokens, SSH keys, and credential assignments are blocked from being persisted to memory |
 
 ## How It Works
 
