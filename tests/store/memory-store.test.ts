@@ -227,11 +227,12 @@ describe("MemoryStore", { concurrency: 1 }, () => {
     });
 
     it("handles very long entry near char limit", async () => {
-      const limit = 200;
+      const limit = 250;
       const store = new MemoryStore(makeConfig({ memoryCharLimit: limit }));
       await store.loadFromDisk();
 
-      const entry = `${TEST_MARKER} ${"a".repeat(limit - 50)}`;
+      // Account for metadata overhead (~45 chars for <!-- created=..., last=... -->)
+      const entry = `${TEST_MARKER} ${"a".repeat(limit - 100)}`;
       const result = await await store.add("memory", entry);
       await settle();
 
@@ -492,7 +493,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const raw = await readRaw(memoryPath);
       const parsed = raw.split(ENTRY_DELIMITER).map((e) => e.trim()).filter(Boolean);
 
-      assert.deepEqual(parsed, entries);
+      // Strip metadata comments for comparison (entries now include <!-- created=..., last=... -->)
+      const stripped = parsed.map((e) => e.replace(/\s*<!--.*?-->\s*$/, "").trim());
+      assert.deepEqual(stripped, entries);
     });
 
     it("file is empty after all entries are removed", async () => {

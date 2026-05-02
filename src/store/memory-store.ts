@@ -80,9 +80,12 @@ export class MemoryStore {
     this.userEntries = [...new Set(this.userEntries)];
 
     // Capture frozen snapshot for system prompt injection
+    // Strip metadata comments — the LLM doesn't need to see timestamps
+    const strippedMemory = this.memoryEntries.map((e) => this.stripMetadata(e));
+    const strippedUser = this.userEntries.map((e) => this.stripMetadata(e));
     this.snapshot = {
-      memory: this.renderBlock("memory", this.memoryEntries),
-      user: this.renderBlock("user", this.userEntries),
+      memory: this.renderBlock("memory", strippedMemory),
+      user: this.renderBlock("user", strippedUser),
     };
   }
 
@@ -98,11 +101,17 @@ export class MemoryStore {
     const entries = this.entriesFor(target);
     const limit = this.charLimit(target);
 
-    if (entries.includes(content)) {
+    // Check for duplicate — strip metadata from existing entries before comparing
+    const strippedEntries = entries.map((e) => this.stripMetadata(e));
+    if (strippedEntries.includes(content)) {
       return this.successResponse(target, "Entry already exists (no duplicate added).");
     }
 
-    const newTotal = [...entries, content].join(ENTRY_DELIMITER).length;
+    // Encode metadata: both dates = today
+    const today = new Date().toISOString().split("T")[0];
+    const encoded = this.encodeEntry(content, today, today);
+
+    const newTotal = [...entries, encoded].join(ENTRY_DELIMITER).length;
     if (newTotal > limit) {
       // Auto-consolidate if configured and consolidator available
       if (this.config.autoConsolidate && this.consolidator) {
@@ -137,7 +146,7 @@ export class MemoryStore {
       };
     }
 
-    entries.push(content);
+    entries.push(encoded);
     this.setEntries(target, entries);
     await this.saveToDisk(target);
 
@@ -154,20 +163,26 @@ export class MemoryStore {
     if (scanError) return { success: false, error: scanError };
 
     const entries = this.entriesFor(target);
-    const matches = entries.filter((e) => e.includes(oldText));
+    // Match against stripped text (entries may have metadata comments)
+    const matches = entries.filter((e) => this.stripMetadata(e).includes(oldText));
 
     if (matches.length === 0) return { success: false, error: `No entry matched '${oldText}'.` };
     if (matches.length > 1 && new Set(matches).size > 1) {
       return {
         success: false,
         error: `Multiple entries matched '${oldText}'. Be more specific.`,
-        matches: matches.map((e) => e.slice(0, 80) + (e.length > 80 ? "..." : "")),
+        matches: matches.map((e) => this.stripMetadata(e).slice(0, 80) + (e.length > 80 ? "..." : "")),
       };
     }
 
     const idx = entries.indexOf(matches[0]);
+    // Preserve original created date, update last_referenced to today
+    const decoded = this.decodeEntry(matches[0]);
+    const today = new Date().toISOString().split("T")[0];
+    const encoded = this.encodeEntry(newContent, decoded.created, today);
+
     const testEntries = [...entries];
-    testEntries[idx] = newContent;
+    testEntries[idx] = encoded;
     const newTotal = testEntries.join(ENTRY_DELIMITER).length;
 
     if (newTotal > this.charLimit(target)) {
@@ -177,7 +192,7 @@ export class MemoryStore {
       };
     }
 
-    entries[idx] = newContent;
+    entries[idx] = encoded;
     this.setEntries(target, entries);
     await this.saveToDisk(target);
 
@@ -227,14 +242,41 @@ export class MemoryStore {
   }
 
   getMemoryEntries(): string[] {
-    return [...this.memoryEntries];
+    return this.memoryEntries.map((e) => this.stripMetadata(e));
   }
 
   getUserEntries(): string[] {
-    return [...this.userEntries];
+    return this.userEntries.map((e) => this.stripMetadata(e));
   }
 
   // ─── Internal helpers ───
+
+  /**
+   * Encode metadata (created, lastReferenced) as an HTML comment appended to entry text.
+   * The comment is invisible in markdown and transparent to the § delimiter.
+   */
+  private encodeEntry(text: string, created: string, lastReferenced: string): string {
+    return `${text} <!-- created=${created}, last=${lastReferenced} -->`;
+  }
+
+  /**
+   * Decode entry text, extracting metadata if present.
+   * Falls back to today's date for legacy entries without metadata.
+   */
+  private decodeEntry(raw: string): { text: string; created: string; lastReferenced: string } {
+    const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^>]+)\s*-->\s*$/);
+    if (match) {
+      return { text: match[1].trim(), created: match[2].trim(), lastReferenced: match[3].trim() };
+    }
+    // Legacy entry without metadata — use today as default
+    const today = new Date().toISOString().split("T")[0];
+    return { text: raw.trim(), created: today, lastReferenced: today };
+  }
+
+  /** Strip metadata comment from entry text for display. */
+  private stripMetadata(text: string): string {
+    return this.decodeEntry(text).text;
+  }
 
   private successResponse(target: "memory" | "user", message?: string): MemoryResult {
     const entries = this.entriesFor(target);

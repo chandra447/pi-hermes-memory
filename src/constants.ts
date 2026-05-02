@@ -59,9 +59,11 @@ export const FLUSH_PROMPT = `[System: The session is being compressed. Save anyt
 // ─── Auto-consolidation prompt ───
 export const CONSOLIDATION_PROMPT = `The memory is at capacity. Review the current entries and consolidate them:
 - Merge related entries into a single, concise entry
-- Remove outdated or superseded entries
+- Remove outdated or superseded entries (entries older than 30 days without recent references are candidates for removal)
 - Keep the most important and frequently-referenced facts
 - Preserve user preferences and corrections (highest priority)
+
+Each entry shows when it was created and last referenced in HTML comments (<!-- created=..., last=... -->). Use this to identify stale entries.
 
 Use the memory tool to make changes. Be aggressive about merging — less is more.`;
 
