@@ -17,7 +17,7 @@
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "npx tsx --test 'tests/**/*.test.ts'"
+    "test": "for f in $(find tests -name '*.test.ts' | sort); do echo \"::group::$f\"; npx tsx --test \"$f\" || exit 1; echo \"::endgroup::\"; done"
   },
   "keywords": [
     "pi-package",
