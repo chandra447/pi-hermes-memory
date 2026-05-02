@@ -38,7 +38,7 @@
     "url": "https://github.com/chandra447/pi-hermes-memory"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@mariozechner/pi-coding-agent": ">=0.70.0"
   },
   "devDependencies": {
     "@mariozechner/pi-ai": "^0.70.0",

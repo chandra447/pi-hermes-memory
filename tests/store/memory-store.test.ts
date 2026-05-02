@@ -31,6 +31,7 @@ function makeConfig(overrides?: Partial<MemoryConfig>): MemoryConfig {
   return {
     memoryCharLimit: DEFAULT_MEMORY_CHAR_LIMIT,
     userCharLimit: DEFAULT_USER_CHAR_LIMIT,
+    projectCharLimit: 2200,
     nudgeInterval: 10,
     reviewEnabled: false,
     flushOnCompact: false,
@@ -267,7 +268,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.add("memory", `${TEST_MARKER} uses vim`);
       await settle();
 
-      const result = store.replace("memory", `${TEST_MARKER} uses vim`, `${TEST_MARKER} uses neovim`);
+      const result = await store.replace("memory", `${TEST_MARKER} uses vim`, `${TEST_MARKER} uses neovim`);
       await settle();
 
       assert.ok(result.success);
@@ -285,7 +286,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.add("memory", `${TEST_MARKER} some entry`);
       await settle();
 
-      const result = store.replace("memory", "nonexistent substring", "new content");
+      const result = await store.replace("memory", "nonexistent substring", "new content");
       await settle();
 
       assert.ok(!result.success);
@@ -300,7 +301,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.add("memory", `${TEST_MARKER} config: port=9090`);
       await settle();
 
-      const result = store.replace("memory", "config:", `${TEST_MARKER} unified config`);
+      const result = await store.replace("memory", "config:", `${TEST_MARKER} unified config`);
       await settle();
 
       assert.ok(!result.success);
@@ -313,7 +314,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.add("memory", `${TEST_MARKER} some entry`);
 
-      const result = store.replace("memory", "  ", "new content");
+      const result = await store.replace("memory", "  ", "new content");
 
       assert.ok(!result.success);
       assert.equal(result.error, "old_text cannot be empty.");
@@ -323,7 +324,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.add("memory", `${TEST_MARKER} some entry`);
 
-      const result = store.replace("memory", `${TEST_MARKER} some entry`, "   ");
+      const result = await store.replace("memory", `${TEST_MARKER} some entry`, "   ");
 
       assert.ok(!result.success);
       assert.equal(result.error, "new_content cannot be empty. Use 'remove' to delete entries.");
@@ -341,7 +342,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.add("memory", `${TEST_MARKER} to keep`);
       await settle();
 
-      const result = store.remove("memory", `${TEST_MARKER} to be removed`);
+      const result = await store.remove("memory", `${TEST_MARKER} to be removed`);
       await settle();
 
       assert.ok(result.success);
@@ -360,7 +361,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.add("memory", `${TEST_MARKER} existing`);
       await settle();
 
-      const result = store.remove("memory", "nonexistent");
+      const result = await store.remove("memory", "nonexistent");
       await settle();
 
       assert.ok(!result.success);
@@ -371,7 +372,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const store = new MemoryStore(makeConfig());
       await store.add("memory", `${TEST_MARKER} some entry`);
 
-      const result = store.remove("memory", "  ");
+      const result = await store.remove("memory", "  ");
 
       assert.ok(!result.success);
       assert.equal(result.error, "old_text cannot be empty.");
@@ -498,7 +499,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       let raw = await readRaw(memoryPath);
       assert.ok(raw.length > 0);
 
-      store.remove("memory", `${TEST_MARKER} temporary entry`);
+      await store.remove("memory", `${TEST_MARKER} temporary entry`);
       await settle();
 
       raw = await readRaw(memoryPath);

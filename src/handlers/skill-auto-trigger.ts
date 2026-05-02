@@ -20,24 +20,24 @@ export function setupSkillAutoTrigger(
 ): void {
   let triggeredThisSession = false;
 
+  // Accumulate tool calls across turns (reset on trigger)
+  let toolCallCount = 0;
+  const toolTypes = new Set<string>();
+
   pi.on("turn_end", async (event, ctx) => {
     if (triggeredThisSession) return;
 
-    // Count tool-use entries from this turn's branch
-    let toolCallCount = 0;
-    const toolTypes = new Set<string>();
-
+    // Count tool calls from this turn's message only (not cumulative branch scan —
+    // otherwise the counter accumulates historical tool calls and fires prematurely).
     try {
-      const branch = ctx.sessionManager.getBranch();
-      for (const entry of branch) {
-        if (entry.type === "message" && entry.message?.role === "assistant") {
-          const content = entry.message?.content;
-          if (Array.isArray(content)) {
-            for (const block of content) {
-              if (block && typeof block === "object" && block.type === "toolCall") {
-                toolCallCount++;
-                if ((block as { name?: string }).name) toolTypes.add((block as { name: string }).name);
-              }
+      const msg = event.message;
+      if (msg?.role === "assistant") {
+        const content = msg?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block && typeof block === "object" && block.type === "toolCall") {
+              toolCallCount++;
+              if ((block as { name?: string }).name) toolTypes.add((block as { name: string }).name);
             }
           }
         }

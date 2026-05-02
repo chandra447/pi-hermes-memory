@@ -43,6 +43,7 @@ function defaultConfig(overrides: Partial<MemoryConfig> = {}): MemoryConfig {
   return {
     memoryCharLimit: 2200,
     userCharLimit: 1375,
+    projectCharLimit: 2200,
     nudgeInterval: 10,
     reviewEnabled: true,
     flushOnCompact: true,
@@ -90,7 +91,7 @@ describe("setupSessionFlush", () => {
 
   it("session_before_compact triggers flush when flushOnCompact is true", async () => {
     const config = defaultConfig();
-    setupSessionFlush(mockPi.pi, mockStore, config);
+    setupSessionFlush(mockPi.pi, mockStore, null, config);
 
     // Simulate enough user turns
     await emitUserTurns(mockPi.handlers, 8);
@@ -103,7 +104,7 @@ describe("setupSessionFlush", () => {
 
   it("session_before_compact does NOT trigger when flushOnCompact is false", async () => {
     const config = defaultConfig({ flushOnCompact: false });
-    setupSessionFlush(mockPi.pi, mockStore, config);
+    setupSessionFlush(mockPi.pi, mockStore, null, config);
 
     await emitUserTurns(mockPi.handlers, 8);
 
@@ -117,7 +118,7 @@ describe("setupSessionFlush", () => {
 
   it("session_shutdown triggers flush when flushOnShutdown is true", async () => {
     const config = defaultConfig();
-    setupSessionFlush(mockPi.pi, mockStore, config);
+    setupSessionFlush(mockPi.pi, mockStore, null, config);
 
     await emitUserTurns(mockPi.handlers, 8);
 
@@ -131,7 +132,7 @@ describe("setupSessionFlush", () => {
 
   it("session_shutdown does NOT trigger when flushOnShutdown is false", async () => {
     const config = defaultConfig({ flushOnShutdown: false });
-    setupSessionFlush(mockPi.pi, mockStore, config);
+    setupSessionFlush(mockPi.pi, mockStore, null, config);
 
     await emitUserTurns(mockPi.handlers, 8);
 
@@ -145,7 +146,7 @@ describe("setupSessionFlush", () => {
 
   it("Flush skips if userTurnCount < flushMinTurns", async () => {
     const config = defaultConfig({ flushMinTurns: 6 });
-    setupSessionFlush(mockPi.pi, mockStore, config);
+    setupSessionFlush(mockPi.pi, mockStore, null, config);
 
     // Only 3 user turns — below threshold
     await emitUserTurns(mockPi.handlers, 3);
@@ -160,7 +161,7 @@ describe("setupSessionFlush", () => {
 
   it("Flush builds conversation from sessionManager.getBranch()", async () => {
     const config = defaultConfig();
-    setupSessionFlush(mockPi.pi, mockStore, config);
+    setupSessionFlush(mockPi.pi, mockStore, null, config);
 
     await emitUserTurns(mockPi.handlers, 8);
 
@@ -183,7 +184,7 @@ describe("setupSessionFlush", () => {
 
   it("Flush uses pi.exec with correct args", async () => {
     const config = defaultConfig();
-    setupSessionFlush(mockPi.pi, mockStore, config);
+    setupSessionFlush(mockPi.pi, mockStore, null, config);
 
     await emitUserTurns(mockPi.handlers, 8);
 
@@ -224,7 +225,7 @@ describe("setupSessionFlush", () => {
     };
 
     const config = defaultConfig();
-    setupSessionFlush(failingPi.pi, mockStore, config);
+    setupSessionFlush(failingPi.pi, mockStore, null, config);
 
     await emitUserTurns(failingPi.handlers, 8);
 
@@ -243,7 +244,7 @@ describe("setupSessionFlush", () => {
     };
 
     const config = defaultConfig();
-    setupSessionFlush(failingPi.pi, mockStore, config);
+    setupSessionFlush(failingPi.pi, mockStore, null, config);
 
     await emitUserTurns(failingPi.handlers, 8);
 
@@ -258,7 +259,7 @@ describe("setupSessionFlush", () => {
 
   it("Handles empty branch (no messages)", async () => {
     const config = defaultConfig();
-    setupSessionFlush(mockPi.pi, mockStore, config);
+    setupSessionFlush(mockPi.pi, mockStore, null, config);
 
     await emitUserTurns(mockPi.handlers, 8);
 
@@ -276,7 +277,7 @@ describe("setupSessionFlush", () => {
 
   it("Concurrent compact + shutdown both flush", async () => {
     const config = defaultConfig();
-    setupSessionFlush(mockPi.pi, mockStore, config);
+    setupSessionFlush(mockPi.pi, mockStore, null, config);
 
     await emitUserTurns(mockPi.handlers, 8);
 
@@ -294,7 +295,7 @@ describe("setupSessionFlush", () => {
 
   it("Passes signal from compact event to exec", async () => {
     const config = defaultConfig();
-    setupSessionFlush(mockPi.pi, mockStore, config);
+    setupSessionFlush(mockPi.pi, mockStore, null, config);
 
     await emitUserTurns(mockPi.handlers, 8);
 

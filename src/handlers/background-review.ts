@@ -16,6 +16,7 @@ import { getMessageText } from "../types.js";
 export function setupBackgroundReview(
   pi: ExtensionAPI,
   store: MemoryStore,
+  projectStore: MemoryStore | null,
   config: MemoryConfig,
 ): void {
   let turnsSinceReview = 0;
@@ -35,17 +36,17 @@ export function setupBackgroundReview(
     if (!config.reviewEnabled) return;
     if (reviewInProgress) return;
 
-    // Count tool-use entries from the branch for tool-call-aware nudge
+    // Count tool calls from this turn's message only (not cumulative branch scan —
+    // otherwise the counter resets to 0 at review, then immediately re-counts all
+    // historical tool calls and re-triggers on every subsequent turn).
     try {
-      const branch = ctx.sessionManager.getBranch();
-      for (const entry of branch) {
-        if (entry.type === "message" && entry.message?.role === "assistant") {
-          const content = entry.message?.content;
-          if (Array.isArray(content)) {
-            for (const block of content) {
-              if (block && typeof block === "object" && block.type === "toolCall") {
-                toolCallsSinceReview++;
-              }
+      const msg = event.message;
+      if (msg?.role === "assistant") {
+        const content = msg?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block && typeof block === "object" && block.type === "toolCall") {
+              toolCallsSinceReview++;
             }
           }
         }
@@ -82,6 +83,7 @@ export function setupBackgroundReview(
 
       const currentMemory = store.getMemoryEntries().join("\n§\n");
       const currentUser = store.getUserEntries().join("\n§\n");
+      const currentProject = projectStore ? projectStore.getMemoryEntries().join("\n§\n") : null;
 
       const reviewPrompt = [
         COMBINED_REVIEW_PROMPT,
@@ -91,12 +93,23 @@ export function setupBackgroundReview(
         "",
         "--- Current User Profile ---",
         currentUser || "(empty)",
+      ];
+
+      if (currentProject !== null) {
+        reviewPrompt.push(
+          "",
+          "--- Current Project Memory ---",
+          currentProject || "(empty)",
+        );
+      }
+
+      reviewPrompt.push(
         "",
         "--- Conversation to Review ---",
         parts.join("\n\n"),
-      ].join("\n");
+      );
 
-      const result = await pi.exec("pi", ["-p", "--no-session", reviewPrompt], {
+      const result = await pi.exec("pi", ["-p", "--no-session", reviewPrompt.join("\n")], {
         signal: ctx.signal,
         timeout: 60000,
       });

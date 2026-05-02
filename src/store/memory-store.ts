@@ -127,12 +127,12 @@ export class MemoryStore {
 
     entries.push(content);
     this.setEntries(target, entries);
-    this.saveToDisk(target);
+    await this.saveToDisk(target);
 
     return this.successResponse(target, "Entry added.");
   }
 
-  replace(target: "memory" | "user", oldText: string, newContent: string): MemoryResult {
+  async replace(target: "memory" | "user", oldText: string, newContent: string): Promise<MemoryResult> {
     oldText = oldText.trim();
     newContent = newContent.trim();
     if (!oldText) return { success: false, error: "old_text cannot be empty." };
@@ -167,12 +167,12 @@ export class MemoryStore {
 
     entries[idx] = newContent;
     this.setEntries(target, entries);
-    this.saveToDisk(target);
+    await this.saveToDisk(target);
 
     return this.successResponse(target, "Entry replaced.");
   }
 
-  remove(target: "memory" | "user", oldText: string): MemoryResult {
+  async remove(target: "memory" | "user", oldText: string): Promise<MemoryResult> {
     oldText = oldText.trim();
     if (!oldText) return { success: false, error: "old_text cannot be empty." };
 
@@ -191,7 +191,7 @@ export class MemoryStore {
     const idx = entries.indexOf(matches[0]);
     entries.splice(idx, 1);
     this.setEntries(target, entries);
-    this.saveToDisk(target);
+    await this.saveToDisk(target);
 
     return this.successResponse(target, "Entry removed.");
   }
@@ -203,6 +203,14 @@ export class MemoryStore {
     if (this.snapshot.memory) parts.push(this.snapshot.memory);
     if (this.snapshot.user) parts.push(this.snapshot.user);
     return parts.join("\n\n");
+  }
+
+  /**
+   * Render a project-specific memory block for system prompt injection.
+   * Uses only the memory entries (no user split) with a project-labelled header.
+   */
+  formatProjectBlock(projectName: string): string {
+    return this.renderProjectBlock(projectName, this.memoryEntries);
   }
 
   getMemoryEntries(): string[] {
@@ -247,6 +255,18 @@ export class MemoryStore {
     return `${separator}\n${header}\n${separator}\n${content}`;
   }
 
+  private renderProjectBlock(projectName: string, entries: string[]): string {
+    if (!entries.length) return "";
+    const limit = this.config.memoryCharLimit;
+    const content = entries.join(ENTRY_DELIMITER);
+    const current = content.length;
+    const pct = limit > 0 ? Math.min(100, Math.floor((current / limit) * 100)) : 0;
+
+    const header = `PROJECT MEMORY: ${projectName} [${pct}% — ${current}/${limit} chars]`;
+    const separator = "═".repeat(46);
+    return `${separator}\n${header}\n${separator}\n${content}`;
+  }
+
   private async readFile(filePath: string): Promise<string[]> {
     try {
       const raw = await fs.readFile(filePath, "utf-8");
@@ -258,23 +278,22 @@ export class MemoryStore {
   }
 
   /** Atomic write: temp file + fs.rename() — same crash-safety as Hermes. */
-  private saveToDisk(target: "memory" | "user"): void {
+  private async saveToDisk(target: "memory" | "user"): Promise<void> {
     const filePath = this.pathFor(target);
     const entries = this.entriesFor(target);
     const content = entries.length ? entries.join(ENTRY_DELIMITER) : "";
 
-    // Fire-and-forget atomic write
-    fs.mkdtemp(path.join(os.tmpdir(), "pi-memory-")).then((tmpDir) => {
-      const tmpPath = path.join(tmpDir, "write.tmp");
-      return fs
-        .writeFile(tmpPath, content, "utf-8")
-        .then(() => fs.rename(tmpPath, filePath))
-        .catch(async () => {
-          try { await fs.unlink(tmpPath); } catch { /* ignore */ }
-        })
-        .finally(async () => {
-          try { await fs.rmdir(tmpDir); } catch { /* ignore */ }
-        });
-    });
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-memory-"));
+    const tmpPath = path.join(tmpDir, "write.tmp");
+
+    try {
+      await fs.writeFile(tmpPath, content, "utf-8");
+      await fs.rename(tmpPath, filePath);
+    } catch (err) {
+      try { await fs.unlink(tmpPath); } catch { /* ignore */ }
+      throw err;
+    } finally {
+      try { await fs.rmdir(tmpDir); } catch { /* ignore */ }
+    }
   }
 }

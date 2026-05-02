@@ -26,7 +26,7 @@ describe("registerMemoryTool", () => {
       remove: () => ({ success: true, target: "memory", entries: [], usage: "0% — 0/100 chars", entry_count: 0 }),
     } as unknown as MemoryStore;
 
-    registerMemoryTool(mockPi, mockStore);
+    registerMemoryTool(mockPi, mockStore, null);
 
     assert.strictEqual(registeredTools.length, 1, "should register exactly one tool");
     const tool = registeredTools[0];
@@ -58,7 +58,7 @@ describe("registerMemoryTool", () => {
       }),
     } as unknown as MemoryStore;
 
-    registerMemoryTool(mockPi, mockStore);
+    registerMemoryTool(mockPi, mockStore, null);
     const result = await capturedResult.execute("tc-1", { action: "add", target: "memory", content: "Entry one" }, undefined as any, undefined as any, undefined as any);
 
     assert.strictEqual(result.content[0].type, "text", "content should be text type");
@@ -81,7 +81,7 @@ describe("registerMemoryTool", () => {
 
     const mockStore = {} as unknown as MemoryStore;
 
-    registerMemoryTool(mockPi, mockStore);
+    registerMemoryTool(mockPi, mockStore, null);
     const result = await capturedResult.execute("tc-1", { action: "add", target: "memory" }, undefined as any, undefined as any, undefined as any);
 
     const parsed = JSON.parse(result.content[0].text);
@@ -100,7 +100,7 @@ describe("registerMemoryTool", () => {
 
     const mockStore = {} as unknown as MemoryStore;
 
-    registerMemoryTool(mockPi, mockStore);
+    registerMemoryTool(mockPi, mockStore, null);
     const result = await capturedResult.execute("tc-1", { action: "replace", target: "memory", content: "new" }, undefined as any, undefined as any, undefined as any);
 
     const parsed = JSON.parse(result.content[0].text);
@@ -119,7 +119,7 @@ describe("registerMemoryTool", () => {
 
     const mockStore = {} as unknown as MemoryStore;
 
-    registerMemoryTool(mockPi, mockStore);
+    registerMemoryTool(mockPi, mockStore, null);
     const result = await capturedResult.execute("tc-1", { action: "remove", target: "memory" }, undefined as any, undefined as any, undefined as any);
 
     const parsed = JSON.parse(result.content[0].text);
@@ -144,7 +144,7 @@ describe("registerMemoryTool", () => {
       },
     } as unknown as MemoryStore;
 
-    registerMemoryTool(mockPi, mockStore);
+    registerMemoryTool(mockPi, mockStore, null);
     await capturedResult.execute("tc-1", { action: "replace", target: "memory", content: "new", old_text: "old" }, undefined as any, undefined as any, undefined as any);
 
     assert.deepStrictEqual(replaceArgs, ["memory", "old", "new"], "should pass target, old_text, content to store.replace");
@@ -167,7 +167,7 @@ describe("registerMemoryTool", () => {
       },
     } as unknown as MemoryStore;
 
-    registerMemoryTool(mockPi, mockStore);
+    registerMemoryTool(mockPi, mockStore, null);
     await capturedResult.execute("tc-1", { action: "remove", target: "memory", old_text: "old entry" }, undefined as any, undefined as any, undefined as any);
 
     assert.deepStrictEqual(removeArgs, ["memory", "old entry"], "should pass target, old_text to store.remove");
