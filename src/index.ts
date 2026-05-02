@@ -34,7 +34,9 @@ import { setupCorrectionDetector } from "./handlers/correction-detector.js";
 import { setupSkillAutoTrigger } from "./handlers/skill-auto-trigger.js";
 import { registerSkillsCommand } from "./handlers/skills-command.js";
 import { registerInterviewCommand } from "./handlers/interview.js";
+import { registerSwitchProjectCommand } from "./handlers/switch-project.js";
 import { loadConfig } from "./config.js";
+import { detectProject } from "./project.js";
 
 export default function (pi: ExtensionAPI) {
   const config = loadConfig();
@@ -43,17 +45,15 @@ export default function (pi: ExtensionAPI) {
   const store = new MemoryStore(config);
   const skillStore = new SkillStore(path.join(globalDir, "skills"));
 
-  // Detect project name from cwd — skip if running from home directory
-  const cwd = process.cwd();
-  const homeDir = os.homedir();
-  const projectName = path.basename(cwd);
-  const hasProject = cwd !== homeDir;
+  // Detect project from cwd using shared helper
+  const project = detectProject();
 
   // Project-scoped store: ~/.pi/agent/<project_name>/
-  // Uses memoryCharLimit overridden to projectCharLimit for the "memory" target
-  const projectDir = hasProject ? path.join(homeDir, ".pi", "agent", projectName) : null;
-  const projectConfig = { ...config, memoryCharLimit: config.projectCharLimit, memoryDir: projectDir ?? undefined };
-  const projectStore = hasProject ? new MemoryStore(projectConfig) : null;
+  const projectConfig = project.memoryDir
+    ? { ...config, memoryCharLimit: config.projectCharLimit, memoryDir: project.memoryDir }
+    : { ...config, memoryDir: undefined };
+  const projectStore = project.memoryDir ? new MemoryStore(projectConfig) : null;
+  const projectName = project.name ?? "";
 
   // ── 1. Load memory from disk on session start ──
   pi.on("session_start", async (_event, _ctx) => {
@@ -107,4 +107,5 @@ export default function (pi: ExtensionAPI) {
   registerInsightsCommand(pi, store, projectStore, projectName);
   registerSkillsCommand(pi, skillStore);
   registerInterviewCommand(pi, store);
+  registerSwitchProjectCommand(pi);
 }
