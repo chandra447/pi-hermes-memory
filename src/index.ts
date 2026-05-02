@@ -37,22 +37,37 @@ import { loadConfig } from "./config.js";
 export default function (pi: ExtensionAPI) {
   const config = loadConfig();
 
-  const memoryDir = config.memoryDir ?? path.join(os.homedir(), ".pi", "agent", "memory");
+  const globalDir = config.memoryDir ?? path.join(os.homedir(), ".pi", "agent", "memory");
   const store = new MemoryStore(config);
-  const skillStore = new SkillStore(path.join(memoryDir, "skills"));
+  const skillStore = new SkillStore(path.join(globalDir, "skills"));
+
+  // Detect project name from cwd — skip if running from home directory
+  const cwd = process.cwd();
+  const homeDir = os.homedir();
+  const projectName = path.basename(cwd);
+  const hasProject = cwd !== homeDir;
+
+  // Project-scoped store: ~/.pi/agent/<project_name>/
+  // Uses memoryCharLimit overridden to projectCharLimit for the "memory" target
+  const projectDir = hasProject ? path.join(homeDir, ".pi", "agent", projectName) : null;
+  const projectConfig = { ...config, memoryCharLimit: config.projectCharLimit, memoryDir: projectDir ?? undefined };
+  const projectStore = hasProject ? new MemoryStore(projectConfig) : null;
 
   // ── 1. Load memory from disk on session start ──
   pi.on("session_start", async (_event, _ctx) => {
     await store.loadFromDisk();
+    if (projectStore) await projectStore.loadFromDisk();
   });
 
-  // ── 2. Inject frozen snapshot + skill index into system prompt ──
+  // ── 2. Inject frozen snapshot + skill index + project memory into system prompt ──
   pi.on("before_agent_start", async (event, _ctx) => {
     const memoryBlock = store.formatForSystemPrompt();
     const skillIndex = await skillStore.formatIndexForSystemPrompt();
+    const projectBlock = projectStore ? projectStore.formatProjectBlock(projectName) : "";
 
     const parts: string[] = [];
     if (memoryBlock) parts.push(memoryBlock);
+    if (projectBlock) parts.push(projectBlock);
     if (skillIndex) parts.push(skillIndex);
 
     if (parts.length > 0) {
@@ -62,17 +77,17 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ── 3. Register the memory tool ──
-  registerMemoryTool(pi, store);
+  // ── 3. Register the memory tool (with project store) ──
+  registerMemoryTool(pi, store, projectStore);
 
   // ── 4. Register the skill tool ──
   registerSkillTool(pi, skillStore);
 
   // ── 5. Setup background learning loop (with tool-call-aware nudge) ──
-  setupBackgroundReview(pi, store, config);
+  setupBackgroundReview(pi, store, projectStore, config);
 
   // ── 6. Setup session-end flush ──
-  setupSessionFlush(pi, store, config);
+  setupSessionFlush(pi, store, projectStore, config);
 
   // ── 7. Setup auto-consolidation (inject consolidator into store) ──
   store.setConsolidator(async (target, signal) => {
@@ -81,12 +96,12 @@ export default function (pi: ExtensionAPI) {
   registerConsolidateCommand(pi, store);
 
   // ── 8. Setup correction detection ──
-  setupCorrectionDetector(pi, store, config);
+  setupCorrectionDetector(pi, store, projectStore, config);
 
   // ── 9. Setup skill auto-trigger ──
   setupSkillAutoTrigger(pi, store, skillStore, config);
 
   // ── 10. Register commands ──
-  registerInsightsCommand(pi, store);
+  registerInsightsCommand(pi, store, projectStore, projectName);
   registerSkillsCommand(pi, skillStore);
 }

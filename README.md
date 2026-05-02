@@ -305,6 +305,8 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 {
   "memoryCharLimit": 2200,
   "userCharLimit": 1375,
+  "projectCharLimit": 2200,
+  "memoryDir": "~/.pi/agent/memory",
   "nudgeInterval": 10,
   "nudgeToolCalls": 15,
   "reviewEnabled": true,
@@ -320,6 +322,8 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 |---|---|---|
 | `memoryCharLimit` | `2200` | Max characters in MEMORY.md |
 | `userCharLimit` | `1375` | Max characters in USER.md |
+| `projectCharLimit` | `2200` | Max characters in project-scoped MEMORY.md |
+| `memoryDir` | `~/.pi/agent/memory` | Custom directory for memory files |
 | `nudgeInterval` | `10` | Turns between auto-reviews |
 | `nudgeToolCalls` | `15` | Tool calls between auto-reviews (OR with turns) |
 | `reviewEnabled` | `true` | Enable/disable background learning loop |

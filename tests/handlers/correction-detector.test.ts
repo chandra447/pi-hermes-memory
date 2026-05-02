@@ -197,6 +197,7 @@ describe("setupCorrectionDetector handler", () => {
     reviewEnabled: false,
     memoryCharLimit: 2200,
     userCharLimit: 1375,
+    projectCharLimit: 2200,
     flushOnCompact: false,
     flushOnShutdown: false,
     flushMinTurns: 6,
@@ -246,7 +247,7 @@ describe("setupCorrectionDetector handler", () => {
 
   it("triggers pi.exec when correction detected", async () => {
     const pi = createMockPi();
-    setupCorrectionDetector(pi, mockStore, config);
+    setupCorrectionDetector(pi, mockStore, null, config);
 
     const branch = [
       { type: "message", message: { role: "user", content: [{ type: "text", text: "don't do that" }] } },
@@ -262,7 +263,7 @@ describe("setupCorrectionDetector handler", () => {
 
   it("does NOT trigger on normal messages", async () => {
     const pi = createMockPi();
-    setupCorrectionDetector(pi, mockStore, config);
+    setupCorrectionDetector(pi, mockStore, null, config);
 
     fireMessageEnd("user", "looks good");
     fireTurnEnd([]);
@@ -273,7 +274,7 @@ describe("setupCorrectionDetector handler", () => {
 
   it("rate limits: does not trigger on consecutive corrections within 3 turns", async () => {
     const pi = createMockPi();
-    setupCorrectionDetector(pi, mockStore, config);
+    setupCorrectionDetector(pi, mockStore, null, config);
 
     // First correction
     fireMessageEnd("user", "don't do that");
@@ -294,7 +295,7 @@ describe("setupCorrectionDetector handler", () => {
   it("does not register handlers when correctionDetection is false", () => {
     const pi = createMockPi();
     const disabledConfig = { ...config, correctionDetection: false };
-    setupCorrectionDetector(pi, mockStore, disabledConfig);
+    setupCorrectionDetector(pi, mockStore, null, disabledConfig);
 
     assert.strictEqual(Object.keys(handlers).length, 0, "no handlers should be registered when disabled");
   });

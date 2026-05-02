@@ -63,6 +63,7 @@ const defaultConfig = {
   flushOnShutdown: true,
   memoryCharLimit: 2200,
   userCharLimit: 1375,
+  projectCharLimit: 2200,
 };
 
 const mockStore = {
@@ -82,8 +83,18 @@ function fireTurnEnd(branch: any[] = makeBranch(10), ctxOverrides: Record<string
   const h = handlers["turn_end"];
   if (!h) throw new Error("No turn_end handler registered");
   const ctx = makeCtx(branch, ctxOverrides);
+  // Extract the last assistant message from the branch to pass as event.message
+  // (the handler now reads tool calls from event.message, not from the branch)
+  let assistantMessage = undefined;
+  for (let i = branch.length - 1; i >= 0; i--) {
+    if (branch[i]?.message?.role === "assistant") {
+      assistantMessage = branch[i].message;
+      break;
+    }
+  }
+  const event = assistantMessage ? { message: assistantMessage } : {};
   for (const fn of h) {
-    fn({}, ctx);
+    fn(event, ctx);
   }
   return ctx;
 }
@@ -104,7 +115,7 @@ describe("setupBackgroundReview", () => {
 
   it("increments user turn count on message_end for user messages", () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, defaultConfig);
+    setupBackgroundReview(pi, mockStore, null, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -123,7 +134,7 @@ describe("setupBackgroundReview", () => {
 
   it("triggers review at nudgeInterval (10) turns", async () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, defaultConfig);
+    setupBackgroundReview(pi, mockStore, null, defaultConfig);
 
     // Register 3 user messages first
     fireMessageEnd("user");
@@ -152,7 +163,7 @@ describe("setupBackgroundReview", () => {
   it("does NOT trigger review when reviewEnabled is false", async () => {
     const config = { ...defaultConfig, reviewEnabled: false };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, config);
+    setupBackgroundReview(pi, mockStore, null, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -168,7 +179,7 @@ describe("setupBackgroundReview", () => {
 
   it("does NOT trigger review with fewer than 3 user turns", async () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, defaultConfig);
+    setupBackgroundReview(pi, mockStore, null, defaultConfig);
 
     // Only 2 user messages
     fireMessageEnd("user");
@@ -199,7 +210,7 @@ describe("setupBackgroundReview", () => {
       registerCommand: () => {},
     } as any;
 
-    setupBackgroundReview(slowPi, mockStore, defaultConfig);
+    setupBackgroundReview(slowPi, mockStore, null, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -228,7 +239,7 @@ describe("setupBackgroundReview", () => {
 
   it("does NOT trigger for short conversations (< 4 message parts)", async () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, defaultConfig);
+    setupBackgroundReview(pi, mockStore, null, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -250,7 +261,7 @@ describe("setupBackgroundReview", () => {
 
   it("resets turn counter after review triggers", async () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, defaultConfig);
+    setupBackgroundReview(pi, mockStore, null, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -275,7 +286,7 @@ describe("setupBackgroundReview", () => {
 
   it("shows notification only when review saves something", async () => {
     const pi = createMockPi({ code: 0, stdout: "Saved new memory about user preferences", stderr: "" });
-    setupBackgroundReview(pi, mockStore, defaultConfig);
+    setupBackgroundReview(pi, mockStore, null, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -296,7 +307,7 @@ describe("setupBackgroundReview", () => {
     notifyCalls = [];
 
     const nothingPi = createMockPi({ code: 0, stdout: "Nothing to save.", stderr: "" });
-    setupBackgroundReview(nothingPi, mockStore, defaultConfig);
+    setupBackgroundReview(nothingPi, mockStore, null, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -325,7 +336,7 @@ describe("setupBackgroundReview", () => {
       registerCommand: () => {},
     } as any;
 
-    setupBackgroundReview(crashPi, mockStore, defaultConfig);
+    setupBackgroundReview(crashPi, mockStore, null, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -344,7 +355,7 @@ describe("setupBackgroundReview", () => {
 
   it("assistant message_end does NOT increment user turn count", async () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, defaultConfig);
+    setupBackgroundReview(pi, mockStore, null, defaultConfig);
 
     // Only assistant messages — userTurnCount stays 0
     fireMessageEnd("assistant");
@@ -364,7 +375,7 @@ describe("setupBackgroundReview", () => {
   it("triggers on tool call count threshold even with low turn count", async () => {
     const config = { ...defaultConfig, nudgeToolCalls: 5 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, config);
+    setupBackgroundReview(pi, mockStore, null, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -400,7 +411,7 @@ describe("setupBackgroundReview", () => {
   it("triggers when both thresholds are met", async () => {
     const config = { ...defaultConfig, nudgeToolCalls: 5 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, config);
+    setupBackgroundReview(pi, mockStore, null, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -433,7 +444,7 @@ describe("setupBackgroundReview", () => {
   it("resets both counters after review", async () => {
     const config = { ...defaultConfig, nudgeToolCalls: 3 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, config);
+    setupBackgroundReview(pi, mockStore, null, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -471,7 +482,7 @@ describe("setupBackgroundReview", () => {
   it("does not trigger when neither threshold is met", async () => {
     const config = { ...defaultConfig, nudgeToolCalls: 15 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, config);
+    setupBackgroundReview(pi, mockStore, null, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -504,7 +515,7 @@ describe("setupBackgroundReview", () => {
   it("ignores text blocks when counting tool calls", async () => {
     const config = { ...defaultConfig, nudgeToolCalls: 3 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, config);
+    setupBackgroundReview(pi, mockStore, null, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -527,7 +538,7 @@ describe("setupBackgroundReview", () => {
   it("falls back gracefully if getBranch throws", async () => {
     const config = { ...defaultConfig, nudgeToolCalls: 3 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, config);
+    setupBackgroundReview(pi, mockStore, null, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");

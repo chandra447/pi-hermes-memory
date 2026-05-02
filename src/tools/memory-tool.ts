@@ -10,7 +10,7 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { MemoryStore } from "../store/memory-store.js";
 import { MEMORY_TOOL_DESCRIPTION } from "../constants.js";
 
-export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore): void {
+export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore, projectStore: MemoryStore | null): void {
   pi.registerTool({
     name: "memory",
     label: "Memory",
@@ -24,7 +24,7 @@ export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore): void {
     ],
     parameters: Type.Object({
       action: StringEnum(["add", "replace", "remove"] as const),
-      target: StringEnum(["memory", "user"] as const),
+      target: StringEnum(["memory", "user", "project"] as const),
       content: Type.Optional(
         Type.String({ description: "Entry content for add/replace" })
       ),
@@ -36,7 +36,21 @@ export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore): void {
       ),
     }),
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const { action, target, content, old_text } = params;
+      const { action, target: rawTarget, content, old_text } = params;
+
+      // Route 'project' to projectStore (internal target 'memory')
+      const target = rawTarget as "memory" | "user";
+      const activeStore = rawTarget === "project" ? projectStore : store;
+
+      if (rawTarget === "project" && !projectStore) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ success: false, error: "Project memory is not available (no project detected)." }) }],
+          details: {},
+        };
+      }
+
+      // After the guard above, activeStore is guaranteed non-null when rawTarget === 'project'
+      const store_ = activeStore!;
 
       let result;
       switch (action) {
@@ -55,7 +69,7 @@ export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore): void {
               details: {},
             };
           }
-          result = await store.add(target, content);
+          result = await store_.add(target, content);
           break;
 
         case "replace":
@@ -87,7 +101,7 @@ export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore): void {
               details: {},
             };
           }
-          result = store.replace(target, old_text, content);
+          result = await store_.replace(target, old_text, content);
           break;
 
         case "remove":
@@ -105,7 +119,7 @@ export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore): void {
               details: {},
             };
           }
-          result = store.remove(target, old_text);
+          result = await store_.remove(target, old_text);
           break;
 
         default:
@@ -113,6 +127,11 @@ export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore): void {
             success: false,
             error: `Unknown action '${action}'. Use: add, replace, remove`,
           };
+      }
+
+      // Tag project results so the caller knows the scope
+      if (rawTarget === "project" && result.success) {
+        (result as any).target = "project";
       }
 
       return {

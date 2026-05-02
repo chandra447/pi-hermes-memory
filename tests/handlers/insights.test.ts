@@ -28,7 +28,7 @@ async function setupCommand(
     },
   };
 
-  registerInsightsCommand(mockPi as any, mockStore as any);
+  registerInsightsCommand(mockPi as any, mockStore as any, null, "test-project");
 
   assert.ok(commands.length === 1, "Expected exactly one registered command");
   return { handler: commands[0].handler, notifyCalls };

@@ -13,6 +13,7 @@ import { getMessageText } from "../types.js";
 export function setupSessionFlush(
   pi: ExtensionAPI,
   store: MemoryStore,
+  projectStore: MemoryStore | null,
   config: MemoryConfig,
 ): void {
   let userTurnCount = 0;

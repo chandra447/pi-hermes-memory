@@ -2,8 +2,11 @@
  * Unit tests for auto-consolidation — triggerConsolidation and /memory-consolidate command.
  */
 
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, before, after } from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import * as os from "node:os";
 import { triggerConsolidation } from "../../src/handlers/auto-consolidate.js";
 import { ENTRY_DELIMITER } from "../../src/constants.js";
 
@@ -113,6 +116,16 @@ describe("triggerConsolidation", () => {
 });
 
 describe("MemoryStore auto-consolidation integration", () => {
+  let MEMORY_DIR = "";
+
+  before(async () => {
+    MEMORY_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "pi-consolidation-test-"));
+  });
+
+  after(async () => {
+    try { await fs.rm(MEMORY_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
   it("add() triggers consolidation when over limit with consolidator", async () => {
     let consolidatorCalled = false;
     let consolidatorTarget: string | undefined;
@@ -129,15 +142,18 @@ describe("MemoryStore auto-consolidation integration", () => {
       autoConsolidate: true,
       correctionDetection: false,
       nudgeToolCalls: 15,
+      memoryDir: MEMORY_DIR,
     });
 
-    // Inject a mock consolidator that "frees space" by loading new data
+    // Mock consolidator that actually frees space by removing all entries
     store.setConsolidator(async (target, signal) => {
       consolidatorCalled = true;
       consolidatorTarget = target;
-      // Simulate consolidation freeing up space
-      // After consolidation, loadFromDisk would show fewer entries
-      // We cheat by directly accessing internals — in real use, pi.exec modifies the file
+      // Remove all entries to simulate consolidation freeing space
+      const entries = target === "memory" ? store.getMemoryEntries() : store.getUserEntries();
+      for (const entry of [...entries]) {
+        await store.remove(target, entry);
+      }
       return { consolidated: true };
     });
 
@@ -152,9 +168,8 @@ describe("MemoryStore auto-consolidation integration", () => {
 
     assert.ok(consolidatorCalled, "consolidator should have been called");
     assert.strictEqual(consolidatorTarget, "memory");
-    // Result depends on whether consolidation actually freed space
-    // In this mock, the in-memory array doesn't change, so it'll still be over limit
-    // The real test is that consolidation was attempted
+    // After consolidation removes entries, the new entry should fit
+    assert.ok(result.success, "add should succeed after consolidation");
   });
 
   it("add() skips consolidation when autoConsolidate is false", async () => {
@@ -172,6 +187,7 @@ describe("MemoryStore auto-consolidation integration", () => {
       autoConsolidate: false,
       correctionDetection: false,
       nudgeToolCalls: 15,
+      memoryDir: MEMORY_DIR,
     });
 
     store.setConsolidator(async () => {
@@ -201,6 +217,7 @@ describe("MemoryStore auto-consolidation integration", () => {
       autoConsolidate: true,
       correctionDetection: false,
       nudgeToolCalls: 15,
+      memoryDir: MEMORY_DIR,
     });
 
     // Intentionally NOT calling setConsolidator

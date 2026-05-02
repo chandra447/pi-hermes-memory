@@ -9,6 +9,8 @@ export interface MemoryConfig {
   memoryCharLimit: number;
   /** Max chars for USER.md (user profile). Default: 1375 */
   userCharLimit: number;
+  /** Max chars for project-level MEMORY.md. Default: 2200 */
+  projectCharLimit: number;
   /** Turns between background auto-reviews. Default: 10 */
   nudgeInterval: number;
   /** Enable background learning loop. Default: true */

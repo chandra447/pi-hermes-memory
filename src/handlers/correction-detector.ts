@@ -57,6 +57,7 @@ export function isCorrection(text: string): boolean {
 export function setupCorrectionDetector(
   pi: ExtensionAPI,
   store: MemoryStore,
+  projectStore: MemoryStore | null,
   config: MemoryConfig,
 ): void {
   if (!config.correctionDetection) return;
@@ -109,6 +110,7 @@ export function setupCorrectionDetector(
 
       const currentMemory = store.getMemoryEntries().join(ENTRY_DELIMITER);
       const currentUser = store.getUserEntries().join(ENTRY_DELIMITER);
+      const currentProject = projectStore ? projectStore.getMemoryEntries().join(ENTRY_DELIMITER) : null;
 
       const prompt = [
         CORRECTION_SAVE_PROMPT,
@@ -118,12 +120,23 @@ export function setupCorrectionDetector(
         "",
         "--- Current User Profile ---",
         currentUser || "(empty)",
+      ];
+
+      if (currentProject !== null) {
+        prompt.push(
+          "",
+          "--- Current Project Memory ---",
+          currentProject || "(empty)",
+        );
+      }
+
+      prompt.push(
         "",
         "--- Recent Conversation ---",
         recentParts.join("\n\n"),
-      ].join("\n");
+      );
 
-      const result = await pi.exec("pi", ["-p", "--no-session", prompt], {
+      const result = await pi.exec("pi", ["-p", "--no-session", prompt.join("\n")], {
         signal: ctx.signal,
         timeout: 30000,
       });

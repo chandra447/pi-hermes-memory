@@ -17,7 +17,7 @@
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "npx tsx --test 'tests/**/*.test.ts' --test-concurrency=1"
+    "test": "tests/run-all.sh"
   },
   "keywords": [
     "pi-package",
@@ -38,11 +38,12 @@
     "url": "https://github.com/chandra447/pi-hermes-memory"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@mariozechner/pi-coding-agent": ">=0.70.0"
   },
   "devDependencies": {
     "@mariozechner/pi-ai": "^0.70.0",
     "@mariozechner/pi-coding-agent": "^0.70.0",
+    "tsx": "^4.21.0",
     "typebox": "^1.1.33",
     "typescript": "^6.0.3"
   }

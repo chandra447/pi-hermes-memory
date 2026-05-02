@@ -118,8 +118,8 @@ _Done when: v0.2.0 is tagged and released with updated docs._
 - [x] Update `docs/ROADMAP.md` — v0.2 roadmap documented (`d5b7518`)
 - [x] `npm run check` passes with zero errors (`c6317dd`)
 - [x] `npm test` — all 218 tests pass (`83e7c46`)
-- [ ] Bump `package.json` version to `0.2.0`
-- [ ] Tag v0.2.0 release
+- [x] Bump `package.json` version to `0.2.0`
+- [x] Tag v0.2.0 release
 
 ---
 

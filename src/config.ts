@@ -5,6 +5,7 @@ import type { MemoryConfig } from "./types.js";
 import {
   DEFAULT_MEMORY_CHAR_LIMIT,
   DEFAULT_USER_CHAR_LIMIT,
+  DEFAULT_PROJECT_CHAR_LIMIT,
   DEFAULT_NUDGE_INTERVAL,
   DEFAULT_FLUSH_MIN_TURNS,
   DEFAULT_NUDGE_TOOL_CALLS,
@@ -13,6 +14,7 @@ import {
 const DEFAULT_CONFIG: MemoryConfig = {
   memoryCharLimit: DEFAULT_MEMORY_CHAR_LIMIT,
   userCharLimit: DEFAULT_USER_CHAR_LIMIT,
+  projectCharLimit: DEFAULT_PROJECT_CHAR_LIMIT,
   nudgeInterval: DEFAULT_NUDGE_INTERVAL,
   reviewEnabled: true,
   flushOnCompact: true,
@@ -47,6 +49,8 @@ export function loadConfig(): MemoryConfig {
       if (typeof parsed.autoConsolidate === "boolean") config.autoConsolidate = parsed.autoConsolidate;
       if (typeof parsed.correctionDetection === "boolean") config.correctionDetection = parsed.correctionDetection;
       if (typeof parsed.nudgeToolCalls === "number") config.nudgeToolCalls = parsed.nudgeToolCalls;
+      if (typeof parsed.projectCharLimit === "number") config.projectCharLimit = parsed.projectCharLimit;
+      if (typeof parsed.memoryDir === "string") config.memoryDir = parsed.memoryDir;
       return config;
     }
   } catch {

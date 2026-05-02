@@ -21,6 +21,7 @@ let TEST_MEMORY_DIR = "";
 const testConfig = (): MemoryConfig => ({
   memoryCharLimit: 2200,
   userCharLimit: 1375,
+  projectCharLimit: 2200,
   nudgeInterval: 10,
   reviewEnabled: true,
   flushOnCompact: true,

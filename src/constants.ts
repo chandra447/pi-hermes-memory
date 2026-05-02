@@ -12,6 +12,8 @@ export const DEFAULT_MEMORY_CHAR_LIMIT = 2200;
 export const DEFAULT_USER_CHAR_LIMIT = 1375;
 
 // ─── Learning loop defaults ───
+export const DEFAULT_PROJECT_CHAR_LIMIT = 2200;
+
 export const DEFAULT_NUDGE_INTERVAL = 10;
 export const DEFAULT_FLUSH_MIN_TURNS = 6;
 export const DEFAULT_NUDGE_TOOL_CALLS = 15;
@@ -35,9 +37,10 @@ PRIORITY: User preferences and corrections > environment facts > procedural know
 
 Do NOT save task progress, session outcomes, completed-work logs, or temporary TODO state.
 
-TWO TARGETS:
+THREE TARGETS:
 - 'user': who the user is -- name, role, preferences, communication style, pet peeves
-- 'memory': your notes -- environment facts, project conventions, tool quirks, lessons learned
+- 'memory': your global notes -- environment facts, tool quirks, lessons learned (shared across all projects)
+- 'project': project-specific notes -- architecture decisions, API quirks, team norms, codebase conventions (scoped to current project)
 
 ACTIONS: add (new entry), replace (update existing -- old_text identifies it), remove (delete -- old_text identifies it).`;
 

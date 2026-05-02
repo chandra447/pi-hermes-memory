@@ -43,6 +43,7 @@ const config = {
   reviewEnabled: false,
   memoryCharLimit: 2200,
   userCharLimit: 1375,
+  projectCharLimit: 2200,
   flushOnCompact: false,
   flushOnShutdown: false,
   flushMinTurns: 6,
@@ -100,8 +101,30 @@ function fireTurnEnd(branch: any[]) {
   const h = handlers["turn_end"];
   if (!h) throw new Error("No turn_end handler registered");
   const ctx = makeCtx(branch);
+  // Extract the first assistant message with tool calls to pass as event.message
+  // In a real Pi session, turn_end fires with the assistant message just generated
+  let assistantMessage = undefined;
+  for (const entry of branch) {
+    if (entry?.message?.role === "assistant") {
+      const content = entry.message.content;
+      if (Array.isArray(content) && content.some((b: any) => b?.type === "toolCall")) {
+        assistantMessage = entry.message;
+        break;
+      }
+    }
+  }
+  // Fall back to last assistant message if no tool-call message found
+  if (!assistantMessage) {
+    for (let i = branch.length - 1; i >= 0; i--) {
+      if (branch[i]?.message?.role === "assistant") {
+        assistantMessage = branch[i].message;
+        break;
+      }
+    }
+  }
+  const event = assistantMessage ? { message: assistantMessage } : {};
   for (const fn of h) {
-    fn({}, ctx);
+    fn(event, ctx);
   }
   return ctx;
 }
