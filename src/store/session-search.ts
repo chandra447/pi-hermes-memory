@@ -1,6 +1,19 @@
 import { DatabaseManager } from './db.js';
 
 /**
+ * Escape a string for FTS5 query syntax.
+ * Wraps the query in double quotes to treat it as a literal phrase.
+ */
+function escapeFts5Query(query: string): string {
+  // If the query already contains FTS5 operators (OR, AND, NOT, NEAR), leave it as-is
+  if (/\b(OR|AND|NOT|NEAR)\b/.test(query)) {
+    return query;
+  }
+  // Otherwise, wrap in double quotes to treat as literal phrase
+  return `"${query.replace(/"/g, '""')}"`;
+}
+
+/**
  * Search result from session history.
  */
 export interface SessionSearchResult {
@@ -48,7 +61,7 @@ export function searchSessions(
 
   // FTS5 match condition — use subquery for reliable rowid matching
   conditions.push('m.rowid IN (SELECT rowid FROM message_fts WHERE message_fts MATCH ?)');
-  params.push(query);
+  params.push(escapeFts5Query(query));
 
   // Project filter
   if (project) {
