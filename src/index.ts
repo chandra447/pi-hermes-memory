@@ -14,6 +14,7 @@
  * 8. /memory-insights — shows what's stored
  * 9. /memory-skills — lists procedural skills
  * 10. /memory-consolidate — manual consolidation trigger
+ * 11. /memory-interview — onboarding interview to pre-fill user profile
  *
  * See docs/ROADMAP.md for full roadmap and Hermes competitive analysis.
  */
@@ -32,6 +33,7 @@ import { triggerConsolidation, registerConsolidateCommand } from "./handlers/aut
 import { setupCorrectionDetector } from "./handlers/correction-detector.js";
 import { setupSkillAutoTrigger } from "./handlers/skill-auto-trigger.js";
 import { registerSkillsCommand } from "./handlers/skills-command.js";
+import { registerInterviewCommand } from "./handlers/interview.js";
 import { loadConfig } from "./config.js";
 
 export default function (pi: ExtensionAPI) {
@@ -104,4 +106,5 @@ export default function (pi: ExtensionAPI) {
   // ── 10. Register commands ──
   registerInsightsCommand(pi, store, projectStore, projectName);
   registerSkillsCommand(pi, skillStore);
+  registerInterviewCommand(pi, store);
 }

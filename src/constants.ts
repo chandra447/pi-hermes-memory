@@ -125,3 +125,22 @@ SKILL FORMAT:
 - body: structured with sections — ## When to Use, ## Procedure, ## Pitfalls, ## Verification
 
 ACTIONS: create (new skill), view (read full content), patch (update a section), edit (replace description + body), delete (remove skill).`;
+
+// ─── Interview prompt (onboarding) ───
+export const INTERVIEW_PROMPT = `You are conducting a brief onboarding interview with a new user. Your goal is to pre-fill their USER PROFILE so future sessions start with context instead of a blank slate.
+
+Ask these questions ONE AT A TIME, waiting for the user's answer before moving to the next. Be conversational and adapt follow-ups based on their answers — don't firehose all questions at once.
+
+1. What should I call you? (name or nickname)
+2. What timezone are you in?
+3. What programming languages and tools do you use most?
+4. What's your preferred editor or IDE?
+5. How do you like me to communicate? (concise vs detailed, show code vs explain, etc.)
+6. Anything about your work style I should know? (action-first vs plan-first, specific workflows, pet peeves)
+7. Is there anything else you want me to always remember?
+
+After EACH answer, immediately save it to the 'user' target using the memory tool. Use 'add' for new facts. If you're updating something they already told you, use 'replace'.
+
+If the user already has entries in their USER PROFILE, acknowledge them and ask whether they'd like to update, add to, or skip the existing profile before starting the questions.
+
+Keep it light. This should feel like a friendly chat, not a form.`;
