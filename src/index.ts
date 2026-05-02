@@ -27,8 +27,13 @@ import * as os from "node:os";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
+import { DatabaseManager } from "./store/db.js";
+import { indexSession } from "./store/session-indexer.js";
+import { parseSessionFile } from "./store/session-parser.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
 import { registerSkillTool } from "./tools/skill-tool.js";
+import { registerSessionSearchTool } from "./tools/session-search-tool.js";
+import { registerMemorySearchTool } from "./tools/memory-search-tool.js";
 import { setupBackgroundReview } from "./handlers/background-review.js";
 import { setupSessionFlush } from "./handlers/session-flush.js";
 import { registerInsightsCommand } from "./handlers/insights.js";
@@ -38,6 +43,7 @@ import { setupSkillAutoTrigger } from "./handlers/skill-auto-trigger.js";
 import { registerSkillsCommand } from "./handlers/skills-command.js";
 import { registerInterviewCommand } from "./handlers/interview.js";
 import { registerSwitchProjectCommand } from "./handlers/switch-project.js";
+import { registerIndexSessionsCommand } from "./handlers/index-sessions.js";
 import { loadConfig } from "./config.js";
 import { detectProject } from "./project.js";
 
@@ -47,6 +53,7 @@ export default function (pi: ExtensionAPI) {
   const globalDir = config.memoryDir ?? path.join(os.homedir(), ".pi", "agent", "memory");
   const store = new MemoryStore(config);
   const skillStore = new SkillStore(path.join(globalDir, "skills"));
+  const dbManager = new DatabaseManager(globalDir);
 
   // Detect project from cwd using shared helper
   const project = detectProject();
@@ -111,4 +118,39 @@ export default function (pi: ExtensionAPI) {
   registerSkillsCommand(pi, skillStore);
   registerInterviewCommand(pi, store);
   registerSwitchProjectCommand(pi);
+
+  // ── 11. SQLite session search + extended memory ──
+  registerSessionSearchTool(pi, dbManager);
+  registerMemorySearchTool(pi, dbManager);
+  registerIndexSessionsCommand(pi);
+
+  // ── 12. Auto-index session on shutdown ──
+  let currentSessionId: string | null = null;
+  let currentSessionCwd: string | null = null;
+
+  pi.on("session_start", async (event, _ctx) => {
+    // Capture session metadata for indexing
+    currentSessionId = (event as Record<string, unknown>).sessionId as string ?? null;
+    currentSessionCwd = process.cwd();
+  });
+
+  pi.on("session_shutdown", async (_event, _ctx) => {
+    // Index the current session to SQLite
+    if (currentSessionId && currentSessionCwd) {
+      try {
+        const sessionsDir = path.join(os.homedir(), ".pi", "agent", "sessions");
+        const encodedCwd = currentSessionCwd.replace(/\//g, "-");
+        const sessionFiles = require("node:fs").readdirSync(path.join(sessionsDir, encodedCwd))
+          .filter((f: string) => f.includes(currentSessionId!) && f.endsWith(".jsonl"));
+        if (sessionFiles.length > 0) {
+          const sessionData = parseSessionFile(path.join(sessionsDir, encodedCwd, sessionFiles[0]));
+          if (sessionData) {
+            indexSession(dbManager, sessionData);
+          }
+        }
+      } catch {
+        // Silent fail — don't block shutdown
+      }
+    }
+  });
 }

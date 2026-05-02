@@ -5,11 +5,11 @@
 import type { TextContent } from "@mariozechner/pi-ai";
 
 export interface MemoryConfig {
-  /** Max chars for MEMORY.md (agent notes). Default: 2200 */
+  /** Max chars for MEMORY.md (agent notes). Default: 5000 */
   memoryCharLimit: number;
-  /** Max chars for USER.md (user profile). Default: 1375 */
+  /** Max chars for USER.md (user profile). Default: 5000 */
   userCharLimit: number;
-  /** Max chars for project-level MEMORY.md. Default: 2200 */
+  /** Max chars for project-level MEMORY.md. Default: 5000 */
   projectCharLimit: number;
   /** Turns between background auto-reviews. Default: 10 */
   nudgeInterval: number;
@@ -29,6 +29,10 @@ export interface MemoryConfig {
   correctionDetection: boolean;
   /** Tool calls before triggering background review (in addition to turn count). Default: 15 */
   nudgeToolCalls: number;
+  /** Enable session history search via SQLite FTS5. Default: true */
+  sessionSearchEnabled?: boolean;
+  /** Days to retain session history. Default: 90 */
+  sessionRetentionDays?: number;
 }
 
 export interface MemoryResult {

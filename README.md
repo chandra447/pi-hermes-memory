@@ -19,6 +19,9 @@ Your Pi agent normally forgets everything when you close a session. This extensi
 | **Memory Aging** | Entries carry timestamps — consolidation knows which facts are stale and which are fresh |
 | **Project Memory** | Per-project memory (`~/.pi/agent/<project>/MEMORY.md`) alongside your global memory |
 | **Secret Detection** | API keys, tokens, SSH keys, and credential assignments are blocked from being persisted to memory |
+| **Session History Search** | Search across all past conversations via SQLite FTS5 — "what did we discuss about auth?" |
+| **Extended Memory Store** | Unlimited searchable memories beyond the core 5,000-char limit |
+| **Learn Memory Tool** | `/learn-memory-tool` — a skill that teaches users how to use the memory system |
 
 ## How It Works
 
@@ -157,9 +160,34 @@ Run `tsc --noEmit` and confirm zero errors.
 
 | Store | File | What goes here | Limit |
 |---|---|---|---|
-| **memory** | `MEMORY.md` | Agent's notes — env facts, project conventions, tool quirks, lessons learned | 2,200 chars |
-| **user** | `USER.md` | User profile — name, preferences, communication style, habits | 1,375 chars |
+| **memory** | `MEMORY.md` | Agent's notes — env facts, project conventions, tool quirks, lessons learned | 5,000 chars |
+| **user** | `USER.md` | User profile — name, preferences, communication style, habits | 5,000 chars |
 | **skills** | `skills/*.md` | Procedures — *how* to debug, deploy, test, or fix something | Unlimited |
+| **extended** | `sessions.db` | Searchable memories beyond the core limit | Unlimited |
+| **sessions** | `sessions.db` | Past conversation history (searchable via FTS5) | Unlimited |
+
+### Session History Search
+
+The extension indexes your Pi session history into a SQLite database with FTS5 full-text search. The agent can search across all past conversations using the `session_search` tool:
+
+| Tool | What it does |
+|---|---|---|
+| `session_search` | Search past conversations — "what did we discuss about auth?" |
+| `memory_search` | Search extended memory store — unlimited capacity, keyword-based |
+
+Session history is indexed automatically on session shutdown. To bulk-import existing sessions:
+
+```
+/memory-index-sessions
+```
+
+### Extended Memory Store
+
+When the core memory (5,000 chars) isn't enough, the agent can store additional memories in the SQLite-backed extended store. These are searchable via `memory_search` but not automatically injected into the system prompt.
+
+This is the **hybrid memory architecture**:
+- **Core memory** (MEMORY.md/USER.md): Always injected, 5,000 chars each, human-readable
+- **Extended memory** (SQLite): Unlimited, searchable on demand, agent-driven
 
 ### Correction Detection
 
@@ -211,6 +239,8 @@ This means skills build up naturally over time without you having to ask.
 | `/memory-consolidate` | Manually trigger memory consolidation to free space |
 | `/memory-interview` | Answer a few questions to pre-fill your user profile |
 | `/memory-switch-project` | List all project memories and their entry counts |
+| `/memory-index-sessions` | Import past Pi sessions into the search database |
+| `/learn-memory-tool` | Skill that teaches users how to use the memory system |
 
 ### `/memory-insights` Output
 
@@ -254,9 +284,9 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 
 ```json
 {
-  "memoryCharLimit": 2200,
-  "userCharLimit": 1375,
-  "projectCharLimit": 2200,
+  "memoryCharLimit": 5000,
+  "userCharLimit": 5000,
+  "projectCharLimit": 5000,
   "memoryDir": "~/.pi/agent/memory",
   "nudgeInterval": 10,
   "nudgeToolCalls": 15,
@@ -271,9 +301,9 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 
 | Setting | Default | Description |
 |---|---|---|
-| `memoryCharLimit` | `2200` | Max characters in MEMORY.md |
-| `userCharLimit` | `1375` | Max characters in USER.md |
-| `projectCharLimit` | `2200` | Max characters in project-scoped MEMORY.md |
+| `memoryCharLimit` | `5000` | Max characters in MEMORY.md |
+| `userCharLimit` | `5000` | Max characters in USER.md |
+| `projectCharLimit` | `5000` | Max characters in project-scoped MEMORY.md |
 | `memoryDir` | `~/.pi/agent/memory` | Custom directory for memory files |
 | `nudgeInterval` | `10` | Turns between auto-reviews |
 | `nudgeToolCalls` | `15` | Tool calls between auto-reviews (OR with turns) |
@@ -290,6 +320,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 ~/.pi/agent/memory/
 ├── MEMORY.md          ← Agent's personal notes (env facts, patterns, lessons)
 ├── USER.md            ← User profile (name, preferences, habits)
+├── sessions.db        ← SQLite database (session history + extended memory)
 └── skills/
     ├── debug-typescript-errors.md
     └── deploy-checklist.md
@@ -297,11 +328,13 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 
 These are plain markdown files. You can read and edit them directly if you want to curate what the agent remembers. Memory entries are separated by `§` (section sign). Skills use standard SKILL.md format with frontmatter.
 
+The `sessions.db` SQLite database stores session history and extended memory entries. It's searchable via FTS5 full-text search.
+
 ## Known Limitations
 
 - **`§` delimiter**: Memory entries are separated by `§` (section sign). If an entry naturally contains `§`, it will be split incorrectly on reload. This is rare in English text but possible. [Hermes uses the same delimiter.]
 - **Background review cost**: Each review cycle costs one full LLM API call via a child `pi -p` process. Correction detection and skill auto-extraction add occasional extra calls.
-- **No search/indexing**: At the 2,200-char limit, the LLM can scan the entire block. Full-text search across sessions is planned for v0.3.
+- **Session search requires indexing**: Past sessions must be indexed before they're searchable. Run `/memory-index-sessions` to bulk-import, or let the extension auto-index on session shutdown.
 - **System prompts are invisible**: Pi's TUI does not display the system prompt. Memory injection works but you won't see it in the interface — verify by asking the agent a question that relies on stored memory.
 - **Skills are agent-generated**: Skills are created by the agent based on its experience. They may not always be perfectly structured. You can edit or delete them in `~/.pi/agent/memory/skills/`.
 
