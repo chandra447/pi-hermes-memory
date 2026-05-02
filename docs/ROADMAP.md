@@ -242,50 +242,68 @@ Project-scoped memory (`~/.pi/agent/<project>/MEMORY.md`) was added in the featu
 
 ---
 
-## v0.4.0 — Structured Storage + Session Search
+## v0.4.0 — SQLite FTS5 Session Search + Hybrid Memory
 
-**Goal**: SQLite backend with FTS5 full-text search over all past conversations. MemoryBackend interface for pluggable storage. Keep the same tool interface.
+**Goal**: SQLite backend with FTS5 full-text search over all past conversations. Extended memory store with unlimited capacity. Increased core memory limits.
 
-### Core Abstraction
+**Why now**: Power users hit the 2,200-char limit and lose important knowledge. Past sessions are rich with context but unreachable. Hybrid memory solves both — core memories always injected, deep knowledge searchable on demand.
 
-```typescript
-interface MemoryBackend {
-  // Write
-  add(target: "memory" | "user", entry: MemoryEntry): Promise<MemoryResult>;
-  replace(target: "memory" | "user", query: string, entry: MemoryEntry): Promise<MemoryResult>;
-  remove(target: "memory" | "user", query: string): Promise<MemoryResult>;
+**Full plan**: `docs/0.4/PLAN.md` · **Tasks**: `docs/0.4/TASKS.md`
 
-  // Read
-  getAll(target: "memory" | "user"): Promise<MemoryEntry[]>;
-  search(query: string, limit?: number): Promise<MemoryEntry[]>;
+### Architecture
 
-  // Lifecycle
-  formatForSystemPrompt(cwd?: string, prompt?: string): Promise<string>;
-  close(): Promise<void>;
-}
+```
+Session starts
+    ↓
+┌─────────────────────────────────────────────────┐
+│ System Prompt (always injected)                 │
+│ • MEMORY.md — 5,000 chars (up from 2,200)      │
+│ • USER.md — 5,000 chars (up from 1,375)        │
+│ • Project MEMORY.md — 5,000 chars              │
+│ • Skills index                                 │
+└─────────────────────────────────────────────────┘
+
+Agent has access to tools:
+    memory_search("prisma migration")
+        → Searches SQLite memories table (global + project)
+        → Returns top-10 relevant entries
+
+    session_search("how we fixed the test hang")
+        → Searches session history via FTS5
+        → Returns relevant conversation snippets
 ```
 
-Current `MemoryStore` becomes `MarkdownBackend` — the default, zero-dependency implementation. New `SQLiteBackend` adds structure + FTS5 search.
+### Data Model
+
+- `~/.pi/agent/memory/sessions.db` — single SQLite file
+- `sessions` + `messages` tables — all past conversations indexed
+- `message_fts` FTS5 virtual table — full-text search across messages
+- `memories` table — extended memory entries (unlimited, searchable)
+- `memory_fts` FTS5 virtual table — full-text search across memories
 
 ### Deliverables
 
-- [ ] `MemoryBackend` interface in `src/types.ts`
-- [ ] `MarkdownBackend` — wraps current `MemoryStore` (backwards compatible)
-- [ ] `SQLiteBackend` — FTS5 search, key-value entries, confidence scores, dedup by key
-- [ ] Session indexer — index past and current session conversations for full-text search
-- [ ] `session_search` tool — agent can query past conversations on demand
-- [ ] Summarization via `pi.exec()` — summarize relevant session fragments to keep token cost manageable
-- [ ] Config: `"backend": "markdown" | "sqlite"` (defaults to `markdown` for zero-dep install)
+- [ ] `better-sqlite3` dependency — SQLite with FTS5
+- [ ] `src/store/db.ts` — DatabaseManager (lazy init, WAL mode, auto-create tables)
+- [ ] `src/store/session-parser.ts` — JSONL parser for Pi session files
+- [ ] `src/store/session-indexer.ts` — index sessions + messages into SQLite
+- [ ] `src/store/session-search.ts` — FTS5 search across session history
+- [ ] `src/store/sqlite-memory-store.ts` — extended memory store (unlimited, searchable)
+- [ ] `session_search` tool — agent queries past conversations
+- [ ] `memory_search` tool — agent queries extended memories
+- [ ] `/memory-index-sessions` command — bulk import existing sessions
+- [ ] Auto-index session on shutdown
+- [ ] Char limits: MEMORY.md 2,200 → 5,000, USER.md 1,375 → 5,000, project 2,200 → 5,000
 - [ ] Config: `sessionSearchEnabled: boolean` (default: true)
 - [ ] Config: `sessionRetentionDays: number` (default: 90)
-- [ ] Migration tool: markdown → sqlite one-time import
 
 ### What Does NOT Change
 
-- Content scanner (guards all backends)
-- Tool interface (`memory` tool name and actions)
+- Content scanner (guards all writes)
+- Memory tool interface (add/replace/remove actions)
 - System prompt injection (frozen snapshot pattern)
-- Config file location and format (just adds new fields)
+- Skills system (unchanged)
+- Background review, correction detection, auto-consolidation (unchanged)
 
 ---
 
@@ -387,7 +405,7 @@ gantt
     Project memory polish                            :v03d, after v03c, 2d
 
     section v0.4.0
-    MemoryBackend interface + SQLite + session search:v04a, after v03d, 10d
+    SQLite FTS5 + session search + hybrid memory    :v04a, after v03d, 10d
 
     section v0.5.0
     ExternalSync + Mem0 / Honcho                     :v05a, after v04b, 10d
