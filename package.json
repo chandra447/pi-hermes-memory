@@ -17,7 +17,7 @@
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "for f in $(find tests -name '*.test.ts' | sort); do echo \"::group::$f\"; npx tsx --test \"$f\" || exit 1; echo \"::endgroup::\"; done"
+    "test": "tests/run-all.sh"
   },
   "keywords": [
     "pi-package",
@@ -43,6 +43,7 @@
   "devDependencies": {
     "@mariozechner/pi-ai": "^0.70.0",
     "@mariozechner/pi-coding-agent": "^0.70.0",
+    "tsx": "^4.21.0",
     "typebox": "^1.1.33",
     "typescript": "^6.0.3"
   }

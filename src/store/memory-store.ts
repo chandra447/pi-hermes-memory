@@ -106,11 +106,23 @@ export class MemoryStore {
     if (newTotal > limit) {
       // Auto-consolidate if configured and consolidator available
       if (this.config.autoConsolidate && this.consolidator) {
+        // Track consolidation attempts to prevent infinite recursion
+        // when the consolidator fails to free enough space
+        const beforeCount = entries.length;
         try {
           const result = await this.consolidator(target, signal);
           if (result.consolidated) {
             // CRITICAL: reload from disk — child process modified files, our arrays are stale
             await this.loadFromDisk();
+            // Guard: if consolidation didn't reduce entries, stop recursing
+            const afterEntries = this.entriesFor(target);
+            const afterCount = afterEntries.length;
+            if (afterCount >= beforeCount && afterCount > 0) {
+              return {
+                success: false,
+                error: `Memory at capacity and consolidation did not free enough space. Entry count unchanged at ${afterCount}.`,
+              };
+            }
             // Retry the add with fresh data
             return this.add(target, content, signal);
           }
