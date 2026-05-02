@@ -14,7 +14,10 @@ Your Pi agent normally forgets everything when you close a session. This extensi
 | **Correction Detection** | When you correct the agent ("no, don't do that"), it saves immediately — no waiting |
 | **Auto-Consolidation** | When memory hits capacity, the agent automatically merges and prunes entries instead of erroring |
 | **Session Flush** | Before context is compressed or the session ends, the agent gets one last chance to save anything worth remembering |
-| **Insights Command** | `/memory-insights` shows everything the agent has remembered about you and your environment |
+| **Onboarding Interview** | `/memory-interview` — answer 5-7 questions to pre-fill your profile on the very first session |
+| **Context Fencing** | Memory blocks are wrapped in `<memory-context>` tags so the LLM never treats stored facts as user instructions |
+| **Memory Aging** | Entries carry timestamps — consolidation knows which facts are stale and which are fresh |
+| **Project Memory** | Per-project memory (`~/.pi/agent/<project>/MEMORY.md`) alongside your global memory |
 
 ## How It Works
 
@@ -152,6 +155,45 @@ Or test locally without installing:
 pi -e /path/to/pi-hermes-memory/src/index.ts
 ```
 
+## Two-Tier Memory Architecture
+
+The extension stores memory at two levels:
+
+| Tier | Location | What goes here | Injected when |
+|---|---|---|---|
+| **Global** | `~/.pi/agent/memory/` | Facts that apply everywhere — your name, preferences, OS, tools | Always (every session) |
+| **Project** | `~/.pi/agent/<project>/` | Facts scoped to one codebase — architecture decisions, API quirks, team norms | When cwd matches the project |
+
+Both tiers are injected into the system prompt under separate `<memory-context>` blocks.
+
+```
+System Prompt
+┌─────────────────────────────────────────┐
+│ <memory-context>                        │
+│ MEMORY (your personal notes)            │
+│ • prefers vim over nano                 │
+│ • uses pnpm not npm                     │
+│ ═══ END MEMORY ═══                     │
+│ </memory-context>                       │
+│                                         │
+│ <memory-context>                        │
+│ USER PROFILE (who the user is)          │
+│ • name: Chandrateja                     │
+│ • timezone: AEST                        │
+│ ═══ END MEMORY ═══                     │
+│ </memory-context>                       │
+│                                         │
+│ <memory-context>                        │
+│ PROJECT MEMORY: pi-hermes-memory        │
+│ • uses jiti for runtime TS loading      │
+│ • tests use node:test with tsx          │
+│ ═══ END MEMORY ═══                     │
+│ </memory-context>                       │
+└─────────────────────────────────────────┘
+```
+
+Memory blocks are wrapped in `<memory-context>` XML tags with a guard note ("NOT new user input") to prevent the LLM from treating stored facts as instructions.
+
 ## Usage
 
 Once installed, the extension works automatically. You don't need to do anything special — the agent will start saving memories and skills on its own.
@@ -260,6 +302,8 @@ This means skills build up naturally over time without you having to ask.
 | `/memory-insights` | Shows everything stored in memory and user profile |
 | `/memory-skills` | Lists all agent-created skills |
 | `/memory-consolidate` | Manually trigger memory consolidation to free space |
+| `/memory-interview` | Answer a few questions to pre-fill your user profile |
+| `/memory-switch-project` | List all project memories and their entry counts |
 
 ### `/memory-insights` Output
 

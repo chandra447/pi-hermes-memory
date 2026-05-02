@@ -15,6 +15,9 @@
  * 9. /memory-skills — lists procedural skills
  * 10. /memory-consolidate — manual consolidation trigger
  * 11. /memory-interview — onboarding interview to pre-fill user profile
+ * 12. /memory-switch-project — list project memories
+ * 13. Context Fencing — <memory-context> tags prevent injection through stored memory
+ * 14. Memory Aging — entry timestamps guide consolidation
  *
  * See docs/ROADMAP.md for full roadmap and Hermes competitive analysis.
  */
