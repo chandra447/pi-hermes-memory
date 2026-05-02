@@ -17,7 +17,7 @@
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "npx tsx --test 'tests/**/*.test.ts' --test-concurrency=1"
+    "test": "npx tsx --test 'tests/**/*.test.ts'"
   },
   "keywords": [
     "pi-package",
