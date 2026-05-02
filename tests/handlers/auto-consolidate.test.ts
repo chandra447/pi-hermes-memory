@@ -132,8 +132,8 @@ describe("MemoryStore auto-consolidation integration", () => {
 
     const { MemoryStore } = await import("../../src/store/memory-store.js");
     const store = new MemoryStore({
-      memoryCharLimit: 50,
-      userCharLimit: 50,
+      memoryCharLimit: 120,
+      userCharLimit: 120,
       nudgeInterval: 10,
       reviewEnabled: false,
       flushOnCompact: false,
@@ -159,8 +159,8 @@ describe("MemoryStore auto-consolidation integration", () => {
 
     await store.loadFromDisk();
 
-    // Fill up memory to near limit
-    const smallEntry = "a".repeat(40);
+    // Fill up memory to near limit (each entry gets ~44 chars of metadata)
+    const smallEntry = "a".repeat(60);
     await store.add("memory", smallEntry);
 
     // This add should exceed limit and trigger consolidation

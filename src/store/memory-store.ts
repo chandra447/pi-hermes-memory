@@ -92,6 +92,10 @@ export class MemoryStore {
   // ─── CRUD ───
 
   async add(target: "memory" | "user", content: string, signal?: AbortSignal): Promise<MemoryResult> {
+    return this._add(target, content, signal);
+  }
+
+  private async _add(target: "memory" | "user", content: string, signal?: AbortSignal, _retriesLeft = 1): Promise<MemoryResult> {
     content = content.trim();
     if (!content) return { success: false, error: "Content cannot be empty." };
 
@@ -113,27 +117,15 @@ export class MemoryStore {
 
     const newTotal = [...entries, encoded].join(ENTRY_DELIMITER).length;
     if (newTotal > limit) {
-      // Auto-consolidate if configured and consolidator available
-      if (this.config.autoConsolidate && this.consolidator) {
-        // Track consolidation attempts to prevent infinite recursion
-        // when the consolidator fails to free enough space
-        const beforeCount = entries.length;
+      // Auto-consolidate once if configured — limit retries to prevent infinite loops
+      if (this.config.autoConsolidate && this.consolidator && _retriesLeft > 0) {
         try {
           const result = await this.consolidator(target, signal);
           if (result.consolidated) {
             // CRITICAL: reload from disk — child process modified files, our arrays are stale
             await this.loadFromDisk();
-            // Guard: if consolidation didn't reduce entries, stop recursing
-            const afterEntries = this.entriesFor(target);
-            const afterCount = afterEntries.length;
-            if (afterCount >= beforeCount && afterCount > 0) {
-              return {
-                success: false,
-                error: `Memory at capacity and consolidation did not free enough space. Entry count unchanged at ${afterCount}.`,
-              };
-            }
-            // Retry the add with fresh data
-            return this.add(target, content, signal);
+            // Retry the add exactly once (retriesLeft = 0 means no more consolidation)
+            return this._add(target, content, signal, _retriesLeft - 1);
           }
         } catch {
           // Consolidation failed — fall through to error
