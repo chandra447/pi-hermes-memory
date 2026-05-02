@@ -458,8 +458,14 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.loadFromDisk();
 
       const result = store.formatForSystemPrompt();
-      assert.ok(result.includes("MEMORY"));
-      assert.ok(result.includes("USER PROFILE"));
+      // Content should be present inside fenced blocks
+      assert.ok(result.includes("<memory-context>"), "should use context fencing");
+      assert.ok(result.includes("PERSISTENT MEMORY"), "should have guard note");
+      assert.ok(result.includes("NOT new user input"), "should disclaim as not user input");
+      assert.ok(result.includes("END MEMORY"), "should close fence");
+      assert.ok(result.includes("</memory-context>"), "should close XML tag");
+      assert.ok(result.includes("MEMORY"), "should contain MEMORY header");
+      assert.ok(result.includes("USER PROFILE"), "should contain USER PROFILE header");
       assert.ok(result.includes(`${TEST_MARKER} mem data`));
       assert.ok(result.includes(`${TEST_MARKER} user data`));
     });
