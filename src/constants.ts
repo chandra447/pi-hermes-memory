@@ -8,11 +8,11 @@
 export const ENTRY_DELIMITER = "\n§\n";
 
 // ─── Character limits (not tokens — model-independent) ───
-export const DEFAULT_MEMORY_CHAR_LIMIT = 2200;
-export const DEFAULT_USER_CHAR_LIMIT = 1375;
+export const DEFAULT_MEMORY_CHAR_LIMIT = 5000;
+export const DEFAULT_USER_CHAR_LIMIT = 5000;
 
 // ─── Learning loop defaults ───
-export const DEFAULT_PROJECT_CHAR_LIMIT = 2200;
+export const DEFAULT_PROJECT_CHAR_LIMIT = 5000;
 
 export const DEFAULT_NUDGE_INTERVAL = 10;
 export const DEFAULT_FLUSH_MIN_TURNS = 6;

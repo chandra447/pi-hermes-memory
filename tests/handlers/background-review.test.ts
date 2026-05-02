@@ -61,9 +61,9 @@ const defaultConfig = {
   flushMinTurns: 6,
   flushOnCompact: true,
   flushOnShutdown: true,
-  memoryCharLimit: 2200,
-  userCharLimit: 1375,
-  projectCharLimit: 2200,
+  memoryCharLimit: 5000,
+  userCharLimit: 5000,
+  projectCharLimit: 5000,
 };
 
 const mockStore = {

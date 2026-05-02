@@ -8,8 +8,8 @@ import { loadConfig, DEFAULT_CONFIG_PATH } from "../src/config.js";
 describe("loadConfig", () => {
   it("returns defaults when no config file exists", () => {
     const config = loadConfig();
-    assert.strictEqual(config.memoryCharLimit, 2200);
-    assert.strictEqual(config.userCharLimit, 1375);
+    assert.strictEqual(config.memoryCharLimit, 5000);
+    assert.strictEqual(config.userCharLimit, 5000);
     assert.strictEqual(config.nudgeInterval, 10);
     assert.strictEqual(config.reviewEnabled, true);
     assert.strictEqual(config.flushOnCompact, true);
@@ -28,7 +28,7 @@ describe("loadConfig", () => {
     assert.strictEqual(config.memoryCharLimit, 3000);
     assert.strictEqual(config.nudgeInterval, 15);
     // Unset values use defaults
-    assert.strictEqual(config.userCharLimit, 1375);
+    assert.strictEqual(config.userCharLimit, 5000);
     assert.strictEqual(config.reviewEnabled, true);
     // Clean up
     fs.rmSync(DEFAULT_CONFIG_PATH);
@@ -39,7 +39,7 @@ describe("loadConfig", () => {
     fs.writeFileSync(DEFAULT_CONFIG_PATH, JSON.stringify({ reviewEnabled: false }));
     const config = loadConfig();
     assert.strictEqual(config.reviewEnabled, false);
-    assert.strictEqual(config.memoryCharLimit, 2200); // default
+    assert.strictEqual(config.memoryCharLimit, 5000); // default
     fs.rmSync(DEFAULT_CONFIG_PATH);
   });
 
@@ -56,8 +56,8 @@ describe("loadConfig", () => {
     assert.strictEqual(config.flushOnCompact, false);
     assert.strictEqual(config.flushOnShutdown, false);
     assert.strictEqual(config.flushMinTurns, 20);
-    assert.strictEqual(config.memoryCharLimit, 2200);
-    assert.strictEqual(config.userCharLimit, 1375);
+    assert.strictEqual(config.memoryCharLimit, 5000);
+    assert.strictEqual(config.userCharLimit, 5000);
     assert.strictEqual(config.nudgeInterval, 10);
     fs.rmSync(DEFAULT_CONFIG_PATH);
   });
@@ -74,7 +74,7 @@ describe("loadConfig", () => {
     fs.mkdirSync(path.dirname(DEFAULT_CONFIG_PATH), { recursive: true });
     fs.writeFileSync(DEFAULT_CONFIG_PATH, "{ bad json }");
     const config = loadConfig();
-    assert.strictEqual(config.memoryCharLimit, 2200);
+    assert.strictEqual(config.memoryCharLimit, 5000);
     assert.strictEqual(config.reviewEnabled, true);
     fs.rmSync(DEFAULT_CONFIG_PATH);
   });
