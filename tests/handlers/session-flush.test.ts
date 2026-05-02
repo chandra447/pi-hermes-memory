@@ -41,9 +41,9 @@ function mockBranch(n: number) {
 
 function defaultConfig(overrides: Partial<MemoryConfig> = {}): MemoryConfig {
   return {
-    memoryCharLimit: 2200,
-    userCharLimit: 1375,
-    projectCharLimit: 2200,
+    memoryCharLimit: 5000,
+    userCharLimit: 5000,
+    projectCharLimit: 5000,
     nudgeInterval: 10,
     reviewEnabled: true,
     flushOnCompact: true,

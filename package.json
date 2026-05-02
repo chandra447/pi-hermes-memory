@@ -1,6 +1,6 @@
 {
   "name": "pi-hermes-memory",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Your Pi agent remembers everything across sessions — your preferences, your stack, your corrections, and even how it solved problems. Zero-config install, works immediately. Persistent memory + procedural skills + auto-correction detection + security-first content scanning.",
   "type": "module",
   "main": "src/index.ts",
@@ -43,8 +43,12 @@
   "devDependencies": {
     "@mariozechner/pi-ai": "^0.70.0",
     "@mariozechner/pi-coding-agent": "^0.70.0",
+    "@types/better-sqlite3": "^7.6.13",
     "tsx": "^4.21.0",
     "typebox": "^1.1.33",
     "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.9.0"
   }
 }

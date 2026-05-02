@@ -52,7 +52,7 @@ describe("registerMemoryTool", () => {
         success: true,
         target: "memory",
         entries: ["Entry one"],
-        usage: "5% — 110/2200 chars",
+        usage: "5% — 110/5000 chars",
         entry_count: 1,
         message: "Entry added.",
       }),
@@ -65,7 +65,7 @@ describe("registerMemoryTool", () => {
     const parsed = JSON.parse(result.content[0].text);
     assert.strictEqual(parsed.success, true, "result should be success");
     assert.ok(parsed.usage.includes("chars"), "usage should contain 'chars'");
-    assert.ok(parsed.usage.includes("2200"), "usage should show total limit");
+    assert.ok(parsed.usage.includes("5000"), "usage should show total limit");
     assert.strictEqual(parsed.entry_count, 1, "entry_count should be 1");
     assert.strictEqual(result.details.success, true, "details should mirror result");
   });
@@ -140,7 +140,7 @@ describe("registerMemoryTool", () => {
     const mockStore = {
       replace: (...args: any[]) => {
         replaceArgs = args;
-        return { success: true, target: "memory", entries: ["new"], usage: "5% — 110/2200 chars", entry_count: 1 };
+        return { success: true, target: "memory", entries: ["new"], usage: "5% — 110/5000 chars", entry_count: 1 };
       },
     } as unknown as MemoryStore;
 
@@ -163,7 +163,7 @@ describe("registerMemoryTool", () => {
     const mockStore = {
       remove: (...args: any[]) => {
         removeArgs = args;
-        return { success: true, target: "memory", entries: [], usage: "0% — 0/2200 chars", entry_count: 0 };
+        return { success: true, target: "memory", entries: [], usage: "0% — 0/5000 chars", entry_count: 0 };
       },
     } as unknown as MemoryStore;
 

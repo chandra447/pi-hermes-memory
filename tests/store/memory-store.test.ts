@@ -31,7 +31,7 @@ function makeConfig(overrides?: Partial<MemoryConfig>): MemoryConfig {
   return {
     memoryCharLimit: DEFAULT_MEMORY_CHAR_LIMIT,
     userCharLimit: DEFAULT_USER_CHAR_LIMIT,
-    projectCharLimit: 2200,
+    projectCharLimit: 5000,
     nudgeInterval: 10,
     reviewEnabled: false,
     flushOnCompact: false,
