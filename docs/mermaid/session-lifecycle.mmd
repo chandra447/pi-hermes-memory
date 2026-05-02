@@ -1,0 +1,43 @@
+sequenceDiagram
+    participant User
+    participant Pi
+    participant Extension
+    participant Disk as ~/.pi/agent/memory/
+
+    Note over Pi,Disk: ── Session Start ──
+    Pi->>Extension: session_start event
+    Extension->>Disk: loadFromDisk() — read MEMORY.md + USER.md + skills/
+    Extension-->>Extension: Capture frozen snapshot (memory + skill index)
+
+    Note over Pi,Disk: ── System Prompt Injection ──
+    Pi->>Extension: before_agent_start event
+    Extension-->>Pi: systemPrompt + frozen memory block + skill index
+    Note right of Pi: Agent now "remembers"<br/>facts AND procedures<br/>from past sessions
+
+    Note over Pi,Disk: ── Agent Loop ──
+    User->>Pi: "Remember I prefer vim"
+    Pi->>Extension: tool_call (memory, add)
+    Extension->>Extension: scanContent() — security check
+    Extension->>Disk: Atomic write to USER.md
+    Extension-->>Pi: { success: true, usage: "3% — 41/1375" }
+
+    Note over Pi,Disk: ── User Correction ──
+    User->>Pi: "No, don't use npm — use pnpm"
+    Extension->>Extension: isCorrection() = true
+    Extension->>Pi: pi.exec("pi -p", correctionPrompt)
+    Note right of Pi: Immediate save<br/>no waiting for nudge
+
+    Note over Pi,Disk: ── Complex Task (8+ tool calls) ──
+    Pi->>Extension: turn_end (8 tool calls, 3 tool types)
+    Extension->>Pi: pi.exec("pi -p", skillExtractionPrompt)
+    Note right of Pi: Extract reusable<br/>procedure as skill
+
+    Note over Pi,Disk: ── Background Review (10 turns or 15 tool calls) ──
+    Pi->>Extension: turn_end event
+    Extension->>Pi: pi.exec("pi -p", reviewPrompt)
+    Note right of Pi: Reviews conversation<br/>saves memories AND skills
+
+    Note over Pi,Disk: ── Session End ──
+    Pi->>Extension: session_shutdown event
+    Extension->>Pi: pi.exec("pi -p", flushPrompt)
+    Note right of Pi: One last turn to flush<br/>anything worth saving

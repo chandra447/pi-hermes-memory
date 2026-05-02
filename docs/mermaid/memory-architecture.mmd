@@ -1,0 +1,26 @@
+graph TB
+    subgraph "Persistent Storage"
+        MEM["MEMORY.md<br/><i>Agent's notes</i>"]
+        USR["USER.md<br/><i>User profile</i>"]
+        SKL["skills/<br/><i>Procedural memory</i><br/>debug-ts.md<br/>deploy-checklist.md"]
+    end
+
+    subgraph "System Prompt (frozen snapshot)"
+        SMEM["Memory block<br/>Full content"]
+        SUSR["User block<br/>Full content"]
+        SSKL["Skill index<br/>Names + descriptions only"]
+    end
+
+    subgraph "On Demand (via skill tool)"
+        FULL["Full skill content<br/>Loaded when needed"]
+    end
+
+    MEM --> SMEM
+    USR --> SUSR
+    SKL --> SSKL
+    SSKL -.->|"skill view"| FULL
+
+    style SMEM fill:#1a1a2e,stroke:#e94560,color:#fff
+    style SUSR fill:#1a1a2e,stroke:#e94560,color:#fff
+    style SSKL fill:#16213e,stroke:#0f3460,color:#fff
+    style FULL fill:#0a1128,stroke:#1282a2,color:#fff

@@ -1,0 +1,42 @@
+graph LR
+    subgraph "pi-hermes-memory/src/"
+        IDX["index.ts<br/><i>Entry point</i>"]
+        MS["memory-store.ts<br/><i>Memory CRUD</i>"]
+        SS["skill-store.ts<br/><i>Skill CRUD</i>"]
+        MT["memory-tool.ts<br/><i>Memory LLM tool</i>"]
+        ST["skill-tool.ts<br/><i>Skill LLM tool</i>"]
+        CS["content-scanner.ts<br/><i>Security</i>"]
+        BR["background-review.ts<br/><i>Learning loop</i>"]
+        AC["auto-consolidate.ts<br/><i>Memory merge</i>"]
+        CD["correction-detector.ts<br/><i>Instant save</i>"]
+        SA["skill-auto-trigger.ts<br/><i>Skill extraction</i>"]
+        SF["session-flush.ts<br/><i>Pre-compaction flush</i>"]
+        IN["insights.ts<br/><i>/memory-insights</i>"]
+        SC["skills-command.ts<br/><i>/memory-skills</i>"]
+    end
+
+    IDX --> MS
+    IDX --> SS
+    IDX --> MT
+    IDX --> ST
+    IDX --> BR
+    IDX --> AC
+    IDX --> CD
+    IDX --> SA
+    IDX --> SF
+    IDX --> IN
+    IDX --> SC
+    MT --> MS
+    ST --> SS
+    MS --> CS
+    SS --> CS
+    BR --> MS
+    AC --> MS
+    CD --> MS
+    SA --> MS
+    SA --> SS
+
+    style IDX fill:#e94560,stroke:#fff,color:#fff
+    style MS fill:#0f3460,stroke:#fff,color:#fff
+    style SS fill:#0f3460,stroke:#fff,color:#fff
+    style CS fill:#ff6600,stroke:#fff,color:#fff

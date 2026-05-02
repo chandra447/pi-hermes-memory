@@ -1,0 +1,22 @@
+flowchart LR
+    A["LLM calls<br/>memory or skill"] --> B{scanContent}
+    B -->|Blocked| C["❌ Return error"]
+    B -->|Safe| D{Char limit<br/>check}
+    D -->|Exceeds| E{autoConsolidate?}
+    E -->|Yes| G["🔄 Merge & prune<br/>then retry"]
+    E -->|No| F["❌ Return budget error"]
+    D -->|Within limit| H["✅ Write to disk"]
+
+    subgraph "Blocked Patterns"
+        P1["'ignore previous instructions'"]
+        P2["'curl ${API_KEY}'"]
+        P3["Zero-width chars"]
+    end
+
+    B -.- P1
+    B -.- P2
+    B -.- P3
+
+    style C fill:#3d0000,stroke:#ff4444,color:#fff
+    style G fill:#003d3d,stroke:#00cccc,color:#fff
+    style H fill:#003d00,stroke:#44ff44,color:#fff

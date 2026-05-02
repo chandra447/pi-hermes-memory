@@ -24,51 +24,7 @@ Your Pi agent normally forgets everything when you close a session. This extensi
 
 ### Session Lifecycle
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Pi
-    participant Extension
-    participant Disk as ~/.pi/agent/memory/
-
-    Note over Pi,Disk: ── Session Start ──
-    Pi->>Extension: session_start event
-    Extension->>Disk: loadFromDisk() — read MEMORY.md + USER.md + skills/
-    Extension-->>Extension: Capture frozen snapshot (memory + skill index)
-
-    Note over Pi,Disk: ── System Prompt Injection ──
-    Pi->>Extension: before_agent_start event
-    Extension-->>Pi: systemPrompt + frozen memory block + skill index
-    Note right of Pi: Agent now "remembers"<br/>facts AND procedures<br/>from past sessions
-
-    Note over Pi,Disk: ── Agent Loop ──
-    User->>Pi: "Remember I prefer vim"
-    Pi->>Extension: tool_call (memory, add)
-    Extension->>Extension: scanContent() — security check
-    Extension->>Disk: Atomic write to USER.md
-    Extension-->>Pi: { success: true, usage: "3% — 41/1375" }
-
-    Note over Pi,Disk: ── User Correction ──
-    User->>Pi: "No, don't use npm — use pnpm"
-    Extension->>Extension: isCorrection() = true
-    Extension->>Pi: pi.exec("pi -p", correctionPrompt)
-    Note right of Pi: Immediate save<br/>no waiting for nudge
-
-    Note over Pi,Disk: ── Complex Task (8+ tool calls) ──
-    Pi->>Extension: turn_end (8 tool calls, 3 tool types)
-    Extension->>Pi: pi.exec("pi -p", skillExtractionPrompt)
-    Note right of Pi: Extract reusable<br/>procedure as skill
-
-    Note over Pi,Disk: ── Background Review (10 turns or 15 tool calls) ──
-    Pi->>Extension: turn_end event
-    Extension->>Pi: pi.exec("pi -p", reviewPrompt)
-    Note right of Pi: Reviews conversation<br/>saves memories AND skills
-
-    Note over Pi,Disk: ── Session End ──
-    Pi->>Extension: session_shutdown event
-    Extension->>Pi: pi.exec("pi -p", flushPrompt)
-    Note right of Pi: One last turn to flush<br/>anything worth saving
-```
+![Session Lifecycle](docs/images/session-lifecycle.svg)
 
 ### Memory + Skills Architecture
 
@@ -80,63 +36,13 @@ The extension manages three types of knowledge:
 | **User Profile** (USER.md) | Who you are — name, preferences, communication style | 1,375 chars max | Fixed per session |
 | **Skills** (skills/*.md) | Procedures — *how* to do something, reusable across sessions | Unlimited | ~3K for index, full on demand |
 
-```mermaid
-graph TB
-    subgraph "Persistent Storage"
-        MEM["MEMORY.md<br/><i>Agent's notes</i>"]
-        USR["USER.md<br/><i>User profile</i>"]
-        SKL["skills/<br/><i>Procedural memory</i><br/>debug-ts.md<br/>deploy-checklist.md"]
-    end
-
-    subgraph "System Prompt (frozen snapshot)"
-        SMEM["Memory block<br/>Full content"]
-        SUSR["User block<br/>Full content"]
-        SSKL["Skill index<br/>Names + descriptions only"]
-    end
-
-    subgraph "On Demand (via skill tool)"
-        FULL["Full skill content<br/>Loaded when needed"]
-    end
-
-    MEM --> SMEM
-    USR --> SUSR
-    SKL --> SSKL
-    SSKL -.->|"skill view"| FULL
-
-    style SMEM fill:#1a1a2e,stroke:#e94560,color:#fff
-    style SUSR fill:#1a1a2e,stroke:#e94560,color:#fff
-    style SSKL fill:#16213e,stroke:#0f3460,color:#fff
-    style FULL fill:#0a1128,stroke:#1282a2,color:#fff
-```
+![Memory + Skills Architecture](docs/images/memory-architecture.svg)
 
 ### Security: Content Scanning
 
 Every write — memory and skills — passes through a scanner before being accepted. This prevents the LLM from being tricked into storing malicious content that would later be injected into the system prompt.
 
-```mermaid
-flowchart LR
-    A["LLM calls<br/>memory or skill"] --> B{scanContent}
-    B -->|Blocked| C["❌ Return error"]
-    B -->|Safe| D{Char limit<br/>check}
-    D -->|Exceeds| E{autoConsolidate?}
-    E -->|Yes| G["🔄 Merge & prune<br/>then retry"]
-    E -->|No| F["❌ Return budget error"]
-    D -->|Within limit| H["✅ Write to disk"]
-
-    subgraph "Blocked Patterns"
-        P1["'ignore previous instructions'"]
-        P2["'curl ${API_KEY}'"]
-        P3["Zero-width chars"]
-    end
-
-    B -.- P1
-    B -.- P2
-    B -.- P3
-
-    style C fill:#3d0000,stroke:#ff4444,color:#fff
-    style G fill:#003d3d,stroke:#00cccc,color:#fff
-    style H fill:#003d00,stroke:#44ff44,color:#fff
-```
+![Security: Content Scanning](docs/images/security-flow.svg)
 
 ## Installation
 
@@ -401,50 +307,7 @@ These are plain markdown files. You can read and edit them directly if you want 
 
 ## Architecture
 
-```mermaid
-graph LR
-    subgraph "pi-hermes-memory/src/"
-        IDX["index.ts<br/><i>Entry point</i>"]
-        MS["memory-store.ts<br/><i>Memory CRUD</i>"]
-        SS["skill-store.ts<br/><i>Skill CRUD</i>"]
-        MT["memory-tool.ts<br/><i>Memory LLM tool</i>"]
-        ST["skill-tool.ts<br/><i>Skill LLM tool</i>"]
-        CS["content-scanner.ts<br/><i>Security</i>"]
-        BR["background-review.ts<br/><i>Learning loop</i>"]
-        AC["auto-consolidate.ts<br/><i>Memory merge</i>"]
-        CD["correction-detector.ts<br/><i>Instant save</i>"]
-        SA["skill-auto-trigger.ts<br/><i>Skill extraction</i>"]
-        SF["session-flush.ts<br/><i>Pre-compaction flush</i>"]
-        IN["insights.ts<br/><i>/memory-insights</i>"]
-        SC["skills-command.ts<br/><i>/memory-skills</i>"]
-    end
-
-    IDX --> MS
-    IDX --> SS
-    IDX --> MT
-    IDX --> ST
-    IDX --> BR
-    IDX --> AC
-    IDX --> CD
-    IDX --> SA
-    IDX --> SF
-    IDX --> IN
-    IDX --> SC
-    MT --> MS
-    ST --> SS
-    MS --> CS
-    SS --> CS
-    BR --> MS
-    AC --> MS
-    CD --> MS
-    SA --> MS
-    SA --> SS
-
-    style IDX fill:#e94560,stroke:#fff,color:#fff
-    style MS fill:#0f3460,stroke:#fff,color:#fff
-    style SS fill:#0f3460,stroke:#fff,color:#fff
-    style CS fill:#ff6600,stroke:#fff,color:#fff
-```
+![Source Architecture](docs/images/source-architecture.svg)
 
 ## Credits
 
