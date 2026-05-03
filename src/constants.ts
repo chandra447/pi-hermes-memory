@@ -45,9 +45,18 @@ THREE TARGETS:
 ACTIONS: add (new entry), replace (update existing -- old_text identifies it), remove (delete -- old_text identifies it).`;
 
 // ─── Background review prompt (ported from _COMBINED_REVIEW_PROMPT in run_agent.py ~L2855) ───
-export const COMBINED_REVIEW_PROMPT = `Review the conversation above and consider two things:
+export const COMBINED_REVIEW_PROMPT = `Review the conversation above and consider these aspects:
 
 **Memory**: Has the user revealed things about themselves — their persona, desires, preferences, or personal details? Has the user expressed expectations about how you should behave, their work style, or ways they want you to operate? If so, save using the memory tool.
+
+**Failures & Corrections**: Did anything fail or go wrong? Extract these as failure memories:
+- [failure] What was tried but didn't work? (e.g., "Used localStorage for tokens — XSS vulnerability")
+- [correction] Did the user correct you? (e.g., "Use pnpm, not npm")
+- [insight] What was learned from the experience?
+- [convention] Any project conventions discovered?
+- [tool-quirk] Any tool-specific knowledge gained?
+
+For failures, include: what was tried, why it failed, what error occurred, and what worked instead.
 
 **Skills**: Was a complex, non-trivial approach used to complete a task — one that required trial and error, multiple tool calls, or changing course? If so, save a reusable procedure using the skill tool with action 'create'. Include: when to use it, step-by-step procedure, pitfalls to avoid, and how to verify success. If a related skill already exists, use action 'patch' to update it instead of creating a duplicate.
 

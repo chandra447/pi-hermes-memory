@@ -21,6 +21,19 @@ import type { MemoryConfig } from "../types.js";
 import { getMessageText } from "../types.js";
 
 /**
+ * Extract the directive part from a correction message.
+ * E.g., "no, use pnpm instead" -> "use pnpm instead"
+ */
+function extractCorrectionDirective(text: string): string {
+  // Remove common correction starters
+  const cleaned = text
+    .replace(/^(no|wrong|actually|stop|don'?t|that'?s not|I said|I told you)[,\.\s!]+/i, '')
+    .replace(/^(please\s+)?/i, '')
+    .trim();
+  return cleaned || text;
+}
+
+/**
  * Check if a user message is a correction using the two-pass filter.
  * Returns true if the message should trigger an immediate save.
  */
@@ -146,6 +159,22 @@ export function setupCorrectionDetector(
         if (output && !output.toLowerCase().includes("nothing to save")) {
           ctx.ui.notify("🔧 Correction detected — memory updated", "info");
         }
+      }
+
+      // Also save as a failure memory for learning
+      try {
+        const lastUserMsg = recentParts.find(p => p.startsWith("[USER]"));
+        const correctionText = lastUserMsg ? lastUserMsg.replace(/^\[USER\]:\s*/, "") : "";
+        if (correctionText) {
+          const directive = extractCorrectionDirective(correctionText);
+          await store.addFailure(directive, {
+            category: "correction",
+            failureReason: "User corrected the agent",
+            project: projectStore ? "project" : undefined,
+          });
+        }
+      } catch {
+        // Best-effort — don't block the session
       }
     } catch {
       // Best-effort — don't block the session
