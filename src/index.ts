@@ -125,32 +125,29 @@ export default function (pi: ExtensionAPI) {
   registerIndexSessionsCommand(pi);
 
   // ── 12. Auto-index session on shutdown ──
-  let currentSessionId: string | null = null;
-  let currentSessionCwd: string | null = null;
-
-  pi.on("session_start", async (event, _ctx) => {
-    // Capture session metadata for indexing
-    currentSessionId = (event as Record<string, unknown>).sessionId as string ?? null;
-    currentSessionCwd = process.cwd();
-  });
-
   pi.on("session_shutdown", async (_event, _ctx) => {
-    // Index the current session to SQLite
-    if (currentSessionId && currentSessionCwd) {
-      try {
-        const sessionsDir = path.join(os.homedir(), ".pi", "agent", "sessions");
-        const encodedCwd = currentSessionCwd.replace(/\//g, "-");
-        const sessionFiles = require("node:fs").readdirSync(path.join(sessionsDir, encodedCwd))
-          .filter((f: string) => f.includes(currentSessionId!) && f.endsWith(".jsonl"));
-        if (sessionFiles.length > 0) {
-          const sessionData = parseSessionFile(path.join(sessionsDir, encodedCwd, sessionFiles[0]));
+    try {
+      const fs = require("node:fs");
+      const sessionsDir = path.join(os.homedir(), ".pi", "agent", "sessions");
+      const cwd = process.cwd();
+      const encodedCwd = cwd.replace(/\//g, "-");
+      const sessionDir = path.join(sessionsDir, encodedCwd);
+
+      if (fs.existsSync(sessionDir)) {
+        // Find the most recent JSONL file (the one we just finished)
+        const files = fs.readdirSync(sessionDir)
+          .filter((f: string) => f.endsWith(".jsonl"))
+          .sort()
+          .reverse();
+        if (files.length > 0) {
+          const sessionData = parseSessionFile(path.join(sessionDir, files[0]));
           if (sessionData) {
             indexSession(dbManager, sessionData);
           }
         }
-      } catch {
-        // Silent fail — don't block shutdown
       }
+    } catch {
+      // Silent fail — don't block shutdown
     }
   });
 }
