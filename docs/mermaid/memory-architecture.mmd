@@ -2,12 +2,14 @@ graph TB
     subgraph "Persistent Storage"
         MEM["MEMORY.md<br/><i>Agent's notes</i>"]
         USR["USER.md<br/><i>User profile</i>"]
+        FAIL["failures.md<br/><i>Failure memory</i><br/>corrections, insights, failures"]
         SKL["skills/<br/><i>Procedural memory</i><br/>debug-ts.md<br/>deploy-checklist.md"]
     end
 
     subgraph "System Prompt (frozen snapshot)"
         SMEM["Memory block<br/>Full content"]
         SUSR["User block<br/>Full content"]
+        SFAIL["Failures block<br/>Recent 7 days, max 5"]
         SSKL["Skill index<br/>Names + descriptions only"]
     end
 
@@ -17,10 +19,12 @@ graph TB
 
     MEM --> SMEM
     USR --> SUSR
+    FAIL --> SFAIL
     SKL --> SSKL
     SSKL -.->|"skill view"| FULL
 
     style SMEM fill:#1a1a2e,stroke:#e94560,color:#fff
     style SUSR fill:#1a1a2e,stroke:#e94560,color:#fff
+    style SFAIL fill:#2d1b2e,stroke:#ff6b6b,color:#fff
     style SSKL fill:#16213e,stroke:#0f3460,color:#fff
     style FULL fill:#0a1128,stroke:#1282a2,color:#fff

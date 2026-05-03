@@ -1,5 +1,5 @@
 flowchart LR
-    A["LLM calls<br/>memory or skill"] --> B{scanContent}
+    A["LLM calls<br/>memory, skill, or failure"] --> B{scanContent}
     B -->|Blocked| C["❌ Return error"]
     B -->|Safe| D{Char limit<br/>check}
     D -->|Exceeds| E{autoConsolidate?}
@@ -11,12 +11,30 @@ flowchart LR
         P1["'ignore previous instructions'"]
         P2["'curl ${API_KEY}'"]
         P3["Zero-width chars"]
+        P4["Secret patterns<br/>API keys, tokens"]
     end
 
     B -.- P1
     B -.- P2
     B -.- P3
+    B -.- P4
+
+    subgraph "Failure Memory"
+        F1["Corrections"]
+        F2["Failures"]
+        F3["Insights"]
+        F4["Conventions"]
+    end
+
+    H --> F1
+    H --> F2
+    H --> F3
+    H --> F4
 
     style C fill:#3d0000,stroke:#ff4444,color:#fff
     style G fill:#003d3d,stroke:#00cccc,color:#fff
     style H fill:#003d00,stroke:#44ff44,color:#fff
+    style F1 fill:#2d1b2e,stroke:#ff6b6b,color:#fff
+    style F2 fill:#2d1b2e,stroke:#ff6b6b,color:#fff
+    style F3 fill:#2d1b2e,stroke:#ff6b6b,color:#fff
+    style F4 fill:#2d1b2e,stroke:#ff6b6b,color:#fff
