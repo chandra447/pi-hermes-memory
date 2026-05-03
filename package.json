@@ -1,6 +1,6 @@
 {
   "name": "pi-hermes-memory",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "🧠 Persistent memory + 🔍 session search + 🛡️ secret scanning for Pi. SQLite FTS5 search across every conversation, auto-consolidation, memory aging, procedural skills. 272 tests. Ported from Hermes agent.",
   "type": "module",
   "main": "src/index.ts",
