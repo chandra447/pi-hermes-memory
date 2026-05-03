@@ -111,7 +111,7 @@ export function setupBackgroundReview(
 
       const result = await pi.exec("pi", ["-p", "--no-session", reviewPrompt.join("\n")], {
         signal: ctx.signal,
-        timeout: 60000,
+        timeout: 120000,
       });
 
       if (result.code === 0 && result.stdout) {
