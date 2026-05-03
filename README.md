@@ -10,6 +10,8 @@
 [![tests](https://img.shields.io/badge/tests-272-green.svg)](#testing)
 [![license](https://img.shields.io/npm/l/pi-hermes-memory.svg)](LICENSE)
 
+---
+
 </div>
 
 Your Pi agent normally forgets everything when you close a session. **This extension fixes that.**
