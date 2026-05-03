@@ -14,6 +14,8 @@ Your Pi agent normally forgets everything when you close a session. **This exten
 
 - 🔍 **Search every conversation** — "what did we discuss about auth?" finds it instantly
 - 🧠 **Persistent memory** — facts, preferences, corrections survive across sessions
+- ⚠️ **Learns from failures** — remembers what didn't work so you don't repeat mistakes
+- 🏷️ **Categorized memories** — failures, corrections, insights, conventions, and tool quirks organized for fast retrieval
 - 🛡️ **Secret scanning** — API keys and tokens are blocked from being saved
 - 📚 **Procedural skills** — the agent saves *how* it solved problems, not just what
 - ⚡ **Background learning** — reviews every 10 turns, saves what matters
