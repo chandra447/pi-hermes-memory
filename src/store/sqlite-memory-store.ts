@@ -1,4 +1,5 @@
 import { DatabaseManager } from './db.js';
+import type { MemoryCategory } from '../types.js';
 
 /**
  * A memory entry stored in SQLite.
@@ -6,8 +7,12 @@ import { DatabaseManager } from './db.js';
 export interface SqliteMemoryEntry {
   id: number;
   project: string | null;
-  target: 'memory' | 'user';
+  target: 'memory' | 'user' | 'failure';
+  category: MemoryCategory | null;
   content: string;
+  failureReason: string | null;
+  toolState: string | null;
+  correctedTo: string | null;
   created: string;
   lastReferenced: string;
 }
@@ -18,22 +23,30 @@ export interface SqliteMemoryEntry {
 export function addMemory(
   dbManager: DatabaseManager,
   content: string,
-  target: 'memory' | 'user' = 'memory',
-  project: string | null = null
+  target: 'memory' | 'user' | 'failure' = 'memory',
+  project: string | null = null,
+  category: MemoryCategory | null = null,
+  failureReason: string | null = null,
+  toolState: string | null = null,
+  correctedTo: string | null = null
 ): SqliteMemoryEntry {
   const db = dbManager.getDb();
   const today = new Date().toISOString().split('T')[0];
 
   const result = db.prepare(`
-    INSERT INTO memories (project, target, content, created, last_referenced)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(project, target, content, today, today);
+    INSERT INTO memories (project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(project, target, category, content, failureReason, toolState, correctedTo, today, today);
 
   return {
     id: Number(result.lastInsertRowid),
     project,
     target,
+    category,
     content,
+    failureReason,
+    toolState,
+    correctedTo,
     created: today,
     lastReferenced: today,
   };
@@ -58,10 +71,10 @@ function escapeFts5Query(query: string): string {
 export function searchMemories(
   dbManager: DatabaseManager,
   query: string,
-  options: { project?: string; target?: string; limit?: number } = {}
+  options: { project?: string; target?: string; category?: MemoryCategory; limit?: number } = {}
 ): SqliteMemoryEntry[] {
   const db = dbManager.getDb();
-  const { project, target, limit = 10 } = options;
+  const { project, target, category, limit = 10 } = options;
 
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -84,10 +97,15 @@ export function searchMemories(
     params.push(target);
   }
 
+  if (category) {
+    conditions.push('m.category = ?');
+    params.push(category);
+  }
+
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const sql = `
-    SELECT id, project, target, content, created, last_referenced
+    SELECT id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced
     FROM memories m
     ${whereClause}
     ORDER BY m.last_referenced DESC
@@ -99,7 +117,11 @@ export function searchMemories(
     id: number;
     project: string | null;
     target: string;
+    category: string | null;
     content: string;
+    failure_reason: string | null;
+    tool_state: string | null;
+    corrected_to: string | null;
     created: string;
     last_referenced: string;
   }>;
@@ -107,8 +129,12 @@ export function searchMemories(
   return rows.map(row => ({
     id: row.id,
     project: row.project,
-    target: row.target as 'memory' | 'user',
+    target: row.target as 'memory' | 'user' | 'failure',
+    category: row.category as MemoryCategory | null,
     content: row.content,
+    failureReason: row.failure_reason,
+    toolState: row.tool_state,
+    correctedTo: row.corrected_to,
     created: row.created,
     lastReferenced: row.last_referenced,
   }));
@@ -119,10 +145,10 @@ export function searchMemories(
  */
 export function getMemories(
   dbManager: DatabaseManager,
-  options: { project?: string | null; target?: string } = {}
+  options: { project?: string | null; target?: string; category?: MemoryCategory } = {}
 ): SqliteMemoryEntry[] {
   const db = dbManager.getDb();
-  const { project, target } = options;
+  const { project, target, category } = options;
 
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -141,10 +167,15 @@ export function getMemories(
     params.push(target);
   }
 
+  if (category) {
+    conditions.push('category = ?');
+    params.push(category);
+  }
+
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const rows = db.prepare(`
-    SELECT id, project, target, content, created, last_referenced
+    SELECT id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced
     FROM memories
     ${whereClause}
     ORDER BY last_referenced DESC
@@ -152,7 +183,11 @@ export function getMemories(
     id: number;
     project: string | null;
     target: string;
+    category: string | null;
     content: string;
+    failure_reason: string | null;
+    tool_state: string | null;
+    corrected_to: string | null;
     created: string;
     last_referenced: string;
   }>;
@@ -160,8 +195,12 @@ export function getMemories(
   return rows.map(row => ({
     id: row.id,
     project: row.project,
-    target: row.target as 'memory' | 'user',
+    target: row.target as 'memory' | 'user' | 'failure',
+    category: row.category as MemoryCategory | null,
     content: row.content,
+    failureReason: row.failure_reason,
+    toolState: row.tool_state,
+    correctedTo: row.corrected_to,
     created: row.created,
     lastReferenced: row.last_referenced,
   }));
@@ -174,6 +213,64 @@ export function removeMemory(dbManager: DatabaseManager, id: number): boolean {
   const db = dbManager.getDb();
   const result = db.prepare('DELETE FROM memories WHERE id = ?').run(id);
   return result.changes > 0;
+}
+
+/**
+ * Get recent failure memories (last N days).
+ */
+export function getRecentFailures(
+  dbManager: DatabaseManager,
+  maxAgeDays = 7,
+  project?: string | null
+): SqliteMemoryEntry[] {
+  const db = dbManager.getDb();
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - maxAgeDays);
+  const cutoffStr = cutoff.toISOString().split('T')[0];
+
+  const conditions: string[] = ['target = ?', 'created >= ?'];
+  const params: unknown[] = ['failure', cutoffStr];
+
+  if (project !== undefined) {
+    if (project === null) {
+      conditions.push('project IS NULL');
+    } else {
+      conditions.push('(project = ? OR project IS NULL)');
+      params.push(project);
+    }
+  }
+
+  const rows = db.prepare(`
+    SELECT id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced
+    FROM memories
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY created DESC
+    LIMIT 5
+  `).all(...params) as Array<{
+    id: number;
+    project: string | null;
+    target: string;
+    category: string | null;
+    content: string;
+    failure_reason: string | null;
+    tool_state: string | null;
+    corrected_to: string | null;
+    created: string;
+    last_referenced: string;
+  }>;
+
+  return rows.map(row => ({
+    id: row.id,
+    project: row.project,
+    target: row.target as 'memory' | 'user' | 'failure',
+    category: row.category as MemoryCategory | null,
+    content: row.content,
+    failureReason: row.failure_reason,
+    toolState: row.tool_state,
+    correctedTo: row.corrected_to,
+    created: row.created,
+    lastReferenced: row.last_referenced,
+  }));
 }
 
 /**

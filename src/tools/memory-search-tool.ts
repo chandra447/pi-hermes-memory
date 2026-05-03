@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { DatabaseManager } from '../store/db.js';
 import { searchMemories, getMemoryStats } from '../store/sqlite-memory-store.js';
+import type { MemoryCategory } from '../types.js';
 
 interface SearchResult {
   success: boolean;
@@ -21,23 +22,27 @@ Use cases:
 - Find memories about a specific topic: "What do I know about auth setup?"
 - Search project-specific memories: "What conventions does project X follow?"
 - Find user preferences: "What are the user's testing preferences?"
+- Search for past failures: "memory_search('auth', category='failure')"
 
 Returns matching memory entries with project context and dates.`,
     promptSnippet: 'Search extended memory store (unlimited capacity)',
     promptGuidelines: [
       'Use memory_search when you need context beyond what is in the system prompt.',
       'Use memory_search to find project-specific memories or user preferences.',
+      'Use memory_search with category filter to find specific types of memories (failure, correction, insight, etc.).',
     ],
     parameters: Type.Object({
       query: Type.String({ description: 'Search query. Use natural language or specific terms.' }),
       project: Type.Optional(Type.String({ description: 'Filter by project name. Pass null for global memories only.' })),
-      target: Type.Optional(StringEnum(['memory', 'user'] as const, { description: 'Filter by target type (memory or user).' })),
+      target: Type.Optional(StringEnum(['memory', 'user', 'failure'] as const, { description: 'Filter by target type (memory, user, or failure).' })),
+      category: Type.Optional(StringEnum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk'] as const, { description: 'Filter by memory category.' })),
       limit: Type.Optional(Type.Number({ description: 'Maximum results to return (default: 10, max: 20).' })),
     }),
-    execute: async (_id: string, args: { query: string; project?: string; target?: string; limit?: number }) => {
+    execute: async (_id: string, args: { query: string; project?: string; target?: string; category?: string; limit?: number }) => {
       const query = args.query;
       const project = args.project;
       const target = args.target;
+      const category = args.category as MemoryCategory | undefined;
       const limit = Math.min(args.limit || 10, 20);
 
       if (!query || query.trim().length === 0) {
@@ -51,7 +56,7 @@ Returns matching memory entries with project context and dates.`,
         return { content: [{ type: 'text' as const, text: result.message! }], details: result };
       }
 
-      const results = searchMemories(dbManager, query, { project, target, limit });
+      const results = searchMemories(dbManager, query, { project, target, category, limit });
 
       if (results.length === 0) {
         const result: SearchResult = { success: true, count: 0, message: `No memories found matching "${query}". Try a different search term or broader query.` };
@@ -62,8 +67,9 @@ Returns matching memory entries with project context and dates.`,
 
       for (const entry of results) {
         const projectLabel = entry.project ? `[${entry.project}]` : '[global]';
-        const targetLabel = entry.target === 'user' ? '👤' : '🧠';
-        output += `${targetLabel} ${projectLabel} ${entry.content}\n`;
+        const targetLabel = entry.target === 'user' ? '👤' : entry.target === 'failure' ? '⚠️' : '🧠';
+        const categoryLabel = entry.category ? ` [${entry.category}]` : '';
+        output += `${targetLabel} ${projectLabel}${categoryLabel} ${entry.content}\n`;
         output += `   Created: ${entry.created} | Last used: ${entry.lastReferenced}\n\n`;
       }
 

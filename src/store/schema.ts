@@ -56,8 +56,12 @@ export const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS memories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project TEXT,
-    target TEXT NOT NULL CHECK (target IN ('memory', 'user')),
+    target TEXT NOT NULL CHECK (target IN ('memory', 'user', 'failure')),
+    category TEXT CHECK (category IN ('failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk')),
     content TEXT NOT NULL,
+    failure_reason TEXT,
+    tool_state TEXT,
+    corrected_to TEXT,
     created DATE NOT NULL,
     last_referenced DATE NOT NULL
   );
@@ -89,6 +93,7 @@ export const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
   CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
   CREATE INDEX IF NOT EXISTS idx_memories_target ON memories(target);
+  CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
   CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
   CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 `;

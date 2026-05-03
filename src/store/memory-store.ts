@@ -22,11 +22,12 @@ import {
   MEMORY_FILE,
   USER_FILE,
 } from "../constants.js";
-import type { MemoryConfig, MemoryResult, MemorySnapshot, ConsolidationResult } from "../types.js";
+import type { MemoryConfig, MemoryResult, MemorySnapshot, ConsolidationResult, MemoryCategory } from "../types.js";
 
 export class MemoryStore {
   private memoryEntries: string[] = [];
   private userEntries: string[] = [];
+  private failureEntries: string[] = [];
   private snapshot: MemorySnapshot = { memory: "", user: "" };
   private consolidator: ((target: "memory" | "user", signal?: AbortSignal) => Promise<ConsolidationResult>) | null = null;
 
@@ -46,24 +47,30 @@ export class MemoryStore {
     return this.config.memoryDir ?? path.join(os.homedir(), ".pi", "agent", "memory");
   }
 
-  private pathFor(target: "memory" | "user"): string {
-    return path.join(this.memoryDir, target === "user" ? USER_FILE : MEMORY_FILE);
+  private pathFor(target: "memory" | "user" | "failure"): string {
+    if (target === "user") return path.join(this.memoryDir, USER_FILE);
+    if (target === "failure") return path.join(this.memoryDir, "failures.md");
+    return path.join(this.memoryDir, MEMORY_FILE);
   }
 
-  private entriesFor(target: "memory" | "user"): string[] {
-    return target === "user" ? this.userEntries : this.memoryEntries;
+  private entriesFor(target: "memory" | "user" | "failure"): string[] {
+    if (target === "user") return this.userEntries;
+    if (target === "failure") return this.failureEntries;
+    return this.memoryEntries;
   }
 
-  private setEntries(target: "memory" | "user", entries: string[]): void {
+  private setEntries(target: "memory" | "user" | "failure", entries: string[]): void {
     if (target === "user") this.userEntries = entries;
+    else if (target === "failure") this.failureEntries = entries;
     else this.memoryEntries = entries;
   }
 
-  private charLimit(target: "memory" | "user"): number {
+  private charLimit(target: "memory" | "user" | "failure"): number {
+    if (target === "failure") return this.config.memoryCharLimit * 2; // Failures get more space
     return target === "user" ? this.config.userCharLimit : this.config.memoryCharLimit;
   }
 
-  private charCount(target: "memory" | "user"): number {
+  private charCount(target: "memory" | "user" | "failure"): number {
     const entries = this.entriesFor(target);
     return entries.length ? entries.join(ENTRY_DELIMITER).length : 0;
   }
@@ -74,10 +81,12 @@ export class MemoryStore {
     await fs.mkdir(this.memoryDir, { recursive: true });
     this.memoryEntries = await this.readFile(this.pathFor("memory"));
     this.userEntries = await this.readFile(this.pathFor("user"));
+    this.failureEntries = await this.readFile(this.pathFor("failure"));
 
     // Deduplicate preserving order
     this.memoryEntries = [...new Set(this.memoryEntries)];
     this.userEntries = [...new Set(this.userEntries)];
+    this.failureEntries = [...new Set(this.failureEntries)];
 
     // Capture frozen snapshot for system prompt injection
     // Strip metadata comments — the LLM doesn't need to see timestamps
@@ -95,7 +104,55 @@ export class MemoryStore {
     return this._add(target, content, signal);
   }
 
-  private async _add(target: "memory" | "user", content: string, signal?: AbortSignal, _retriesLeft = 1): Promise<MemoryResult> {
+  async addFailure(content: string, options: {
+    category: MemoryCategory;
+    failureReason?: string;
+    toolState?: string;
+    correctedTo?: string;
+    project?: string;
+  }): Promise<MemoryResult> {
+    content = content.trim();
+    if (!content) return { success: false, error: "Content cannot be empty." };
+
+    const scanError = scanContent(content);
+    if (scanError) return { success: false, error: scanError };
+
+    const categoryTag = "[" + options.category + "]";
+    const parts = [categoryTag + " " + content];
+    if (options.failureReason) parts.push("Failed: " + options.failureReason);
+    if (options.toolState) parts.push("Tool state: " + options.toolState);
+    if (options.correctedTo) parts.push("Corrected to: " + options.correctedTo);
+    if (options.project) parts.push("Project: " + options.project);
+
+    const failureText = parts.join(" — ");
+    const today = new Date().toISOString().split("T")[0];
+    const encoded = this.encodeEntry(failureText, today, today);
+
+    this.failureEntries.push(encoded);
+    await this.saveToDisk("failure");
+
+    return {
+      success: true,
+      target: "failure",
+      message: "Failure memory saved: " + options.category,
+      entry_count: this.failureEntries.length,
+    };
+  }
+
+  getFailureEntries(maxAgeDays = 7): string[] {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - maxAgeDays);
+    const cutoffStr = cutoff.toISOString().split("T")[0];
+
+    return this.failureEntries
+      .filter((entry) => {
+        const decoded = this.decodeEntry(entry);
+        return decoded.created >= cutoffStr;
+      })
+      .map((entry) => this.stripMetadata(entry));
+  }
+
+  private async _add(target: "memory" | "user" | "failure", content: string, signal?: AbortSignal, _retriesLeft = 1): Promise<MemoryResult> {
     content = content.trim();
     if (!content) return { success: false, error: "Content cannot be empty." };
 
@@ -221,6 +278,16 @@ export class MemoryStore {
     const parts: string[] = [];
     if (this.snapshot.memory) parts.push(this.fenceBlock(this.snapshot.memory));
     if (this.snapshot.user) parts.push(this.fenceBlock(this.snapshot.user));
+
+    // Add recent failure memories
+    const recentFailures = this.getFailureEntries(7);
+    if (recentFailures.length > 0) {
+      const maxFailures = 5;
+      const failures = recentFailures.slice(0, maxFailures);
+      const failureBlock = this.renderFailureBlock(failures);
+      parts.push(this.fenceBlock(failureBlock));
+    }
+
     return parts.join("\n\n");
   }
 
@@ -270,7 +337,7 @@ export class MemoryStore {
     return this.decodeEntry(text).text;
   }
 
-  private successResponse(target: "memory" | "user", message?: string): MemoryResult {
+  private successResponse(target: "memory" | "user" | "failure", message?: string): MemoryResult {
     const entries = this.entriesFor(target);
     const current = this.charCount(target);
     const limit = this.charLimit(target);
@@ -333,6 +400,13 @@ export class MemoryStore {
     return `${separator}\n${header}\n${separator}\n${content}`;
   }
 
+  private renderFailureBlock(entries: string[]): string {
+    if (!entries.length) return "";
+    const header = "RECENT FAILURES & LESSONS (learn from these):";
+    const bulletList = entries.map((e) => "• " + e).join("\n");
+    return `${header}\n${bulletList}`;
+  }
+
   private async readFile(filePath: string): Promise<string[]> {
     try {
       const raw = await fs.readFile(filePath, "utf-8");
@@ -344,7 +418,7 @@ export class MemoryStore {
   }
 
   /** Atomic write: temp file + fs.rename() — same crash-safety as Hermes. */
-  private async saveToDisk(target: "memory" | "user"): Promise<void> {
+  private async saveToDisk(target: "memory" | "user" | "failure"): Promise<void> {
     const filePath = this.pathFor(target);
     const entries = this.entriesFor(target);
     const content = entries.length ? entries.join(ENTRY_DELIMITER) : "";
