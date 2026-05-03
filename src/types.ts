@@ -35,11 +35,19 @@ export interface MemoryConfig {
   sessionRetentionDays?: number;
 }
 
+export type MemoryCategory =
+  | "failure"
+  | "correction"
+  | "insight"
+  | "preference"
+  | "convention"
+  | "tool-quirk";
+
 export interface MemoryResult {
   success: boolean;
   error?: string;
   message?: string;
-  target?: "memory" | "user";
+  target?: "memory" | "user" | "failure";
   entries?: string[];
   usage?: string;
   entry_count?: number;
