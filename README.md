@@ -1,12 +1,10 @@
 <div align="center">
 
-![Pi Hermes Memory](docs/images/pi_memory.svg)
+![Pi Hermes Memory](docs/images/pi_memory.png)
 
 # 🧠 Pi Hermes Memory
 
 **Persistent memory + session search + secret scanning for Pi**
-
-npm: [pi-hermes-memory](https://www.npmjs.com/package/pi-hermes-memory) · tests: 272 · license: [MIT](LICENSE)
 
 ---
 
