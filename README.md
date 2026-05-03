@@ -1,4 +1,10 @@
+<div align="center">
+
+![Pi Hermes Memory](docs/images/pi_memory.svg)
+
 # 🧠 Pi Hermes Memory
+
+</div>
 
 A [Pi coding agent](https://github.com/badlogic/pi-mono) extension that gives your AI agent **persistent memory across sessions** and a **self-directed learning loop** — ported from the [Hermes agent](https://github.com/nousresearch/hermes-agent) harness.
 
