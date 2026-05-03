@@ -2,7 +2,7 @@
  * Learn memory tool command — /learn-memory-tool teaches users about the memory system.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 
 const LEARN_MEMORY_CONTENT = `# Pi Hermes Memory — Quick Guide
 
@@ -72,14 +72,8 @@ const LEARN_MEMORY_CONTENT = `# Pi Hermes Memory — Quick Guide
 export function registerLearnMemoryCommand(pi: ExtensionAPI): void {
   pi.registerCommand("learn-memory-tool", {
     description: "Learn how to use the pi-hermes-memory extension effectively",
-    handler: async (_args, ctx) => {
-      const sendUserMessage = (msg: string) => {
-        if (ctx && typeof ctx === 'object' && 'sendUserMessage' in ctx) {
-          (ctx as { sendUserMessage: (msg: string) => void }).sendUserMessage(msg);
-        }
-      };
-
-      sendUserMessage(LEARN_MEMORY_CONTENT);
+    handler: async (_args, ctx: ExtensionCommandContext) => {
+      ctx.ui.notify(LEARN_MEMORY_CONTENT, 'info');
     },
   });
 }

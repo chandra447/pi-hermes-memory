@@ -5,7 +5,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { DatabaseManager } from '../store/db.js';
 import { indexAllSessions, getSessionStats } from '../store/session-indexer.js';
 
@@ -14,15 +14,9 @@ const SESSIONS_DIR = path.join(os.homedir(), '.pi', 'agent', 'sessions');
 export function registerIndexSessionsCommand(pi: ExtensionAPI): void {
   pi.registerCommand("memory-index-sessions", {
     description: "Import past Pi sessions into the search database",
-    handler: async (_args, ctx) => {
-      const sendUserMessage = (msg: string) => {
-        if (ctx && typeof ctx === 'object' && 'sendUserMessage' in ctx) {
-          (ctx as { sendUserMessage: (msg: string) => void }).sendUserMessage(msg);
-        }
-      };
-
+    handler: async (_args, ctx: ExtensionCommandContext) => {
       // Show initial progress
-      sendUserMessage('🔍 Scanning session directories...');
+      ctx.ui.notify('🔍 Scanning session directories...', 'info');
 
       try {
         // Count sessions first for progress display
@@ -38,7 +32,7 @@ export function registerIndexSessionsCommand(pi: ExtensionAPI): void {
           }
         }
 
-        sendUserMessage(`📁 Found ${totalFiles} session files across ${projectDirs.length} projects\n⏳ Indexing...`);
+        ctx.ui.notify(`📁 Found ${totalFiles} session files across ${projectDirs.length} projects\n⏳ Indexing...`, 'info');
 
         const memoryDir = path.join(os.homedir(), '.pi', 'agent', 'memory');
         const dbManager = new DatabaseManager(memoryDir);
@@ -79,12 +73,12 @@ export function registerIndexSessionsCommand(pi: ExtensionAPI): void {
 
           output += `\n💡 Use the session_search tool to search across indexed sessions.`;
 
-          sendUserMessage(output);
+          ctx.ui.notify(output, 'info');
         } finally {
           dbManager.close();
         }
       } catch (err) {
-        sendUserMessage(`❌ Session indexing failed: ${err instanceof Error ? err.message : String(err)}`);
+        ctx.ui.notify(`❌ Session indexing failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
       }
     },
   });
