@@ -6,9 +6,7 @@
 
 **Persistent memory + session search + secret scanning for Pi**
 
-[![npm version](https://img.shields.io/npm/v/pi-hermes-memory.svg)](https://www.npmjs.com/package/pi-hermes-memory)
-[![tests](https://img.shields.io/badge/tests-272-green.svg)](#testing)
-[![license](https://img.shields.io/npm/l/pi-hermes-memory.svg)](LICENSE)
+npm: [pi-hermes-memory](https://www.npmjs.com/package/pi-hermes-memory) · tests: 272 · license: [MIT](LICENSE)
 
 ---
 
