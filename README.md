@@ -38,6 +38,7 @@ pi install npm:pi-hermes-memory
 |---|---|
 | 🔍 **Session Search** | Search across all past conversations via SQLite FTS5 |
 | 🧠 **Persistent Memory** | Facts, preferences, lessons saved to markdown files |
+| ⚠️ **Failure Memory** | Learn from failures — stores what didn't work and why |
 | 📚 **Procedural Skills** | The agent saves *how* it solved problems as reusable docs |
 | ⚡ **Background Learning** | Every 10 turns (or 15 tool calls) the agent reviews and saves |
 | 🔧 **Correction Detection** | When you correct the agent, it saves immediately |
@@ -124,8 +125,50 @@ System Prompt
 │ • tests use node:test with tsx          │
 │ ═══ END MEMORY ═══                     │
 │ </memory-context>                       │
+│                                         │
+│ <memory-context>                        │
+│ RECENT FAILURES & LESSONS (learn from): │
+│ • [correction] Use pnpm, not npm        │
+│ • [failure] Tried localStorage — XSS    │
+│ • [insight] Auth0 handles refresh tokens│
+│ ═══ END MEMORY ═══                     │
+│ </memory-context>                       │
 └─────────────────────────────────────────┘
 ```
+
+## Failure Memory
+
+The agent learns from failures, corrections, and insights — just like humans do.
+
+### Memory Categories
+
+| Category | What it stores | Example |
+|---|---|---|
+| `failure` | What didn't work and why | "Tried localStorage for tokens — XSS vulnerability" |
+| `correction` | User corrections | "Use pnpm, not npm" |
+| `insight` | Learnings from experience | "Auth0 SDK handles refresh tokens automatically" |
+| `preference` | User preferences | "Prefers dark theme" |
+| `convention` | Project conventions | "Monorepo uses turborepo" |
+| `tool-quirk` | Tool-specific knowledge | "CI needs --frozen-lockfile" |
+
+### How It Works
+
+1. **Auto-detection**: Background review extracts failures from conversations
+2. **Correction capture**: When you correct the agent, it saves what went wrong
+3. **System prompt injection**: Recent failures (last 7 days) are injected at session start
+4. **Searchable**: Use `memory_search("auth", category: "failure")` to find past failures
+
+### Example
+
+```
+User: No, use pnpm not npm
+Agent: [saves correction memory]
+
+Next session:
+Agent: "I remember you prefer pnpm over npm. Let me use that."
+```
+
+The agent learns from its mistakes so you don't have to repeat yourself.
 
 Memory blocks are wrapped in `<memory-context>` XML tags with a guard note ("NOT new user input") to prevent the LLM from treating stored facts as instructions.
 

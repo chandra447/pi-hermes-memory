@@ -29,7 +29,7 @@ export class MemoryStore {
   private userEntries: string[] = [];
   private failureEntries: string[] = [];
   private snapshot: MemorySnapshot = { memory: "", user: "" };
-  private consolidator: ((target: "memory" | "user", signal?: AbortSignal) => Promise<ConsolidationResult>) | null = null;
+  private consolidator: ((target: "memory" | "user" | "failure", signal?: AbortSignal) => Promise<ConsolidationResult>) | null = null;
 
   constructor(private config: MemoryConfig) {}
 
@@ -37,7 +37,7 @@ export class MemoryStore {
    * Inject a consolidation function (avoids circular imports).
    * Called from index.ts after both store and pi are available.
    */
-  setConsolidator(fn: (target: "memory" | "user", signal?: AbortSignal) => Promise<ConsolidationResult>): void {
+  setConsolidator(fn: (target: "memory" | "user" | "failure", signal?: AbortSignal) => Promise<ConsolidationResult>): void {
     this.consolidator = fn;
   }
 
@@ -100,7 +100,7 @@ export class MemoryStore {
 
   // ─── CRUD ───
 
-  async add(target: "memory" | "user", content: string, signal?: AbortSignal): Promise<MemoryResult> {
+  async add(target: "memory" | "user" | "failure", content: string, signal?: AbortSignal): Promise<MemoryResult> {
     return this._add(target, content, signal);
   }
 
@@ -202,7 +202,7 @@ export class MemoryStore {
     return this.successResponse(target, "Entry added.");
   }
 
-  async replace(target: "memory" | "user", oldText: string, newContent: string): Promise<MemoryResult> {
+  async replace(target: "memory" | "user" | "failure", oldText: string, newContent: string): Promise<MemoryResult> {
     oldText = oldText.trim();
     newContent = newContent.trim();
     if (!oldText) return { success: false, error: "old_text cannot be empty." };
@@ -248,7 +248,7 @@ export class MemoryStore {
     return this.successResponse(target, "Entry replaced.");
   }
 
-  async remove(target: "memory" | "user", oldText: string): Promise<MemoryResult> {
+  async remove(target: "memory" | "user" | "failure", oldText: string): Promise<MemoryResult> {
     oldText = oldText.trim();
     if (!oldText) return { success: false, error: "old_text cannot be empty." };
 

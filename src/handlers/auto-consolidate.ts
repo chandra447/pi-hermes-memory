@@ -15,7 +15,7 @@ import type { ConsolidationResult } from "../types.js";
 export async function triggerConsolidation(
   pi: ExtensionAPI,
   store: MemoryStore,
-  target: "memory" | "user",
+  target: "memory" | "user" | "failure",
   signal?: AbortSignal,
 ): Promise<ConsolidationResult> {
   const entries =
