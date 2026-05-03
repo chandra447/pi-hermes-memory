@@ -9,6 +9,7 @@ import { Type } from "typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { MemoryStore } from "../store/memory-store.js";
 import { MEMORY_TOOL_DESCRIPTION } from "../constants.js";
+import type { MemoryCategory } from "../types.js";
 
 export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore, projectStore: MemoryStore | null): void {
   pi.registerTool({
@@ -21,10 +22,11 @@ export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore, project
       "Use the memory tool proactively when the user corrects you, shares a preference, or reveals personal details worth remembering.",
       "Use the memory tool when you discover environment facts, project conventions, or reusable patterns useful in future sessions.",
       "Do NOT use memory for temporary task state, TODO items, or session progress — only for durable, cross-session facts.",
+      "Use target='failure' with category to save what didn't work (failures, corrections, insights).",
     ],
     parameters: Type.Object({
       action: StringEnum(["add", "replace", "remove"] as const),
-      target: StringEnum(["memory", "user", "project"] as const),
+      target: StringEnum(["memory", "user", "project", "failure"] as const),
       content: Type.Optional(
         Type.String({ description: "Entry content for add/replace" })
       ),
@@ -34,12 +36,20 @@ export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore, project
             "Substring identifying entry for replace/remove",
         })
       ),
+      category: Type.Optional(
+        StringEnum(["failure", "correction", "insight", "preference", "convention", "tool-quirk"] as const, {
+          description: "Category for failure memories",
+        })
+      ),
+      failure_reason: Type.Optional(
+        Type.String({ description: "Why it failed (for failure category)" })
+      ),
     }),
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const { action, target: rawTarget, content, old_text } = params;
+      const { action, target: rawTarget, content, old_text, category, failure_reason } = params;
 
       // Route 'project' to projectStore (internal target 'memory')
-      const target = rawTarget as "memory" | "user";
+      const target = rawTarget as "memory" | "user" | "failure";
       const activeStore = rawTarget === "project" ? projectStore : store;
 
       if (rawTarget === "project" && !projectStore) {
@@ -69,7 +79,16 @@ export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore, project
               details: {},
             };
           }
-          result = await store_.add(target, content);
+          // Handle failure target with category
+          if (rawTarget === "failure") {
+            const memoryCategory = (category || "failure") as MemoryCategory;
+            result = await store_.addFailure(content, {
+              category: memoryCategory,
+              failureReason: failure_reason,
+            });
+          } else {
+            result = await store_.add(target, content);
+          }
           break;
 
         case "replace":
