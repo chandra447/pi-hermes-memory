@@ -1,7 +1,7 @@
 {
   "name": "pi-hermes-memory",
   "version": "0.4.5",
-  "description": "Your Pi agent remembers everything across sessions — your preferences, your stack, your corrections, and even how it solved problems. Zero-config install, works immediately. Persistent memory + procedural skills + auto-correction detection + security-first content scanning.",
+  "description": "🧠 Persistent memory + 🔍 session search + 🛡️ secret scanning for Pi. SQLite FTS5 search across every conversation, auto-consolidation, memory aging, procedural skills. 272 tests. Ported from Hermes agent.",
   "type": "module",
   "main": "src/index.ts",
   "files": [
@@ -23,14 +23,21 @@
     "pi-package",
     "pi-extension",
     "memory",
+    "persistent-memory",
+    "session-search",
+    "sqlite",
+    "fts5",
     "skills",
     "learning-loop",
     "agent",
     "hermes",
-    "persistent-memory",
+    "secret-scanning",
     "content-scanner",
     "correction-detection",
-    "auto-consolidation"
+    "auto-consolidation",
+    "memory-aging",
+    "context-fencing",
+    "two-tier-memory"
   ],
   "license": "MIT",
   "repository": {

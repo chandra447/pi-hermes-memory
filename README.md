@@ -4,30 +4,51 @@
 
 # 🧠 Pi Hermes Memory
 
+**Persistent memory + session search + secret scanning for Pi**
+
+[![npm version](https://img.shields.io/npm/v/pi-hermes-memory.svg)](https://www.npmjs.com/package/pi-hermes-memory)
+[![tests](https://img.shields.io/badge/tests-272-green.svg)](#testing)
+[![license](https://img.shields.io/npm/l/pi-hermes-memory.svg)](LICENSE)
+
 </div>
 
-A [Pi coding agent](https://github.com/badlogic/pi-mono) extension that gives your AI agent **persistent memory across sessions** and a **self-directed learning loop** — ported from the [Hermes agent](https://github.com/nousresearch/hermes-agent) harness.
+Your Pi agent normally forgets everything when you close a session. **This extension fixes that.**
 
-## What It Does
+- 🔍 **Search every conversation** — "what did we discuss about auth?" finds it instantly
+- 🧠 **Persistent memory** — facts, preferences, corrections survive across sessions
+- 🛡️ **Secret scanning** — API keys and tokens are blocked from being saved
+- 📚 **Procedural skills** — the agent saves *how* it solved problems, not just what
+- ⚡ **Background learning** — reviews every 10 turns, saves what matters
+- 🔄 **Auto-consolidation** — merges entries when full, never loses data
 
-Your Pi agent normally forgets everything when you close a session. This extension fixes that.
+## Quick Start
+
+```bash
+# Install
+pi install npm:pi-hermes-memory
+
+# Index your past sessions (one-time)
+/memory-index-sessions
+
+# Learn how to use it
+/learn-memory-tool
+```
+
+## Features
 
 | Feature | What happens |
 |---|---|
-| **Persistent Memory** | The agent saves facts, preferences, and lessons to markdown files that survive restarts |
-| **Procedural Skills** | The agent saves *how* it solved problems as reusable skill documents |
-| **Background Learning** | Every 10 turns (or 15 tool calls) the agent reviews your conversation and proactively saves what it learned |
-| **Correction Detection** | When you correct the agent ("no, don't do that"), it saves immediately — no waiting |
-| **Auto-Consolidation** | When memory hits capacity, the agent automatically merges and prunes entries instead of erroring |
-| **Session Flush** | Before context is compressed or the session ends, the agent gets one last chance to save anything worth remembering |
-| **Onboarding Interview** | `/memory-interview` — answer 5-7 questions to pre-fill your profile on the very first session |
-| **Context Fencing** | Memory blocks are wrapped in `<memory-context>` tags so the LLM never treats stored facts as user instructions |
-| **Memory Aging** | Entries carry timestamps — consolidation knows which facts are stale and which are fresh |
-| **Project Memory** | Per-project memory (`~/.pi/agent/<project>/MEMORY.md`) alongside your global memory |
-| **Secret Detection** | API keys, tokens, SSH keys, and credential assignments are blocked from being persisted to memory |
-| **Session History Search** | Search across all past conversations via SQLite FTS5 — "what did we discuss about auth?" |
-| **Extended Memory Store** | Unlimited searchable memories beyond the core 5,000-char limit |
-| **Learn Memory Tool** | `/learn-memory-tool` — a skill that teaches users how to use the memory system |
+| 🔍 **Session Search** | Search across all past conversations via SQLite FTS5 |
+| 🧠 **Persistent Memory** | Facts, preferences, lessons saved to markdown files |
+| 📚 **Procedural Skills** | The agent saves *how* it solved problems as reusable docs |
+| ⚡ **Background Learning** | Every 10 turns (or 15 tool calls) the agent reviews and saves |
+| 🔧 **Correction Detection** | When you correct the agent, it saves immediately |
+| 🔄 **Auto-Consolidation** | When memory hits capacity, auto-merges instead of erroring |
+| 🛡️ **Secret Scanning** | API keys, tokens, SSH keys blocked from persistence |
+| 📊 **Memory Aging** | Entries carry timestamps — consolidation knows what's stale |
+| 🏗️ **Two-Tier Memory** | Global + per-project memory, both searchable |
+| 💾 **Extended Store** | Unlimited searchable memories beyond core 5,000-char limit |
+| 🎓 **Onboarding** | `/memory-interview` pre-fills your profile on first session |
 
 ## How It Works
 
