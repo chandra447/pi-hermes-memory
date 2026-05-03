@@ -1,6 +1,6 @@
 {
   "name": "pi-hermes-memory",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Your Pi agent remembers everything across sessions — your preferences, your stack, your corrections, and even how it solved problems. Zero-config install, works immediately. Persistent memory + procedural skills + auto-correction detection + security-first content scanning.",
   "type": "module",
   "main": "src/index.ts",
