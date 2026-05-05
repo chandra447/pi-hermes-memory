@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2026-05-03
+
+### Fixed
+
+- **Background review no longer blocks interactive chat** ([#10](https://github.com/chandra447/pi-hermes-memory/issues/10)): The `turn_end` handler now spawns the review subprocess as fire-and-forget instead of `await`-ing it. `reviewInProgress` is reset immediately so the next review cycle can proceed. Notifications are delivered asynchronously via `.then()`.
+- **Auto-review errors silenced on Windows** ([#9](https://github.com/chandra447/pi-hermes-memory/issues/9)): The auto-review error notification (`[hermes] auto-review failed (exit=...)`) has been removed. Auto-review is best-effort — subprocess failures (non-zero exits, timeouts, spawn errors) are silently ignored. The next review cycle will retry naturally.
+
 ## [0.2.0] - 2026-04-26
 
 ### Added
