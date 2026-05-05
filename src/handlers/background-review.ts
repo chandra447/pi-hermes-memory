@@ -66,10 +66,10 @@ export function setupBackgroundReview(
     toolCallsSinceReview = 0;
     reviewInProgress = true;
 
+    // Build conversation snapshot from session entries (crash-safe)
+    let parts: string[] = [];
     try {
-      // Build conversation snapshot from session entries
       const entries = ctx.sessionManager.getBranch();
-      const parts: string[] = [];
 
       for (const entry of entries) {
         if (entry.type !== "message") continue;
@@ -79,56 +79,69 @@ export function setupBackgroundReview(
         const prefix = msg.role === "user" ? "[USER]" : "[ASSISTANT]";
         parts.push(`${prefix}: ${text}`);
       }
-      if (parts.length < 4) return; // Not enough conversation to review
+    } catch {
+      reviewInProgress = false;
+      return; // Session expired or empty — nothing to review
+    }
+    if (parts.length < 4) {
+      reviewInProgress = false;
+      return; // Not enough conversation to review
+    }
 
-      const currentMemory = store.getMemoryEntries().join("\n§\n");
-      const currentUser = store.getUserEntries().join("\n§\n");
-      const currentProject = projectStore ? projectStore.getMemoryEntries().join("\n§\n") : null;
+    const currentMemory = store.getMemoryEntries().join("\n§\n");
+    const currentUser = store.getUserEntries().join("\n§\n");
+    const currentProject = projectStore ? projectStore.getMemoryEntries().join("\n§\n") : null;
 
-      const reviewPrompt = [
-        COMBINED_REVIEW_PROMPT,
-        "",
-        "--- Current Memory ---",
-        currentMemory || "(empty)",
-        "",
-        "--- Current User Profile ---",
-        currentUser || "(empty)",
-      ];
+    const reviewPrompt = [
+      COMBINED_REVIEW_PROMPT,
+      "",
+      "--- Current Memory ---",
+      currentMemory || "(empty)",
+      "",
+      "--- Current User Profile ---",
+      currentUser || "(empty)",
+    ];
 
-      if (currentProject !== null) {
-        reviewPrompt.push(
-          "",
-          "--- Current Project Memory ---",
-          currentProject || "(empty)",
-        );
-      }
-
+    if (currentProject !== null) {
       reviewPrompt.push(
         "",
-        "--- Conversation to Review ---",
-        parts.join("\n\n"),
+        "--- Current Project Memory ---",
+        currentProject || "(empty)",
       );
-
-      const result = await pi.exec("pi", ["-p", "--no-session", reviewPrompt.join("\n")], {
-        signal: ctx.signal,
-        timeout: 120000,
-      });
-
-      if (result.code === 0 && result.stdout) {
-        const output = result.stdout.trim();
-        if (output && !output.toLowerCase().includes("nothing to save")) {
-          ctx.ui.notify("💾 Memory auto-reviewed and updated", "info");
-        }
-      } else {
-        ctx.ui.notify(
-          `[hermes] auto-review failed (exit=${result.code}): ${result.stderr?.slice(0, 200) || "unknown error"}`,
-          "error",
-        );
-      }
-    } catch (err) {
-      ctx.ui.notify(`[hermes] auto-review error: ${String(err).slice(0, 200)}`, "error");
-    } finally {
-      reviewInProgress = false;
     }
+
+    reviewPrompt.push(
+      "",
+      "--- Conversation to Review ---",
+      parts.join("\n\n"),
+    );
+
+    // Fire-and-forget: do NOT await. The review runs in a subprocess;
+    // blocking turn_end would freeze the interactive chat.
+    // Notifications are delivered via .then() once the subprocess completes.
+    const reviewPromise = pi.exec("pi", ["-p", "--no-session", reviewPrompt.join("\n")], {
+      signal: ctx.signal,
+      timeout: 120000,
+    });
+
+    reviewPromise
+      .then((result) => {
+        reviewInProgress = false;
+        if (result.code === 0 && result.stdout) {
+          const output = result.stdout.trim();
+          if (output && !output.toLowerCase().includes("nothing to save")) {
+            ctx.ui.notify("💾 Memory auto-reviewed and updated", "info");
+          }
+        } else {
+          // Auto-review is best-effort. Non-zero exits are common on Windows
+          // where pi CLI may resolve differently. Silently skip — the next
+          // review cycle will try again.
+        }
+      })
+      .catch(() => {
+        // Best-effort: subprocess failures (timeout, signal, spawn errors)
+        // are silently ignored. The next review cycle will retry.
+        reviewInProgress = false;
+      });
   });
 }
