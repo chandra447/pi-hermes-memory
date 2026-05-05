@@ -119,8 +119,12 @@ export function setupBackgroundReview(
     // Fire-and-forget: do NOT await. The review runs in a subprocess;
     // blocking turn_end would freeze the interactive chat.
     // Notifications are delivered via .then() once the subprocess completes.
+    //
+    // We intentionally omit ctx.signal — the signal is tied to the turn
+    // lifetime and would abort the subprocess before it finishes now that
+    // we're not awaiting. The timeout (120s) provides its own safety net.
     const reviewPromise = pi.exec("pi", ["-p", "--no-session", reviewPrompt.join("\n")], {
-      signal: ctx.signal,
+      signal: undefined,
       timeout: 120000,
     });
 
@@ -132,11 +136,10 @@ export function setupBackgroundReview(
           if (output && !output.toLowerCase().includes("nothing to save")) {
             ctx.ui.notify("💾 Memory auto-reviewed and updated", "info");
           }
-        } else {
-          // Auto-review is best-effort. Non-zero exits are common on Windows
-          // where pi CLI may resolve differently. Silently skip — the next
-          // review cycle will try again.
         }
+        // Auto-review is best-effort. Non-zero exits are silently skipped —
+        // common on Windows where pi CLI may resolve differently. The next
+        // review cycle will retry.
       })
       .catch(() => {
         // Best-effort: subprocess failures (timeout, signal, spawn errors)
