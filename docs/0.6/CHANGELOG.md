@@ -1,3 +1,28 @@
+# v0.6.6 Changelog
+
+## Bug Fixes
+
+### Fix legacy SQLite upgrade error: `no such column: category`
+
+Some users upgrading from older versions had an existing `sessions.db` with a legacy
+`memories` table that did not include v0.6 failure-memory columns. During schema init,
+creating `idx_memories_category` failed and `/memory-index-sessions` crashed with:
+
+`❌ Session indexing failed: no such column: category`
+
+Fix:
+
+- Added automatic legacy schema migration in `DatabaseManager`
+- Detects missing `memories` columns and adds them idempotently:
+  - `category`
+  - `failure_reason`
+  - `tool_state`
+  - `corrected_to`
+- Retries schema initialization after migration
+- Added regression test: `should migrate legacy memories table without category column`
+
+---
+
 # v0.6.5 Changelog
 
 ## Bug Fixes

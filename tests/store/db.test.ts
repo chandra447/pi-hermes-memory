@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import Database from 'better-sqlite3';
 import { DatabaseManager } from '../../src/store/db.js';
 
 describe('DatabaseManager', () => {
@@ -96,6 +97,35 @@ describe('DatabaseManager', () => {
         dbManager = new DatabaseManager(tmpDir);
         dbManager.getDb();
       });
+    });
+
+    it('should migrate legacy memories table without category column', () => {
+      const dbPath = path.join(tmpDir, 'sessions.db');
+      const legacyDb = new Database(dbPath);
+
+      legacyDb.exec(`
+        CREATE TABLE memories (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          project TEXT,
+          target TEXT NOT NULL CHECK (target IN ('memory', 'user')),
+          content TEXT NOT NULL,
+          created DATE NOT NULL,
+          last_referenced DATE NOT NULL
+        );
+      `);
+      legacyDb.close();
+
+      const migratedManager = new DatabaseManager(tmpDir);
+      const migratedDb = migratedManager.getDb();
+      const columns = migratedDb.prepare('PRAGMA table_info(memories)').all() as { name: string }[];
+      const names = columns.map((c) => c.name);
+
+      assert.ok(names.includes('category'));
+      assert.ok(names.includes('failure_reason'));
+      assert.ok(names.includes('tool_state'));
+      assert.ok(names.includes('corrected_to'));
+
+      migratedManager.close();
     });
   });
 
