@@ -15,8 +15,8 @@ describe("loadConfig", () => {
     assert.strictEqual(config.flushOnCompact, true);
     assert.strictEqual(config.flushOnShutdown, true);
     assert.strictEqual(config.flushMinTurns, 6);
+    assert.strictEqual(config.candidateShadowMode, true);
   });
-
   it("overrides defaults when config file exists", () => {
     // Write a config file
     fs.mkdirSync(path.dirname(DEFAULT_CONFIG_PATH), { recursive: true });
@@ -40,9 +40,9 @@ describe("loadConfig", () => {
     const config = loadConfig();
     assert.strictEqual(config.reviewEnabled, false);
     assert.strictEqual(config.memoryCharLimit, 5000); // default
+    assert.strictEqual(config.candidateShadowMode, true);
     fs.rmSync(DEFAULT_CONFIG_PATH);
   });
-
   it("handles partial config with all boolean overrides", () => {
     fs.mkdirSync(path.dirname(DEFAULT_CONFIG_PATH), { recursive: true });
     fs.writeFileSync(DEFAULT_CONFIG_PATH, JSON.stringify({
@@ -79,6 +79,14 @@ describe("loadConfig", () => {
     fs.rmSync(DEFAULT_CONFIG_PATH);
   });
 
+  it("overrides candidateShadowMode from config", () => {
+    fs.mkdirSync(path.dirname(DEFAULT_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(DEFAULT_CONFIG_PATH, JSON.stringify({ candidateShadowMode: false }));
+    const config = loadConfig();
+    assert.strictEqual(config.candidateShadowMode, false);
+    fs.rmSync(DEFAULT_CONFIG_PATH);
+  });
+
   it("ignores unknown keys in config file", () => {
     fs.mkdirSync(path.dirname(DEFAULT_CONFIG_PATH), { recursive: true });
     fs.writeFileSync(DEFAULT_CONFIG_PATH, JSON.stringify({
@@ -89,6 +97,7 @@ describe("loadConfig", () => {
     const config = loadConfig();
     assert.strictEqual(config.memoryCharLimit, 1000);
     assert.strictEqual(config.reviewEnabled, true);
+    assert.strictEqual(config.candidateShadowMode, true);
     fs.rmSync(DEFAULT_CONFIG_PATH);
   });
 });

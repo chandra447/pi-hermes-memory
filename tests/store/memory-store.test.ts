@@ -40,6 +40,7 @@ function makeConfig(overrides?: Partial<MemoryConfig>): MemoryConfig {
     autoConsolidate: false,
     correctionDetection: false,
     nudgeToolCalls: 15,
+    candidateShadowMode: true,
     memoryDir: MEMORY_DIR,
     ...overrides,
   };

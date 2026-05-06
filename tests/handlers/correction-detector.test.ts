@@ -203,6 +203,7 @@ describe("setupCorrectionDetector handler", () => {
     flushMinTurns: 6,
     autoConsolidate: false,
     nudgeToolCalls: 15,
+    candidateShadowMode: true,
   };
 
   function makeCtx(branch: any[] = []) {

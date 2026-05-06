@@ -49,6 +49,7 @@ function defaultConfig(overrides: Partial<MemoryConfig> = {}): MemoryConfig {
     flushOnCompact: true,
     flushOnShutdown: true,
     flushMinTurns: 6,
+    candidateShadowMode: true,
     ...overrides,
   };
 }

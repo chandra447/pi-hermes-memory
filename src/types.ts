@@ -29,6 +29,8 @@ export interface MemoryConfig {
   correctionDetection: boolean;
   /** Tool calls before triggering background review (in addition to turn count). Default: 15 */
   nudgeToolCalls: number;
+  /** Run candidate extraction in read-only report mode for v0.7 rollout. Default: true */
+  candidateShadowMode: boolean;
   /** Enable session history search via SQLite FTS5. Default: true */
   sessionSearchEnabled?: boolean;
   /** Days to retain session history. Default: 90 */

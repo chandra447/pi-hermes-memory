@@ -12,10 +12,11 @@
 ### Done when
 Extractor runs on session history and outputs quality reports without mutating candidate tables.
 
-- [ ] Add shadow-mode flag in config (`candidateShadowMode: true` default for initial rollout)
-- [ ] Add `/memory-candidates-shadow-run` command to run extraction report only
-- [ ] Capture report metrics: candidate count, duplicate rate, low-confidence rate, top rules
-- [ ] Add tests for shadow mode no-write guarantees
+- [~] Add shadow-mode flag in config (`candidateShadowMode: true` default for initial rollout)
+- [~] Add read-only extractor + metrics report (`src/store/candidate-shadow.ts`)
+- [~] Add `/memory-candidates-shadow-run` command
+- [~] Wire command in `src/index.ts`
+- [~] Add tests for no-write guarantee and report metrics
 
 ---
 

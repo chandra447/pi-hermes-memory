@@ -64,6 +64,10 @@ const defaultConfig = {
   memoryCharLimit: 5000,
   userCharLimit: 5000,
   projectCharLimit: 5000,
+  autoConsolidate: false,
+  correctionDetection: false,
+  nudgeToolCalls: 15,
+  candidateShadowMode: true,
 };
 
 const mockStore = {

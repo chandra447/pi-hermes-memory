@@ -49,6 +49,7 @@ const config = {
   flushMinTurns: 6,
   autoConsolidate: false,
   nudgeToolCalls: 15,
+  candidateShadowMode: true,
 };
 
 function makeBranchWithToolCalls(toolCallCount: number, distinctTools: string[]): any[] {

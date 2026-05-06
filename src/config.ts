@@ -23,6 +23,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   autoConsolidate: true,
   correctionDetection: true,
   nudgeToolCalls: DEFAULT_NUDGE_TOOL_CALLS,
+  candidateShadowMode: true,
 };
 
 export const DEFAULT_CONFIG_PATH = path.join(
@@ -49,6 +50,7 @@ export function loadConfig(): MemoryConfig {
       if (typeof parsed.autoConsolidate === "boolean") config.autoConsolidate = parsed.autoConsolidate;
       if (typeof parsed.correctionDetection === "boolean") config.correctionDetection = parsed.correctionDetection;
       if (typeof parsed.nudgeToolCalls === "number") config.nudgeToolCalls = parsed.nudgeToolCalls;
+      if (typeof parsed.candidateShadowMode === "boolean") config.candidateShadowMode = parsed.candidateShadowMode;
       if (typeof parsed.projectCharLimit === "number") config.projectCharLimit = parsed.projectCharLimit;
       if (typeof parsed.memoryDir === "string") config.memoryDir = parsed.memoryDir;
       return config;

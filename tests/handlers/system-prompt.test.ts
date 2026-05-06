@@ -27,6 +27,7 @@ const testConfig = (): MemoryConfig => ({
   flushOnCompact: true,
   flushOnShutdown: true,
   flushMinTurns: 6,
+  candidateShadowMode: true,
   memoryDir: TEST_MEMORY_DIR,
 });
 
