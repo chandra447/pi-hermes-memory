@@ -87,6 +87,9 @@ export function registerLearnMemoryCommand(pi: ExtensionAPI): void {
         lines.push("  /memory-interview     Answer questions to pre-fill profile");
         lines.push("  /memory-switch-project List all project memories");
         lines.push("  /memory-index-sessions Import past sessions for search");
+        lines.push("  /memory-review-candidates TUI review/triage/promotion flow");
+        lines.push("  /memory-candidates-stats Show candidate pipeline counts");
+        lines.push("  /memory-candidates-rebuild Rebuild candidates from indexed sessions");
       }
 
       if (section.startsWith("✅")) {

@@ -54,6 +54,14 @@ export interface UpdateCandidateDetailsInput {
   rationale?: string;
 }
 
+export interface CandidateStats {
+  pending: number;
+  approved: number;
+  rejected: number;
+  promoted: number;
+  total: number;
+}
+
 interface CandidateRow {
   id: number;
   session_id: string;
@@ -81,6 +89,10 @@ function normalizeStatus(status: CandidateRow['status']): CandidateStatus {
 
 function stableHash(text: string): string {
   return createHash('sha1').update(text).digest('hex').slice(0, 16);
+}
+
+function normalizeText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function mapCandidate(row: CandidateRow): MemoryCandidate {
@@ -112,6 +124,24 @@ export function addCandidate(dbManager: DatabaseManager, input: AddCandidateInpu
 
   const resolvedMessageId = input.messageId ?? `hash:${stableHash([input.sessionId, input.timestamp, input.tag, input.extractorRule, input.snippet].join('|'))}`;
   const resolvedDedupeKey = input.dedupeKey ?? `${input.sessionId}|${resolvedMessageId}|${input.tag}|${input.extractorRule}`;
+
+  const candidateRows = db.prepare(`
+    SELECT id, snippet
+    FROM memory_candidates
+    WHERE
+      COALESCE(project, '') = COALESCE(?, '')
+      AND tag = ?
+      AND extractor_rule = ?
+      AND status IN ('new', 'pending', 'approved')
+  `).all(
+    input.project ?? null,
+    input.tag,
+    input.extractorRule,
+  ) as Array<{ id: number; snippet: string }>;
+
+  const normalizedIncomingSnippet = normalizeText(input.snippet);
+  const duplicateByGuard = candidateRows.find((row) => normalizeText(row.snippet) === normalizedIncomingSnippet);
+  if (duplicateByGuard) return null;
 
   const insert = db.prepare(`
     INSERT OR IGNORE INTO memory_candidates (
@@ -279,6 +309,31 @@ export function mergeCandidates(dbManager: DatabaseManager, primaryId: number, s
 
   tx();
   return true;
+}
+
+export function getCandidateStats(dbManager: DatabaseManager): CandidateStats {
+  const db = dbManager.getDb();
+  const rows = db.prepare(`
+    SELECT status, COUNT(*) as count
+    FROM memory_candidates
+    GROUP BY status
+  `).all() as Array<{ status: CandidateRow['status']; count: number }>;
+
+  const stats: CandidateStats = {
+    pending: 0,
+    approved: 0,
+    rejected: 0,
+    promoted: 0,
+    total: 0,
+  };
+
+  for (const row of rows) {
+    const status = normalizeStatus(row.status);
+    stats[status] += row.count;
+    stats.total += row.count;
+  }
+
+  return stats;
 }
 
 export function markPromoted(dbManager: DatabaseManager, id: number, skillName: string): boolean {

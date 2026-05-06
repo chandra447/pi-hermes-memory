@@ -47,6 +47,10 @@ import { registerIndexSessionsCommand } from "./handlers/index-sessions.js";
 import { registerLearnMemoryCommand } from "./handlers/learn-memory.js";
 import { registerCandidateShadowRunCommand } from "./handlers/candidate-shadow-command.js";
 import { registerMemoryReviewCandidatesCommand } from "./handlers/memory-review-candidates.js";
+import {
+  registerMemoryCandidatesRebuildCommand,
+  registerMemoryCandidatesStatsCommand,
+} from "./handlers/candidate-observability.js";
 import { loadConfig } from "./config.js";
 import { detectProject } from "./project.js";
 
@@ -124,6 +128,8 @@ export default function (pi: ExtensionAPI) {
   registerLearnMemoryCommand(pi);
   registerCandidateShadowRunCommand(pi, config);
   registerMemoryReviewCandidatesCommand(pi, dbManager, skillStore);
+  registerMemoryCandidatesStatsCommand(pi, dbManager);
+  registerMemoryCandidatesRebuildCommand(pi, dbManager, config);
 
   // ── 11. SQLite session search + extended memory ──
   registerSessionSearchTool(pi, dbManager);

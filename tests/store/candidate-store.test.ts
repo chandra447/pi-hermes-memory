@@ -6,6 +6,7 @@ import path from 'node:path';
 import { DatabaseManager } from '../../src/store/db.js';
 import {
   addCandidate,
+  getCandidateStats,
   listCandidates,
   markPromoted,
   mergeCandidates,
@@ -235,6 +236,42 @@ describe('candidate-store', () => {
     assert.strictEqual(primary.evidenceCount, 3);
     assert.strictEqual(primary.confidence, 0.9);
     assert.strictEqual(secondary.status, 'rejected');
+  });
+
+  it('returns candidate status stats', () => {
+    const a = addCandidate(dbManager, {
+      sessionId: 's1', messageId: 'm1', project: 'proj-a', tag: 'testing', snippet: 'A', rationale: 'A', confidence: 0.8,
+      sourceType: 'failure', extractorRule: 'failure_fix', timestamp: '2026-05-06T00:00:00.000Z',
+    })!;
+    const b = addCandidate(dbManager, {
+      sessionId: 's1', messageId: 'm2', project: 'proj-a', tag: 'testing', snippet: 'B', rationale: 'B', confidence: 0.8,
+      sourceType: 'failure', extractorRule: 'failure_fix', timestamp: '2026-05-06T00:00:01.000Z',
+    })!;
+    updateCandidateStatus(dbManager, a.id, 'approved');
+    updateCandidateStatus(dbManager, b.id, 'rejected');
+
+    const stats = getCandidateStats(dbManager);
+    assert.strictEqual(stats.total, 2);
+    assert.strictEqual(stats.pending, 0);
+    assert.strictEqual(stats.approved, 1);
+    assert.strictEqual(stats.rejected, 1);
+    assert.strictEqual(stats.promoted, 0);
+  });
+
+  it('suppresses near-identical pending duplicates using guard', () => {
+    const first = addCandidate(dbManager, {
+      sessionId: 's1', messageId: 'm1', project: 'proj-a', tag: 'testing', snippet: ' Run   tests per file ', rationale: 'first', confidence: 0.8,
+      sourceType: 'failure', extractorRule: 'failure_fix', timestamp: '2026-05-06T00:00:00.000Z',
+    });
+
+    const duplicate = addCandidate(dbManager, {
+      sessionId: 's2', messageId: 'm2', project: 'proj-a', tag: 'testing', snippet: 'run tests per   file', rationale: 'second', confidence: 0.81,
+      sourceType: 'failure', extractorRule: 'failure_fix', timestamp: '2026-05-06T00:00:02.000Z',
+    });
+
+    assert.ok(first);
+    assert.strictEqual(duplicate, null);
+    assert.strictEqual(listCandidates(dbManager).length, 1);
   });
 
   it('uses deterministic fallback messageId when missing', () => {
