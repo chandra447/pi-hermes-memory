@@ -76,16 +76,16 @@ We can stage candidates from indexed session messages using deterministic heuris
 ### Done when
 Approved candidates can be converted into a draft skill and saved via `skill.create`, never auto-created silently.
 
-- [ ] Create `src/skills/skill-draft-composer.ts`
-- [ ] Map candidates into required sections:
-  - [ ] `When to Use`
-  - [ ] `Procedure`
-  - [ ] `Pitfalls`
-  - [ ] `Verification`
-- [ ] Add validation/fallback when sections are sparse
-- [ ] Add promotion guardrail: require explicit approval OR repeated evidence (`evidence_count >= 2`) + approval
-- [ ] Persist via existing `skill` tool interface
-- [ ] Add tests: `tests/skills/skill-draft-composer.test.ts`
+- [~] Create `src/skills/skill-draft-composer.ts`
+- [~] Map candidates into required sections:
+  - [~] `When to Use`
+  - [~] `Procedure`
+  - [~] `Pitfalls`
+  - [~] `Verification`
+- [~] Add validation/fallback when sections are sparse
+- [~] Add promotion guardrail: require explicit approval OR repeated evidence (`evidence_count >= 2`) + approval
+- [~] Persist via existing `skill` tool interface
+- [~] Add tests: `tests/skills/skill-draft-composer.test.ts`
 
 ---
 

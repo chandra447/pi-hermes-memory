@@ -8,6 +8,8 @@ import {
   type MemoryCandidate,
 } from '../store/candidate-store.js';
 import { DatabaseManager } from '../store/db.js';
+import { SkillStore } from '../store/skill-store.js';
+import { canPromoteToSkill, composeSkillDraft } from '../skills/skill-draft-composer.js';
 
 function candidateLabel(c: MemoryCandidate, selected: boolean): string {
   const mark = selected ? '[x]' : '[ ]';
@@ -51,6 +53,7 @@ function notifySummary(ctx: ExtensionCommandContext, candidates: MemoryCandidate
 async function promoteSelected(
   ctx: ExtensionCommandContext,
   dbManager: DatabaseManager,
+  skillStore: SkillStore,
   selectedIds: number[],
   candidates: MemoryCandidate[],
 ): Promise<void> {
@@ -59,24 +62,48 @@ async function promoteSelected(
     return;
   }
 
-  const approvedSelected = candidates.filter((c) => selectedIds.includes(c.id) && c.status === 'approved');
-  if (approvedSelected.length === 0) {
-    ctx.ui.notify('No approved candidates selected. Approve candidates before promotion.', 'warning');
+  const latestSelected = listCandidates(dbManager, { limit: 500 }).filter((c) => selectedIds.includes(c.id));
+  const approvedSelected = latestSelected;
+  const gate = canPromoteToSkill(approvedSelected);
+  if (!gate.ok) {
+    ctx.ui.notify(gate.reason ?? 'Promotion requirements not met.', 'warning');
     return;
   }
 
-  const skillName = await ctx.ui.input('Skill name for promotion', 'e.g. sqlite-schema-drift-migration');
-  if (!skillName || !skillName.trim()) return;
+  const skillNameInput = await ctx.ui.input('Skill name for promotion', 'e.g. sqlite-schema-drift-migration');
+  if (!skillNameInput || !skillNameInput.trim()) return;
 
-  let promoted = 0;
-  let skipped = 0;
+  const draft = composeSkillDraft(approvedSelected, skillNameInput.trim());
 
-  for (const id of selectedIds) {
-    if (markPromoted(dbManager, id, skillName.trim())) promoted++;
-    else skipped++;
+  const confirmed = await ctx.ui.confirm(
+    'Create skill draft and promote candidates?',
+    `Create skill '${draft.name}' from ${approvedSelected.length} candidate(s) and mark selected candidates as promoted.`,
+  );
+  if (!confirmed) {
+    ctx.ui.notify('Promotion cancelled.', 'info');
+    return;
   }
 
-  ctx.ui.notify(`Promoted ${promoted} candidate(s). Skipped ${skipped} (must be approved first).`, 'info');
+  const created = await skillStore.create(draft.name, draft.description, draft.body);
+  if (!created.success || !created.fileName) {
+    ctx.ui.notify(`Skill creation failed: ${created.error ?? 'unknown error'}`, 'error');
+    return;
+  }
+
+  let promoted = 0;
+  for (const id of selectedIds) {
+    if (markPromoted(dbManager, id, draft.name)) promoted++;
+  }
+
+  if (promoted === 0) {
+    ctx.ui.notify(`Skill '${draft.name}' was created, but no candidates were promoted (approval gate).`, 'warning');
+    return;
+  }
+
+  ctx.ui.notify(`Created skill '${draft.name}' and promoted ${promoted} candidate(s).`, 'info');
+  if (draft.warnings.length > 0) {
+    ctx.ui.notify(`Draft warnings: ${draft.warnings.join(' | ')}`, 'warning');
+  }
 }
 
 function updateStatusSelected(
@@ -98,7 +125,7 @@ function updateStatusSelected(
   ctx.ui.notify(`${status === 'approved' ? 'Approved' : 'Rejected'} ${updated}/${selectedIds.length} candidate(s).`, 'info');
 }
 
-export function registerMemoryReviewCandidatesCommand(pi: ExtensionAPI, dbManager: DatabaseManager): void {
+export function registerMemoryReviewCandidatesCommand(pi: ExtensionAPI, dbManager: DatabaseManager, skillStore: SkillStore): void {
   pi.registerCommand('memory-review-candidates', {
     description: 'Interactive TUI review for memory candidates (select, triage, and promote)',
     handler: async (args, ctx) => {
@@ -198,7 +225,7 @@ export function registerMemoryReviewCandidatesCommand(pi: ExtensionAPI, dbManage
           continue;
         }
         if (choice === '🚀 Promote selected (approved only)') {
-          await promoteSelected(ctx, dbManager, [...selected], candidates);
+          await promoteSelected(ctx, dbManager, skillStore, [...selected], candidates);
           continue;
         }
 

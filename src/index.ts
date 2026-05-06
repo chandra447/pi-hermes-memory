@@ -123,7 +123,7 @@ export default function (pi: ExtensionAPI) {
   registerSwitchProjectCommand(pi);
   registerLearnMemoryCommand(pi);
   registerCandidateShadowRunCommand(pi, config);
-  registerMemoryReviewCandidatesCommand(pi, dbManager);
+  registerMemoryReviewCandidatesCommand(pi, dbManager, skillStore);
 
   // ── 11. SQLite session search + extended memory ──
   registerSessionSearchTool(pi, dbManager);

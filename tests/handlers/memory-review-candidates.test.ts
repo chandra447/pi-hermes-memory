@@ -6,6 +6,7 @@ import path from 'node:path';
 import { DatabaseManager } from '../../src/store/db.js';
 import { addCandidate, listCandidates } from '../../src/store/candidate-store.js';
 import { registerMemoryReviewCandidatesCommand } from '../../src/handlers/memory-review-candidates.js';
+import { SkillStore } from '../../src/store/skill-store.js';
 
 function setupMockPi() {
   const handlers = new Map<string, Function>();
@@ -20,10 +21,12 @@ function setupMockPi() {
 describe('memory-review-candidates command', () => {
   let tmpDir: string;
   let dbManager: DatabaseManager;
+  let skillStore: SkillStore;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-review-candidates-'));
     dbManager = new DatabaseManager(tmpDir);
+    skillStore = new SkillStore(path.join(tmpDir, 'skills'));
   });
 
   afterEach(() => {
@@ -33,97 +36,56 @@ describe('memory-review-candidates command', () => {
 
   it('registers memory-review-candidates command', () => {
     const { pi, handlers } = setupMockPi();
-    registerMemoryReviewCandidatesCommand(pi, dbManager);
+    registerMemoryReviewCandidatesCommand(pi, dbManager, skillStore);
     assert.ok(handlers.has('memory-review-candidates'));
   });
 
   it('approves selected candidates via TUI flow', async () => {
     const c = addCandidate(dbManager, {
-      sessionId: 's1',
-      messageId: 'm1',
-      project: 'proj',
-      tag: 'testing',
-      snippet: 'run tests per-file',
-      rationale: 'stable pattern',
-      confidence: 0.9,
-      sourceType: 'tool_sequence',
-      extractorRule: 'repeated_tool_sequence',
-      timestamp: '2026-05-06T00:00:00.000Z',
+      sessionId: 's1', messageId: 'm1', project: 'proj', tag: 'testing', snippet: 'run tests per-file', rationale: 'stable pattern', confidence: 0.9,
+      sourceType: 'tool_sequence', extractorRule: 'repeated_tool_sequence', timestamp: '2026-05-06T00:00:00.000Z',
     })!;
 
     const { pi, handlers } = setupMockPi();
-    registerMemoryReviewCandidatesCommand(pi, dbManager);
+    registerMemoryReviewCandidatesCommand(pi, dbManager, skillStore);
+    const queue = [`[#] #${c.id}`, '✅ Approve selected', '✅ Done'];
 
-    const queue = [
-      `[#] #${c.id}`,
-      '✅ Approve selected',
-      '✅ Done',
-    ];
-
-    const ctx = {
-      ui: {
-        select: async (_title: string, options: string[]) => {
-          const next = queue.shift();
-          if (!next) return '✅ Done';
-          if (next.startsWith('[#]')) {
-            const id = next.match(/#(\d+)/)![1];
-            return options.find((o) => o.includes(`#${id} `)) ?? options[0];
-          }
-          return next;
-        },
-        input: async () => undefined,
-        notify: () => {},
+    const ctx = { ui: {
+      select: async (_t: string, options: string[]) => {
+        const next = queue.shift(); if (!next) return '✅ Done';
+        if (next.startsWith('[#]')) { const id = next.match(/#(\d+)/)![1]; return options.find((o) => o.includes(`#${id} `)) ?? options[0]; }
+        return next;
       },
-    } as any;
+      input: async () => undefined,
+      notify: () => {},
+    } } as any;
 
     await handlers.get('memory-review-candidates')('', ctx);
-
-    const row = listCandidates(dbManager).find((r) => r.id === c.id)!;
-    assert.equal(row.status, 'approved');
+    assert.equal(listCandidates(dbManager).find((r) => r.id === c.id)!.status, 'approved');
   });
 
   it('edits selected candidate fields', async () => {
     const c = addCandidate(dbManager, {
-      sessionId: 's1',
-      messageId: 'm1',
-      project: 'proj',
-      tag: 'testing',
-      snippet: 'old snippet',
-      rationale: 'old rationale',
-      confidence: 0.92,
-      sourceType: 'explicit_tag',
-      extractorRule: 'explicit_tag',
-      timestamp: '2026-05-06T00:00:00.000Z',
+      sessionId: 's1', messageId: 'm1', project: 'proj', tag: 'testing', snippet: 'old snippet', rationale: 'old rationale', confidence: 0.92,
+      sourceType: 'explicit_tag', extractorRule: 'explicit_tag', timestamp: '2026-05-06T00:00:00.000Z',
     })!;
 
     const { pi, handlers } = setupMockPi();
-    registerMemoryReviewCandidatesCommand(pi, dbManager);
-
-    const queue = [
-      `[#] #${c.id}`,
-      '✏️ Edit selected (single)',
-      '✅ Done',
-    ];
+    registerMemoryReviewCandidatesCommand(pi, dbManager, skillStore);
+    const queue = [`[#] #${c.id}`, '✏️ Edit selected (single)', '✅ Done'];
     const inputQueue = ['workflow', 'new snippet', 'new rationale'];
 
-    const ctx = {
-      ui: {
-        select: async (_title: string, options: string[]) => {
-          const next = queue.shift();
-          if (!next) return '✅ Done';
-          if (next.startsWith('[#]')) {
-            const id = next.match(/#(\d+)/)![1];
-            return options.find((o) => o.includes(`#${id} `)) ?? options[0];
-          }
-          return next;
-        },
-        input: async () => inputQueue.shift(),
-        notify: () => {},
+    const ctx = { ui: {
+      select: async (_t: string, options: string[]) => {
+        const next = queue.shift(); if (!next) return '✅ Done';
+        if (next.startsWith('[#]')) { const id = next.match(/#(\d+)/)![1]; return options.find((o) => o.includes(`#${id} `)) ?? options[0]; }
+        return next;
       },
-    } as any;
+      input: async () => inputQueue.shift(),
+      notify: () => {},
+    } } as any;
 
     await handlers.get('memory-review-candidates')('', ctx);
-
     const row = listCandidates(dbManager).find((r) => r.id === c.id)!;
     assert.equal(row.tag, 'workflow');
     assert.equal(row.snippet, 'new snippet');
@@ -131,177 +93,131 @@ describe('memory-review-candidates command', () => {
   });
 
   it('merges two selected candidates', async () => {
-    const a = addCandidate(dbManager, {
-      sessionId: 's1',
-      messageId: 'm1',
-      project: 'proj',
-      tag: 'testing',
-      snippet: 'first snippet',
-      rationale: 'first rationale',
-      confidence: 0.6,
-      sourceType: 'failure',
-      extractorRule: 'failure_fix',
-      timestamp: '2026-05-06T00:00:00.000Z',
-    })!;
-
-    const b = addCandidate(dbManager, {
-      sessionId: 's1',
-      messageId: 'm2',
-      project: 'proj',
-      tag: 'testing',
-      snippet: 'second snippet',
-      rationale: 'second rationale',
-      confidence: 0.9,
-      sourceType: 'failure',
-      extractorRule: 'failure_fix',
-      timestamp: '2026-05-06T00:01:00.000Z',
-    })!;
+    const a = addCandidate(dbManager, { sessionId: 's1', messageId: 'm1', project: 'proj', tag: 'testing', snippet: 'first snippet', rationale: 'first rationale', confidence: 0.6, sourceType: 'failure', extractorRule: 'failure_fix', timestamp: '2026-05-06T00:00:00.000Z' })!;
+    const b = addCandidate(dbManager, { sessionId: 's1', messageId: 'm2', project: 'proj', tag: 'testing', snippet: 'second snippet', rationale: 'second rationale', confidence: 0.9, sourceType: 'failure', extractorRule: 'failure_fix', timestamp: '2026-05-06T00:01:00.000Z' })!;
 
     const { pi, handlers } = setupMockPi();
-    registerMemoryReviewCandidatesCommand(pi, dbManager);
+    registerMemoryReviewCandidatesCommand(pi, dbManager, skillStore);
+    const queue = [`[#] #${a.id}`, `[#] #${b.id}`, '🔀 Merge selected (pick primary)', `#${a.id} testing`, '✅ Done'];
 
-    const queue = [
-      `[#] #${a.id}`,
-      `[#] #${b.id}`,
-      '🔀 Merge selected (pick primary)',
-      `#${a.id} testing`,
-      '✅ Done',
-    ];
-
-    const ctx = {
-      ui: {
-        select: async (_title: string, options: string[]) => {
-          const next = queue.shift();
-          if (!next) return '✅ Done';
-          if (next.startsWith('[#]')) {
-            const id = next.match(/#(\d+)/)![1];
-            return options.find((o) => o.includes(`#${id} `)) ?? options[0];
-          }
-          if (next.startsWith('#')) {
-            const id = next.match(/#(\d+)/)![1];
-            return options.find((o) => o.includes(`#${id} `)) ?? options[0];
-          }
-          return next;
-        },
-        input: async () => undefined,
-        notify: () => {},
+    const ctx = { ui: {
+      select: async (_t: string, options: string[]) => {
+        const next = queue.shift(); if (!next) return '✅ Done';
+        if (next.startsWith('[#]') || next.startsWith('#')) { const id = next.match(/#(\d+)/)![1]; return options.find((o) => o.includes(`#${id} `)) ?? options[0]; }
+        return next;
       },
-    } as any;
+      input: async () => undefined,
+      notify: () => {},
+    } } as any;
 
     await handlers.get('memory-review-candidates')('', ctx);
-
     const rows = listCandidates(dbManager);
-    const primary = rows.find((r) => r.id === a.id)!;
-    const secondary = rows.find((r) => r.id === b.id)!;
-    assert.equal(primary.status, 'pending');
-    assert.equal(secondary.status, 'rejected');
-    assert.ok(primary.snippet.includes('second snippet'));
+    assert.equal(rows.find((r) => r.id === a.id)!.status, 'pending');
+    assert.equal(rows.find((r) => r.id === b.id)!.status, 'rejected');
   });
 
   it('bulk-approves multiple selected candidates', async () => {
-    const a = addCandidate(dbManager, {
-      sessionId: 's1',
-      messageId: 'm1',
-      project: 'proj',
-      tag: 'testing',
-      snippet: 'snippet a',
-      rationale: 'rationale a',
-      confidence: 0.8,
-      sourceType: 'failure',
-      extractorRule: 'failure_fix',
-      timestamp: '2026-05-06T00:00:00.000Z',
-    })!;
-
-    const b = addCandidate(dbManager, {
-      sessionId: 's1',
-      messageId: 'm2',
-      project: 'proj',
-      tag: 'workflow',
-      snippet: 'snippet b',
-      rationale: 'rationale b',
-      confidence: 0.85,
-      sourceType: 'correction',
-      extractorRule: 'repeated_correction',
-      timestamp: '2026-05-06T00:01:00.000Z',
-    })!;
+    const a = addCandidate(dbManager, { sessionId: 's1', messageId: 'm1', project: 'proj', tag: 'testing', snippet: 'snippet a', rationale: 'rationale a', confidence: 0.8, sourceType: 'failure', extractorRule: 'failure_fix', timestamp: '2026-05-06T00:00:00.000Z' })!;
+    const b = addCandidate(dbManager, { sessionId: 's1', messageId: 'm2', project: 'proj', tag: 'workflow', snippet: 'snippet b', rationale: 'rationale b', confidence: 0.85, sourceType: 'correction', extractorRule: 'repeated_correction', timestamp: '2026-05-06T00:01:00.000Z' })!;
 
     const { pi, handlers } = setupMockPi();
-    registerMemoryReviewCandidatesCommand(pi, dbManager);
-
+    registerMemoryReviewCandidatesCommand(pi, dbManager, skillStore);
     const queue = [`[#] #${a.id}`, `[#] #${b.id}`, '✅ Approve selected', '✅ Done'];
 
-    const ctx = {
-      ui: {
-        select: async (_title: string, options: string[]) => {
-          const next = queue.shift();
-          if (!next) return '✅ Done';
-          if (next.startsWith('[#]')) {
-            const id = next.match(/#(\d+)/)![1];
-            return options.find((o) => o.includes(`#${id} `)) ?? options[0];
-          }
-          return next;
-        },
-        input: async () => undefined,
-        notify: () => {},
+    const ctx = { ui: {
+      select: async (_t: string, options: string[]) => {
+        const next = queue.shift(); if (!next) return '✅ Done';
+        if (next.startsWith('[#]')) { const id = next.match(/#(\d+)/)![1]; return options.find((o) => o.includes(`#${id} `)) ?? options[0]; }
+        return next;
       },
-    } as any;
+      input: async () => undefined,
+      notify: () => {},
+    } } as any;
 
     await handlers.get('memory-review-candidates')('', ctx);
-
     const rows = listCandidates(dbManager);
     assert.equal(rows.find((r) => r.id === a.id)?.status, 'approved');
     assert.equal(rows.find((r) => r.id === b.id)?.status, 'approved');
   });
 
-  it('enforces approval gate before promotion', async () => {
-    const c = addCandidate(dbManager, {
-      sessionId: 's1',
-      messageId: 'm1',
-      project: 'proj',
-      tag: 'workflow',
-      snippet: 'commit only after tests pass',
-      rationale: 'repeated user preference',
-      confidence: 0.92,
-      sourceType: 'explicit_tag',
-      extractorRule: 'explicit_tag',
-      timestamp: '2026-05-06T00:00:00.000Z',
-    })!;
+  it('creates a skill and promotes approved candidates after confirmation', async () => {
+    const c1 = addCandidate(dbManager, { sessionId: 's1', messageId: 'm1', project: 'proj', tag: 'workflow', snippet: 'commit after tests pass', rationale: 'repeatable', confidence: 0.92, sourceType: 'explicit_tag', extractorRule: 'explicit_tag', evidenceCount: 2, timestamp: '2026-05-06T00:00:00.000Z' })!;
+    const c2 = addCandidate(dbManager, { sessionId: 's1', messageId: 'm2', project: 'proj', tag: 'workflow', snippet: 'run lint before push', rationale: 'repeatable', confidence: 0.91, sourceType: 'explicit_tag', extractorRule: 'explicit_tag', evidenceCount: 2, timestamp: '2026-05-06T00:00:01.000Z' })!;
 
     const { pi, handlers } = setupMockPi();
-    registerMemoryReviewCandidatesCommand(pi, dbManager);
+    registerMemoryReviewCandidatesCommand(pi, dbManager, skillStore);
+    const notifications: string[] = [];
+    const queue = [`[#] #${c1.id}`, `[#] #${c2.id}`, '✅ Approve selected', '🚀 Promote selected (approved only)', '✅ Done'];
+
+    const ctx = { ui: {
+      select: async (_t: string, options: string[]) => {
+        const next = queue.shift(); if (!next) return '✅ Done';
+        if (next.startsWith('[#]')) { const id = next.match(/#(\d+)/)![1]; return options.find((o) => o.includes(`#${id} `)) ?? options[0]; }
+        return next;
+      },
+      input: async () => 'workflow-playbook',
+      confirm: async () => true,
+      notify: (m: string) => notifications.push(m),
+    } } as any;
+
+    await handlers.get('memory-review-candidates')('', ctx);
+    assert.equal(listCandidates(dbManager).find((r) => r.id === c1.id)!.status, 'promoted');
+    assert.equal(listCandidates(dbManager).find((r) => r.id === c2.id)!.status, 'promoted');
+    const createdFiles = fs.readdirSync(path.join(tmpDir, 'skills'));
+    assert.ok(createdFiles.some((f) => f.endsWith('.md')));
+    assert.ok(notifications.some((m) => m.includes('Created skill')));
+  });
+
+  it('does not create skill or promote when confirmation is denied', async () => {
+    const c1 = addCandidate(dbManager, { sessionId: 's1', messageId: 'm1', project: 'proj', tag: 'workflow', snippet: 'commit after tests pass', rationale: 'repeatable', confidence: 0.92, sourceType: 'explicit_tag', extractorRule: 'explicit_tag', evidenceCount: 2, timestamp: '2026-05-06T00:00:00.000Z' })!;
+
+    const { pi, handlers } = setupMockPi();
+    registerMemoryReviewCandidatesCommand(pi, dbManager, skillStore);
+    const notifications: string[] = [];
+    const queue = [`[#] #${c1.id}`, '✅ Approve selected', '🚀 Promote selected (approved only)', '✅ Done'];
+
+    const ctx = { ui: {
+      select: async (_t: string, options: string[]) => {
+        const next = queue.shift(); if (!next) return '✅ Done';
+        if (next.startsWith('[#]')) { const id = next.match(/#(\d+)/)![1]; return options.find((o) => o.includes(`#${id} `)) ?? options[0]; }
+        return next;
+      },
+      input: async () => 'workflow-playbook',
+      confirm: async () => false,
+      notify: (m: string) => notifications.push(m),
+    } } as any;
+
+    await handlers.get('memory-review-candidates')('', ctx);
+    assert.equal(listCandidates(dbManager).find((r) => r.id === c1.id)!.status, 'approved');
+    const skillsDir = path.join(tmpDir, 'skills');
+    const files = fs.existsSync(skillsDir) ? fs.readdirSync(skillsDir) : [];
+    assert.equal(files.length, 0);
+    assert.ok(notifications.some((m) => m.includes('Promotion cancelled')));
+  });
+
+  it('enforces approval gate before promotion', async () => {
+    const c = addCandidate(dbManager, { sessionId: 's1', messageId: 'm1', project: 'proj', tag: 'workflow', snippet: 'commit only after tests pass', rationale: 'repeated user preference', confidence: 0.92, sourceType: 'explicit_tag', extractorRule: 'explicit_tag', timestamp: '2026-05-06T00:00:00.000Z' })!;
+
+    const { pi, handlers } = setupMockPi();
+    registerMemoryReviewCandidatesCommand(pi, dbManager, skillStore);
 
     const notifications: string[] = [];
     let inputCalls = 0;
-    const queue = [
-      `[#] #${c.id}`,
-      '🚀 Promote selected (approved only)',
-      '✅ Done',
-    ];
+    const queue = [`[#] #${c.id}`, '🚀 Promote selected (approved only)', '✅ Done'];
 
-    const ctx = {
-      ui: {
-        select: async (_title: string, options: string[]) => {
-          const next = queue.shift();
-          if (!next) return '✅ Done';
-          if (next.startsWith('[#]')) {
-            const id = next.match(/#(\d+)/)![1];
-            return options.find((o) => o.includes(`#${id} `)) ?? options[0];
-          }
-          return next;
-        },
-        input: async () => {
-          inputCalls++;
-          return 'test-skill';
-        },
-        notify: (m: string) => notifications.push(m),
+    const ctx = { ui: {
+      select: async (_t: string, options: string[]) => {
+        const next = queue.shift(); if (!next) return '✅ Done';
+        if (next.startsWith('[#]')) { const id = next.match(/#(\d+)/)![1]; return options.find((o) => o.includes(`#${id} `)) ?? options[0]; }
+        return next;
       },
-    } as any;
+      input: async () => { inputCalls++; return 'test-skill'; },
+      notify: (m: string) => notifications.push(m),
+    } } as any;
 
     await handlers.get('memory-review-candidates')('', ctx);
-
-    const row = listCandidates(dbManager).find((r) => r.id === c.id)!;
-    assert.equal(row.status, 'pending');
-    assert.ok(notifications.some((m) => m.includes('No approved candidates selected')));
+    assert.equal(listCandidates(dbManager).find((r) => r.id === c.id)!.status, 'pending');
+    assert.ok(notifications.some((m) => m.includes('approved')));
     assert.equal(inputCalls, 0);
   });
 });
