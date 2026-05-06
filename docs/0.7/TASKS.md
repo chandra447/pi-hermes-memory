@@ -25,18 +25,18 @@ Extractor runs on session history and outputs quality reports without mutating c
 ### Done when
 `memory_candidates` exists with migrations and tested status transitions.
 
-- [ ] Add schema for `memory_candidates` in `src/store/schema.ts` with provenance fields:
-  - [ ] `source_type`
-  - [ ] `extractor_rule`
-  - [ ] `evidence_count`
-- [ ] Add legacy migration path in `src/store/db.ts`
-- [ ] Add deterministic unique dedupe index: `(session_id, message_id, tag, extractor_rule)`
-- [ ] Create `src/store/candidate-store.ts`:
-  - [ ] `addCandidate()`
-  - [ ] `listCandidates()` with filters (status/project/tag)
-  - [ ] `updateCandidateStatus()`
-  - [ ] `markPromoted()`
-- [ ] Add tests: `tests/store/candidate-store.test.ts`
+- [~] Add schema for `memory_candidates` in `src/store/schema.ts` with provenance fields:
+  - [~] `source_type`
+  - [~] `extractor_rule`
+  - [~] `evidence_count`
+- [~] Add legacy migration path in `src/store/db.ts`
+- [~] Add deterministic unique dedupe index: `(session_id, message_id, tag, extractor_rule)`
+- [~] Create `src/store/candidate-store.ts`:
+  - [~] `addCandidate()`
+  - [~] `listCandidates()` with filters (status/project/tag)
+  - [~] `updateCandidateStatus()`
+  - [~] `markPromoted()`
+- [~] Add tests: `tests/store/candidate-store.test.ts`
 
 ---
 

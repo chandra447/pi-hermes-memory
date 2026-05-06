@@ -37,23 +37,27 @@ export class DatabaseManager {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
 
+    // Pre-migrate legacy tables first so schema/index creation doesn't fail.
+    this.ensureMemoriesColumns(db);
+    this.ensureMemoryCandidatesColumns(db);
+
     // Create tables and triggers
     try {
       db.exec(SCHEMA_SQL);
     } catch (err) {
-      if (!this.isLegacyMemoriesCategoryError(err)) {
+      if (!this.isLegacyMemoriesCategoryError(err) && !this.isLegacyMemoryCandidatesError(err)) {
         throw err;
       }
 
-      // Legacy DB from pre-v0.6 can have memories table without the category
-      // and failure metadata columns. Add missing columns, then retry schema.
+      // Retry once after idempotent migration pass.
       this.ensureMemoriesColumns(db);
+      this.ensureMemoryCandidatesColumns(db);
       db.exec(SCHEMA_SQL);
     }
 
-    // Extra safety: always ensure the legacy memories columns exist, even when
-    // schema execution succeeds (idempotent on upgraded DBs).
+    // Final idempotent pass for upgraded installs.
     this.ensureMemoriesColumns(db);
+    this.ensureMemoryCandidatesColumns(db);
 
     return db;
   }
@@ -62,6 +66,13 @@ export class DatabaseManager {
     if (!(err instanceof Error)) return false;
     const msg = err.message.toLowerCase();
     return msg.includes('no such column: category') || msg.includes('memories(category)');
+  }
+
+  private isLegacyMemoryCandidatesError(err: unknown): boolean {
+    if (!(err instanceof Error)) return false;
+    const msg = err.message.toLowerCase();
+    return msg.includes('memory_candidates')
+      && (msg.includes('extractor_rule') || msg.includes('evidence_count') || msg.includes('tag') || msg.includes('snippet') || msg.includes('rationale'));
   }
 
   private ensureMemoriesColumns(db: Database.Database): void {
@@ -82,6 +93,52 @@ export class DatabaseManager {
     }
     if (!names.has('corrected_to')) {
       db.exec('ALTER TABLE memories ADD COLUMN corrected_to TEXT');
+    }
+  }
+
+  private ensureMemoryCandidatesColumns(db: Database.Database): void {
+    const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memory_candidates'").get() as { name: string } | undefined;
+    if (!tableExists) return;
+
+    const columns = db.prepare('PRAGMA table_info(memory_candidates)').all() as { name: string }[];
+    const names = new Set(columns.map((c) => c.name));
+    const has = (col: string) => names.has(col);
+
+    if (!has('tag')) {
+      db.exec("ALTER TABLE memory_candidates ADD COLUMN tag TEXT NOT NULL DEFAULT ''");
+    }
+    if (!has('snippet')) {
+      db.exec("ALTER TABLE memory_candidates ADD COLUMN snippet TEXT NOT NULL DEFAULT ''");
+    }
+    if (!has('rationale')) {
+      db.exec("ALTER TABLE memory_candidates ADD COLUMN rationale TEXT NOT NULL DEFAULT ''");
+    }
+    if (!has('extractor_rule')) {
+      db.exec("ALTER TABLE memory_candidates ADD COLUMN extractor_rule TEXT NOT NULL DEFAULT 'unknown'");
+    }
+    if (!has('evidence_count')) {
+      db.exec('ALTER TABLE memory_candidates ADD COLUMN evidence_count INTEGER NOT NULL DEFAULT 1');
+    }
+
+    if (has('status') && has('created_at')) {
+      db.exec('CREATE INDEX IF NOT EXISTS idx_candidates_status_created ON memory_candidates(status, created_at DESC)');
+    }
+    if (has('project') && has('status')) {
+      db.exec('CREATE INDEX IF NOT EXISTS idx_candidates_project_status ON memory_candidates(project, status)');
+    }
+    if (has('session_id')) {
+      db.exec('CREATE INDEX IF NOT EXISTS idx_candidates_session ON memory_candidates(session_id)');
+    }
+    if (has('tag') && has('status')) {
+      db.exec('CREATE INDEX IF NOT EXISTS idx_candidates_tag_status ON memory_candidates(tag, status)');
+    }
+    if (has('session_id') && has('message_id') && has('tag') && has('extractor_rule')) {
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_dedupe_session_message_tag_rule ON memory_candidates(session_id, message_id, tag, extractor_rule)');
+    }
+
+    // Legacy pre-epic table variants may still include this index shape.
+    if (has('session_id') && has('message_id') && has('candidate_type') && has('extractor_rule') && has('normalized_snippet')) {
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_dedupe ON memory_candidates(session_id, message_id, candidate_type, extractor_rule, normalized_snippet)');
     }
   }
 

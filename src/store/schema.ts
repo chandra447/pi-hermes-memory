@@ -88,6 +88,28 @@ export const SCHEMA_SQL = `
     INSERT INTO memory_fts(rowid, content) VALUES (new.id, new.content);
   END;
 
+  -- Candidate learnings staged for review (v0.7)
+  CREATE TABLE IF NOT EXISTS memory_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    message_id TEXT,
+    project TEXT,
+    tag TEXT NOT NULL,
+    snippet TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'promoted')) DEFAULT 'pending',
+    source_type TEXT NOT NULL CHECK (source_type IN ('correction', 'failure', 'tool_sequence', 'explicit_tag')) DEFAULT 'failure',
+    extractor_rule TEXT NOT NULL,
+    evidence_count INTEGER NOT NULL DEFAULT 1,
+    tool_state TEXT,
+    timestamp TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    promoted_skill TEXT,
+    dedupe_key TEXT UNIQUE
+  );
+
   -- Indexes for common queries
   CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
   CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
@@ -96,4 +118,9 @@ export const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
   CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
   CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
+  CREATE INDEX IF NOT EXISTS idx_candidates_status_created ON memory_candidates(status, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_candidates_project_status ON memory_candidates(project, status);
+  CREATE INDEX IF NOT EXISTS idx_candidates_session ON memory_candidates(session_id);
+  CREATE INDEX IF NOT EXISTS idx_candidates_tag_status ON memory_candidates(tag, status);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_dedupe_session_message_tag_rule ON memory_candidates(session_id, message_id, tag, extractor_rule);
 `;

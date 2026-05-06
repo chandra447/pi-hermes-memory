@@ -61,6 +61,7 @@ describe('DatabaseManager', () => {
       assert.ok(tableNames.includes('sessions'), 'sessions table missing');
       assert.ok(tableNames.includes('messages'), 'messages table missing');
       assert.ok(tableNames.includes('memories'), 'memories table missing');
+      assert.ok(tableNames.includes('memory_candidates'), 'memory_candidates table missing');
     });
 
     it('should create FTS5 virtual tables', () => {
@@ -124,6 +125,47 @@ describe('DatabaseManager', () => {
       assert.ok(names.includes('failure_reason'));
       assert.ok(names.includes('tool_state'));
       assert.ok(names.includes('corrected_to'));
+
+      migratedManager.close();
+    });
+
+    it('should migrate legacy memory_candidates table missing epic-1 columns', () => {
+      const dbPath = path.join(tmpDir, 'sessions.db');
+      const legacyDb = new Database(dbPath);
+
+      legacyDb.exec(`
+        CREATE TABLE memory_candidates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT NOT NULL,
+          message_id TEXT,
+          project TEXT,
+          tag TEXT NOT NULL,
+          snippet TEXT NOT NULL,
+          rationale TEXT NOT NULL,
+          confidence REAL NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'pending',
+          source_type TEXT NOT NULL DEFAULT 'failure',
+          tool_state TEXT,
+          timestamp TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          promoted_skill TEXT,
+          dedupe_key TEXT UNIQUE
+        );
+      `);
+      legacyDb.close();
+
+      const migratedManager = new DatabaseManager(tmpDir);
+      const migratedDb = migratedManager.getDb();
+      const columns = migratedDb.prepare('PRAGMA table_info(memory_candidates)').all() as { name: string }[];
+      const names = columns.map((c) => c.name);
+
+      assert.ok(names.includes('extractor_rule'));
+      assert.ok(names.includes('evidence_count'));
+
+      const indexes = migratedDb.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='memory_candidates'").all() as { name: string }[];
+      const indexNames = indexes.map((i) => i.name);
+      assert.ok(indexNames.includes('idx_candidates_dedupe_session_message_tag_rule'));
 
       migratedManager.close();
     });
