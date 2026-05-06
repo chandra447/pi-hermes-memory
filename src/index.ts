@@ -46,6 +46,7 @@ import { registerSwitchProjectCommand } from "./handlers/switch-project.js";
 import { registerIndexSessionsCommand } from "./handlers/index-sessions.js";
 import { registerLearnMemoryCommand } from "./handlers/learn-memory.js";
 import { registerCandidateShadowRunCommand } from "./handlers/candidate-shadow-command.js";
+import { registerMemoryReviewCandidatesCommand } from "./handlers/memory-review-candidates.js";
 import { loadConfig } from "./config.js";
 import { detectProject } from "./project.js";
 
@@ -122,6 +123,7 @@ export default function (pi: ExtensionAPI) {
   registerSwitchProjectCommand(pi);
   registerLearnMemoryCommand(pi);
   registerCandidateShadowRunCommand(pi, config);
+  registerMemoryReviewCandidatesCommand(pi, dbManager);
 
   // ── 11. SQLite session search + extended memory ──
   registerSessionSearchTool(pi, dbManager);

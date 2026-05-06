@@ -56,17 +56,18 @@ We can stage candidates from indexed session messages using deterministic heuris
 
 ---
 
-## Epic 3: CLI Review Commands (Phase 1 UX)
+## Epic 3: TUI Review Flow (Primary UX)
 
 ### Done when
-Users can review/triage/promote candidates without modal, with explicit approval before promotion.
+`/memory-review-candidates` provides interactive review/triage/promote flow so users never need to remember IDs.
 
-- [ ] Add command: `/memory-candidates`
-- [ ] Add command: `/memory-candidates-approve <id...>`
-- [ ] Add command: `/memory-candidates-reject <id...>`
-- [ ] Add command: `/memory-candidates-promote <id...>` (must enforce approval gate)
-- [ ] Wire commands in `src/index.ts`
-- [ ] Add command tests in `tests/handlers/`
+- [~] Add command: `/memory-review-candidates`
+- [~] Build modal/list view with metadata (project/tag/confidence/status/snippet)
+- [~] Add row actions: approve/reject/promote/edit/merge
+- [~] Add multi-select + bulk actions
+- [~] Enforce approval gate before promotion
+- [~] Wire command in `src/index.ts`
+- [~] Add handler tests in `tests/handlers/`
 
 ---
 
@@ -88,20 +89,7 @@ Approved candidates can be converted into a draft skill and saved via `skill.cre
 
 ---
 
-## Epic 5: TUI Modal Review (Phase 2 UX)
-
-### Done when
-`/memory-review-candidates` provides interactive review and promotion flow.
-
-- [ ] Add command: `/memory-review-candidates`
-- [ ] Build modal list view with metadata (project/tag/confidence)
-- [ ] Add actions: approve/reject/edit/merge
-- [ ] Add multi-select + “Create skill draft” action
-- [ ] Add smoke test coverage for modal handler behavior
-
----
-
-## Epic 6: Quality Controls + Observability
+## Epic 5: Quality Controls + Observability
 
 ### Done when
 Noise is controlled and users get visibility into pending/promoted candidates.
@@ -115,7 +103,7 @@ Noise is controlled and users get visibility into pending/promoted candidates.
 
 ---
 
-## Epic 7: Docs + Release
+## Epic 6: Docs + Release
 
 ### Done when
 Docs updated and release is shippable.
@@ -132,4 +120,5 @@ Docs updated and release is shippable.
 
 - One commit per epic (`feat(epic-X): ...`)
 - Separate follow-up commit for test fixes if needed
+- UX order: TUI review → skill draft/save → quality/observability
 - Keep docs/release updates in final epic commits

@@ -48,6 +48,12 @@ export interface ListCandidatesOptions {
   limit?: number;
 }
 
+export interface UpdateCandidateDetailsInput {
+  tag?: string;
+  snippet?: string;
+  rationale?: string;
+}
+
 interface CandidateRow {
   id: number;
   session_id: string;
@@ -210,6 +216,69 @@ export function updateCandidateStatus(dbManager: DatabaseManager, id: number, st
   `).run(status, new Date().toISOString(), id);
 
   return result.changes > 0;
+}
+
+export function updateCandidateDetails(dbManager: DatabaseManager, id: number, input: UpdateCandidateDetailsInput): boolean {
+  const db = dbManager.getDb();
+  const existing = db.prepare('SELECT id, tag, snippet, rationale FROM memory_candidates WHERE id = ?').get(id) as {
+    id: number;
+    tag: string;
+    snippet: string;
+    rationale: string;
+  } | undefined;
+
+  if (!existing) return false;
+
+  const nextTag = input.tag?.trim() || existing.tag;
+  const nextSnippet = input.snippet?.trim() || existing.snippet;
+  const nextRationale = input.rationale?.trim() || existing.rationale;
+
+  const result = db.prepare(`
+    UPDATE memory_candidates
+    SET tag = ?, snippet = ?, rationale = ?, updated_at = ?
+    WHERE id = ?
+  `).run(nextTag, nextSnippet, nextRationale, new Date().toISOString(), id);
+
+  return result.changes > 0;
+}
+
+export function mergeCandidates(dbManager: DatabaseManager, primaryId: number, secondaryId: number): boolean {
+  if (primaryId === secondaryId) return false;
+
+  const db = dbManager.getDb();
+  const primary = db.prepare('SELECT * FROM memory_candidates WHERE id = ?').get(primaryId) as CandidateRow | undefined;
+  const secondary = db.prepare('SELECT * FROM memory_candidates WHERE id = ?').get(secondaryId) as CandidateRow | undefined;
+
+  if (!primary || !secondary) return false;
+  if (normalizeStatus(primary.status) === 'promoted' || normalizeStatus(secondary.status) === 'promoted') return false;
+
+  const mergedSnippet = primary.snippet === secondary.snippet
+    ? primary.snippet
+    : `${primary.snippet}\n---\n${secondary.snippet}`;
+
+  const mergedRationale = primary.rationale === secondary.rationale
+    ? primary.rationale
+    : `${primary.rationale}\nMerged from #${secondary.id}: ${secondary.rationale}`;
+
+  const mergedEvidence = Math.max(1, (primary.evidence_count ?? 1) + (secondary.evidence_count ?? 1));
+  const mergedConfidence = Math.max(primary.confidence, secondary.confidence);
+
+  const tx = db.transaction(() => {
+    db.prepare(`
+      UPDATE memory_candidates
+      SET snippet = ?, rationale = ?, evidence_count = ?, confidence = ?, updated_at = ?
+      WHERE id = ?
+    `).run(mergedSnippet, mergedRationale, mergedEvidence, mergedConfidence, new Date().toISOString(), primaryId);
+
+    db.prepare(`
+      UPDATE memory_candidates
+      SET status = 'rejected', updated_at = ?
+      WHERE id = ?
+    `).run(new Date().toISOString(), secondaryId);
+  });
+
+  tx();
+  return true;
 }
 
 export function markPromoted(dbManager: DatabaseManager, id: number, skillName: string): boolean {

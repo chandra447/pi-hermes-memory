@@ -8,6 +8,8 @@ import {
   addCandidate,
   listCandidates,
   markPromoted,
+  mergeCandidates,
+  updateCandidateDetails,
   updateCandidateStatus,
 } from '../../src/store/candidate-store.js';
 
@@ -161,6 +163,78 @@ describe('candidate-store', () => {
     assert.strictEqual(duplicateByKey, null);
     assert.strictEqual(duplicateByTuple, null);
     assert.strictEqual(listCandidates(dbManager).length, 1);
+  });
+
+  it('updates candidate details', () => {
+    const created = addCandidate(dbManager, {
+      sessionId: 's1',
+      messageId: 'm1',
+      project: 'proj-a',
+      tag: 'testing',
+      snippet: 'old snippet',
+      rationale: 'old rationale',
+      confidence: 0.8,
+      sourceType: 'failure',
+      extractorRule: 'failure_fix',
+      timestamp: '2026-05-06T00:00:00.000Z',
+    });
+
+    assert.ok(created);
+    const ok = updateCandidateDetails(dbManager, created!.id, {
+      tag: 'workflow',
+      snippet: 'new snippet',
+      rationale: 'new rationale',
+    });
+
+    assert.strictEqual(ok, true);
+    const row = listCandidates(dbManager).find((r) => r.id === created!.id)!;
+    assert.strictEqual(row.tag, 'workflow');
+    assert.strictEqual(row.snippet, 'new snippet');
+    assert.strictEqual(row.rationale, 'new rationale');
+  });
+
+  it('merges two candidates into primary and rejects secondary', () => {
+    const a = addCandidate(dbManager, {
+      sessionId: 's1',
+      messageId: 'm1',
+      project: 'proj-a',
+      tag: 'testing',
+      snippet: 'first snippet',
+      rationale: 'first rationale',
+      confidence: 0.6,
+      sourceType: 'failure',
+      extractorRule: 'failure_fix',
+      evidenceCount: 1,
+      timestamp: '2026-05-06T00:00:00.000Z',
+    })!;
+
+    const b = addCandidate(dbManager, {
+      sessionId: 's1',
+      messageId: 'm2',
+      project: 'proj-a',
+      tag: 'testing',
+      snippet: 'second snippet',
+      rationale: 'second rationale',
+      confidence: 0.9,
+      sourceType: 'failure',
+      extractorRule: 'failure_fix',
+      evidenceCount: 2,
+      timestamp: '2026-05-06T00:01:00.000Z',
+    })!;
+
+    const ok = mergeCandidates(dbManager, a.id, b.id);
+    assert.strictEqual(ok, true);
+
+    const rows = listCandidates(dbManager);
+    const primary = rows.find((r) => r.id === a.id)!;
+    const secondary = rows.find((r) => r.id === b.id)!;
+
+    assert.strictEqual(primary.status, 'pending');
+    assert.ok(primary.snippet.includes('first snippet'));
+    assert.ok(primary.snippet.includes('second snippet'));
+    assert.strictEqual(primary.evidenceCount, 3);
+    assert.strictEqual(primary.confidence, 0.9);
+    assert.strictEqual(secondary.status, 'rejected');
   });
 
   it('uses deterministic fallback messageId when missing', () => {
