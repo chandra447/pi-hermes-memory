@@ -7,13 +7,29 @@
 
 ---
 
+## Epic 0: Shadow Mode Validation (pre-write)
+
+### Done when
+Extractor runs on session history and outputs quality reports without mutating candidate tables.
+
+- [ ] Add shadow-mode flag in config (`candidateShadowMode: true` default for initial rollout)
+- [ ] Add `/memory-candidates-shadow-run` command to run extraction report only
+- [ ] Capture report metrics: candidate count, duplicate rate, low-confidence rate, top rules
+- [ ] Add tests for shadow mode no-write guarantees
+
+---
+
 ## Epic 1: Candidate Schema + Store
 
 ### Done when
 `memory_candidates` exists with migrations and tested status transitions.
 
-- [ ] Add schema for `memory_candidates` in `src/store/schema.ts`
+- [ ] Add schema for `memory_candidates` in `src/store/schema.ts` with provenance fields:
+  - [ ] `source_type`
+  - [ ] `extractor_rule`
+  - [ ] `evidence_count`
 - [ ] Add legacy migration path in `src/store/db.ts`
+- [ ] Add deterministic unique dedupe index: `(session_id, message_id, tag, extractor_rule)`
 - [ ] Create `src/store/candidate-store.ts`:
   - [ ] `addCandidate()`
   - [ ] `listCandidates()` with filters (status/project/tag)
@@ -33,7 +49,8 @@ We can stage candidates from indexed session messages using deterministic heuris
   - [ ] repeated corrections
   - [ ] resolved failure + fix pair
   - [ ] repeated successful tool sequences
-- [ ] Add dedupe key strategy (session_id/message_id/tag)
+- [ ] Add provenance + dedupe key strategy (session_id/message_id/tag/extractor_rule)
+- [ ] Add fallback deterministic message hash when `message_id` is missing
 - [ ] Add tests: `tests/store/candidate-extractor.test.ts`
 
 ---
@@ -41,12 +58,12 @@ We can stage candidates from indexed session messages using deterministic heuris
 ## Epic 3: CLI Review Commands (Phase 1 UX)
 
 ### Done when
-Users can review/triage/promote candidates without modal.
+Users can review/triage/promote candidates without modal, with explicit approval before promotion.
 
 - [ ] Add command: `/memory-candidates`
 - [ ] Add command: `/memory-candidates-approve <id...>`
 - [ ] Add command: `/memory-candidates-reject <id...>`
-- [ ] Add command: `/memory-candidates-promote <id...>`
+- [ ] Add command: `/memory-candidates-promote <id...>` (must enforce approval gate)
 - [ ] Wire commands in `src/index.ts`
 - [ ] Add command tests in `tests/handlers/`
 
@@ -55,7 +72,7 @@ Users can review/triage/promote candidates without modal.
 ## Epic 4: Skill Draft Composer + Save
 
 ### Done when
-Approved candidates can be converted into a draft skill and saved via `skill.create`.
+Approved candidates can be converted into a draft skill and saved via `skill.create`, never auto-created silently.
 
 - [ ] Create `src/skills/skill-draft-composer.ts`
 - [ ] Map candidates into required sections:
@@ -64,6 +81,7 @@ Approved candidates can be converted into a draft skill and saved via `skill.cre
   - [ ] `Pitfalls`
   - [ ] `Verification`
 - [ ] Add validation/fallback when sections are sparse
+- [ ] Add promotion guardrail: require explicit approval OR repeated evidence (`evidence_count >= 2`) + approval
 - [ ] Persist via existing `skill` tool interface
 - [ ] Add tests: `tests/skills/skill-draft-composer.test.ts`
 
@@ -89,6 +107,7 @@ Noise is controlled and users get visibility into pending/promoted candidates.
 
 - [ ] Add duplicate suppression guard
 - [ ] Add confidence threshold config
+- [ ] Add source-of-truth rebuild command from session JSONL (`/memory-candidates-rebuild`)
 - [ ] Add optional stale pending reminder command (weekly)
 - [ ] Add stats output (pending/approved/rejected/promoted counts)
 - [ ] Extend `/learn-memory-tool` with candidate-review flow docs

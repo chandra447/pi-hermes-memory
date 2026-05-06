@@ -2,29 +2,24 @@
 
 ## Problem
 
-v0.6 captures memory/failures well, but durable behavior learning is still mostly implicit. We need an explicit bridge from raw session learnings to reusable skills.
+v0.6 captures memory/failures well, but durable behavior learning is still mostly implicit.
+We need an explicit bridge from raw session learnings to reusable skills, with review gates.
 
 ## Goal
 
-Ship a deterministic, user-reviewable flow:
-1. extract candidate learnings from session history,
+Ship a deterministic, user-reviewable pipeline:
+1. stage candidate learnings from session history,
 2. review/triage candidates,
-3. generate a skill draft from approved candidates,
+3. promote selected candidates into skill drafts,
 4. save via existing `skill` tool.
 
-## Scope
+## Design Principles
 
-### In scope
-- Candidate extraction + persistence
-- Candidate review commands (phase 1)
-- Interactive review modal (phase 2)
-- Skill draft generation + save (phase 3)
-- Basic quality controls (phase 4)
-
-### Out of scope
-- Auto-publishing skills without review
-- Replacing memory/failure stores
-- Git-based mining requirements
+- **Stage first, promote later** (no direct auto-skill creation)
+- **Human review required** before durable skill writes
+- **Provenance on every candidate** (session/message/time/project/tool context)
+- **Deterministic extraction first** (LLM optional in later tuning)
+- **No git dependency** (session-indexed behavior only)
 
 ---
 
@@ -42,116 +37,158 @@ Columns:
 - `rationale` TEXT NOT NULL
 - `confidence` REAL NOT NULL DEFAULT 0
 - `status` TEXT NOT NULL CHECK (`pending`,`approved`,`rejected`,`promoted`) DEFAULT `pending`
+- `source_type` TEXT NOT NULL CHECK (`correction`,`failure`,`tool_sequence`,`explicit_tag`) DEFAULT `failure`
+- `tool_state` TEXT
+- `timestamp` TEXT NOT NULL
 - `created_at` TEXT NOT NULL
 - `updated_at` TEXT NOT NULL
 - `promoted_skill` TEXT
+- `dedupe_key` TEXT UNIQUE
 
 Indexes:
 - `idx_candidates_status_created(status, created_at DESC)`
 - `idx_candidates_project_status(project, status)`
 - `idx_candidates_session(session_id)`
+- `idx_candidates_tag_status(tag, status)`
 
 ### New modules
+
 - `src/store/candidate-store.ts`
   - CRUD + status transitions + dedupe checks
 - `src/store/candidate-extractor.ts`
-  - Heuristics from messages/session chunks
+  - deterministic heuristics from indexed sessions
 - `src/handlers/review-candidates.ts`
-  - `/memory-candidates`, approve/reject/promote commands
+  - `/memory-candidates` + approve/reject/promote commands
 - `src/handlers/review-candidates-modal.ts`
-  - TUI modal flow for triage (phase 2)
-- `src/skills/` (reuse existing `skill` tool for persistence)
+  - TUI triage flow (phase 2)
+- `src/skills/skill-draft-composer.ts`
+  - converts approved candidates into skill sections
 
 ### Reused modules
+
 - `session-indexer` + `session_search`
 - `SkillStore` + `skill` tool
-- Existing correction/failure capture pipeline
+- correction/failure capture pipeline from v0.6
+
+---
+
+## Candidate Lifecycle
+
+`pending` → (`approved` | `rejected`) → `promoted`
+
+Rules:
+- only `approved` candidates can be promoted
+- `promoted` candidates are immutable
+- duplicate candidates (same dedupe_key) are ignored
+
+---
+
+## Extraction Strategy (Deterministic)
+
+Priority order:
+1. explicit tagged messages (`#learn`, `#skill`)
+2. repeated corrections
+3. resolved failures with clear fix
+4. repeated successful tool sequences
+
+Candidate output:
+- `tag` (e.g. `testing`, `migration`, `typescript`)
+- `snippet` (short source text)
+- `rationale` (why reusable)
+- `confidence` (0–1)
+- provenance (`session_id`, `message_id`, `timestamp`, `source_type`, optional `tool_state`)
+
+Confidence policy:
+- `>= 0.75`: auto-stage as `pending`
+- `0.55–0.74`: stage if user opts into “include medium confidence”
+- `< 0.55`: hidden by default
 
 ---
 
 ## UX Design
 
-### Commands (phase 1)
-- `/memory-candidates` → list pending candidates
+### Phase 1 (CLI-first)
+
+Commands:
+- `/memory-candidates` (list pending; filters: project/tag/status/confidence)
 - `/memory-candidates-approve <id...>`
 - `/memory-candidates-reject <id...>`
-- `/memory-candidates-promote <id...>` → create skill draft
+- `/memory-candidates-promote <id...>`
+- `/memory-candidates-stats`
 
-### Modal (phase 2)
+### Phase 2 (TUI modal)
+
 Primary command:
 - `/memory-review-candidates`
 
 Flow:
-1. Candidate list (tag/project/confidence/snippet)
-2. Triage actions: approve/reject/edit/merge
-3. Multi-select → “Create skill draft”
-4. Draft preview with sections:
+1. candidate list with provenance (project/tag/source/confidence/time)
+2. triage actions: approve/reject/edit/merge
+3. multi-select → “Create skill draft”
+4. draft preview with required sections:
    - `## When to Use`
    - `## Procedure`
    - `## Pitfalls`
    - `## Verification`
-5. Save through `skill.create`
+5. save via `skill.create`
 
 ---
 
-## Extraction Strategy
+## Promotion Quality Controls
 
-Priority order:
-1. explicit tagged messages (if present),
-2. repeated corrections,
-3. resolved failures with clear fix,
-4. repeated tool sequences ending in success.
-
-Output candidate shape:
-- tag (e.g., `testing`, `migration`, `typescript`)
-- snippet (short source text)
-- rationale (why this is reusable)
-- confidence (0-1)
-
-Initial thresholds:
-- auto-stage candidates with confidence >= 0.65
-- lower confidence only visible in modal “include low confidence” toggle
+Before `skill.create`:
+- minimum 2 approved candidates OR one high-confidence failure+fix pair
+- ensure all 4 sections are non-empty (fallback templates when sparse)
+- prevent near-duplicate skill names (slug collision + similarity check)
+- require preview/confirm step
 
 ---
 
-## Rollout
+## Rollout Plan
 
-### Phase 1 (CLI-first)
-- schema + store + extractor + non-modal review commands
+### Epic 1 — Schema + Candidate Store
+- DB schema/migrations
+- candidate CRUD + status transitions
 
-### Phase 2 (TUI review)
-- modal triage + batch actions + merge/edit
+### Epic 2 — Extractor + Staging
+- deterministic extractor from indexed sessions
+- dedupe and confidence thresholds
 
-### Phase 3 (Skill promotion)
-- deterministic skill draft composer + `skill.create`
+### Epic 3 — CLI Review Commands
+- list/approve/reject/promote/stats
 
-### Phase 4 (Quality controls)
-- dedupe suppression
-- stale pending reminders
-- promotion metrics
+### Epic 4 — Skill Draft Composer
+- deterministic section generation
+- validate and persist via `skill` tool
+
+### Epic 5 — TUI Modal Review
+- interactive triage and batch promotion
+
+### Epic 6 — Quality Controls + Docs
+- duplicate suppression, stale reminders, docs + release
 
 ---
 
 ## Success Metrics
 
-- ≥30% reduction in repeated corrections for same topic
+- ≥30% reduction in repeated corrections on same topic
 - ≥2 promoted skills/week for active users
-- lower MEMORY.md growth rate after enabling candidate triage
-- user feedback: “learning is intentional and reviewable”
+- lower raw MEMORY.md growth after candidate triage
+- user feedback: “learning feels intentional, not noisy”
 
 ---
 
 ## Risks & Mitigations
 
-- **Noise in candidates** → conservative thresholds + easy reject
-- **Over-complex UX** → phase 1 command-based first
-- **Bad skill drafts** → always editable before save
+- **Candidate noise** → conservative thresholds + fast reject path
+- **UX complexity** → CLI-first before modal
+- **Weak drafts** → mandatory preview + section validation
 - **Schema drift** → migration coverage + regression tests
 
 ---
 
 ## Dependencies
 
-- Existing SQLite infra (`DatabaseManager`, migrations)
-- Existing session indexing coverage
-- Existing `skill` tool contract and tests
+- existing SQLite infra (`DatabaseManager`, migration path)
+- indexed session availability (`/memory-index-sessions`)
+- existing `skill` tool contract + tests
