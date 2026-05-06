@@ -69,6 +69,30 @@ describe("candidate-shadow", () => {
     assert.ok(rules.includes("repeated_tool_sequence"));
   });
 
+  it("normalizes repeated corrections and avoids reusing one assistant fix for multiple failures", () => {
+    const session: ParsedSession = {
+      id: "s-2",
+      project: "demo",
+      cwd: "/tmp/demo",
+      startedAt: "2026-05-06T00:00:00.000Z",
+      endedAt: null,
+      messages: [
+        { id: "u1", role: "user", content: "Don't use Teal for branding.", timestamp: "2026-05-06T00:00:01.000Z" },
+        { id: "u2", role: "user", content: "dont use teal for branding!", timestamp: "2026-05-06T00:00:02.000Z" },
+        { id: "u3", role: "user", content: "build failed with sqlite issue", timestamp: "2026-05-06T00:00:03.000Z" },
+        { id: "u4", role: "user", content: "tests failing with migration error", timestamp: "2026-05-06T00:00:04.000Z" },
+        { id: "a1", role: "assistant", content: "fixed and tests passed", timestamp: "2026-05-06T00:00:05.000Z" },
+      ],
+    };
+
+    const candidates = extractShadowCandidatesFromSession(session);
+    const corrections = candidates.filter((c) => c.extractorRule === "repeated_correction");
+    const failureFix = candidates.filter((c) => c.extractorRule === "failure_fix_pair");
+
+    assert.equal(corrections.length, 1);
+    assert.equal(failureFix.length, 1);
+  });
+
   it("buildCandidateShadowReport scans files, dedupes candidates, and returns top rules", () => {
     const projectDirA = path.join(tmpDir, "--Users-test-project-a--");
     const projectDirB = path.join(tmpDir, "--Users-test-project-b--");

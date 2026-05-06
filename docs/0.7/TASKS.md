@@ -45,14 +45,14 @@ Extractor runs on session history and outputs quality reports without mutating c
 ### Done when
 We can stage candidates from indexed session messages using deterministic heuristics.
 
-- [ ] Create `src/store/candidate-extractor.ts`
-- [ ] Implement extraction heuristics:
-  - [ ] repeated corrections
-  - [ ] resolved failure + fix pair
-  - [ ] repeated successful tool sequences
-- [ ] Add provenance + dedupe key strategy (session_id/message_id/tag/extractor_rule)
-- [ ] Add fallback deterministic message hash when `message_id` is missing
-- [ ] Add tests: `tests/store/candidate-extractor.test.ts`
+- [~] Create `src/store/candidate-extractor.ts`
+- [~] Implement extraction heuristics:
+  - [~] repeated corrections
+  - [~] resolved failure + fix pair
+  - [~] repeated successful tool sequences
+- [~] Add provenance + dedupe key strategy (session_id/message_id/tag/extractor_rule)
+- [~] Add fallback deterministic message hash when `message_id` is missing
+- [~] Add tests: `tests/store/candidate-extractor.test.ts`
 
 ---
 

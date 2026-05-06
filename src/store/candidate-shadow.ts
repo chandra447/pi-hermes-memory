@@ -58,11 +58,17 @@ function hashText(text: string): string {
 }
 
 function extractDirective(text: string): string {
-  return normalizeWhitespace(
+  const directive = normalizeWhitespace(
     text
       .replace(/^(no|wrong|actually|i said|i told you|don'?t|please don'?t)[,\s.!-]*/i, "")
       .trim(),
   );
+  return directive
+    .toLowerCase()
+    .replace(/[“”"'`]/g, '')
+    .replace(/[.,!?;:()\[\]{}]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function inferTag(text: string): string {
@@ -163,6 +169,7 @@ function extractRepeatedCorrectionCandidates(session: ParsedSession): ShadowCand
 
 function extractFailureFixCandidates(session: ParsedSession): ShadowCandidate[] {
   const out: ShadowCandidate[] = [];
+  const usedAssistantIds = new Set<string>();
 
   for (let i = 0; i < session.messages.length; i++) {
     const userMsg = session.messages[i];
@@ -171,6 +178,7 @@ function extractFailureFixCandidates(session: ParsedSession): ShadowCandidate[] 
 
     const assistant = findNextAssistant(session.messages, i, 5);
     if (!assistant) continue;
+    if (usedAssistantIds.has(assistant.id)) continue;
     if (!SUCCESS_PATTERN.test(assistant.content)) continue;
 
     const combined = `${shortSnippet(userMsg.content, 120)} -> ${shortSnippet(assistant.content, 120)}`;
@@ -187,6 +195,8 @@ function extractFailureFixCandidates(session: ParsedSession): ShadowCandidate[] 
       timestamp: assistant.timestamp,
       evidenceCount: 2,
     });
+
+    usedAssistantIds.add(assistant.id);
   }
 
   return out;

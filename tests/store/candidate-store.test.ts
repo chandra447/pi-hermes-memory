@@ -162,4 +162,35 @@ describe('candidate-store', () => {
     assert.strictEqual(duplicateByTuple, null);
     assert.strictEqual(listCandidates(dbManager).length, 1);
   });
+
+  it('uses deterministic fallback messageId when missing', () => {
+    const first = addCandidate(dbManager, {
+      sessionId: 's-fallback',
+      project: 'proj-a',
+      tag: 'testing',
+      snippet: 'same snippet',
+      rationale: 'same rationale',
+      confidence: 0.8,
+      sourceType: 'failure',
+      extractorRule: 'failure_fix',
+      timestamp: '2026-05-06T00:00:00.000Z',
+    });
+
+    const second = addCandidate(dbManager, {
+      sessionId: 's-fallback',
+      project: 'proj-a',
+      tag: 'testing',
+      snippet: 'same snippet',
+      rationale: 'same rationale',
+      confidence: 0.8,
+      sourceType: 'failure',
+      extractorRule: 'failure_fix',
+      timestamp: '2026-05-06T00:00:00.000Z',
+    });
+
+    assert.ok(first);
+    assert.match(first!.messageId ?? '', /^hash:/);
+    assert.strictEqual(second, null);
+    assert.strictEqual(listCandidates(dbManager).length, 1);
+  });
 });

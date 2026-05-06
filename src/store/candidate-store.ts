@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { DatabaseManager } from './db.js';
 
 export type CandidateStatus = 'pending' | 'approved' | 'rejected' | 'promoted';
@@ -72,6 +73,10 @@ function normalizeStatus(status: CandidateRow['status']): CandidateStatus {
   return status === 'new' ? 'pending' : status;
 }
 
+function stableHash(text: string): string {
+  return createHash('sha1').update(text).digest('hex').slice(0, 16);
+}
+
 function mapCandidate(row: CandidateRow): MemoryCandidate {
   return {
     id: row.id,
@@ -99,6 +104,9 @@ export function addCandidate(dbManager: DatabaseManager, input: AddCandidateInpu
   const db = dbManager.getDb();
   const now = new Date().toISOString();
 
+  const resolvedMessageId = input.messageId ?? `hash:${stableHash([input.sessionId, input.timestamp, input.tag, input.extractorRule, input.snippet].join('|'))}`;
+  const resolvedDedupeKey = input.dedupeKey ?? `${input.sessionId}|${resolvedMessageId}|${input.tag}|${input.extractorRule}`;
+
   const insert = db.prepare(`
     INSERT OR IGNORE INTO memory_candidates (
       session_id,
@@ -121,7 +129,7 @@ export function addCandidate(dbManager: DatabaseManager, input: AddCandidateInpu
 
   const result = insert.run(
     input.sessionId,
-    input.messageId ?? null,
+    resolvedMessageId,
     input.project ?? null,
     input.tag,
     input.snippet,
@@ -134,7 +142,7 @@ export function addCandidate(dbManager: DatabaseManager, input: AddCandidateInpu
     input.timestamp,
     now,
     now,
-    input.dedupeKey ?? null
+    resolvedDedupeKey
   );
 
   if (result.changes === 0) return null;
