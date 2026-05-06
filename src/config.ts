@@ -9,6 +9,8 @@ import {
   DEFAULT_NUDGE_INTERVAL,
   DEFAULT_FLUSH_MIN_TURNS,
   DEFAULT_NUDGE_TOOL_CALLS,
+  DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
+  DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
 } from "./constants.js";
 
 const DEFAULT_CONFIG: MemoryConfig = {
@@ -22,6 +24,9 @@ const DEFAULT_CONFIG: MemoryConfig = {
   flushMinTurns: DEFAULT_FLUSH_MIN_TURNS,
   autoConsolidate: true,
   correctionDetection: true,
+  failureInjectionEnabled: true,
+  failureInjectionMaxAgeDays: DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
+  failureInjectionMaxEntries: DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
   nudgeToolCalls: DEFAULT_NUDGE_TOOL_CALLS,
 };
 
@@ -48,6 +53,9 @@ export function loadConfig(): MemoryConfig {
       if (typeof parsed.flushMinTurns === "number") config.flushMinTurns = parsed.flushMinTurns;
       if (typeof parsed.autoConsolidate === "boolean") config.autoConsolidate = parsed.autoConsolidate;
       if (typeof parsed.correctionDetection === "boolean") config.correctionDetection = parsed.correctionDetection;
+      if (typeof parsed.failureInjectionEnabled === "boolean") config.failureInjectionEnabled = parsed.failureInjectionEnabled;
+      if (typeof parsed.failureInjectionMaxAgeDays === "number") config.failureInjectionMaxAgeDays = parsed.failureInjectionMaxAgeDays;
+      if (typeof parsed.failureInjectionMaxEntries === "number") config.failureInjectionMaxEntries = parsed.failureInjectionMaxEntries;
       if (typeof parsed.nudgeToolCalls === "number") config.nudgeToolCalls = parsed.nudgeToolCalls;
       if (typeof parsed.projectCharLimit === "number") config.projectCharLimit = parsed.projectCharLimit;
       if (typeof parsed.memoryDir === "string") config.memoryDir = parsed.memoryDir;

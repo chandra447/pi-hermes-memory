@@ -27,6 +27,12 @@ export interface MemoryConfig {
   autoConsolidate: boolean;
   /** Detect user corrections and trigger immediate memory save. Default: true */
   correctionDetection: boolean;
+  /** Inject recent failure memories into the system prompt. Default: true */
+  failureInjectionEnabled: boolean;
+  /** Maximum age in days for injected failure memories. Default: 7 */
+  failureInjectionMaxAgeDays: number;
+  /** Maximum number of failure memories to inject. Default: 5 */
+  failureInjectionMaxEntries: number;
   /** Tool calls before triggering background review (in addition to turn count). Default: 15 */
   nudgeToolCalls: number;
   /** Enable session history search via SQLite FTS5. Default: true */

@@ -19,6 +19,8 @@ import {
   ENTRY_DELIMITER,
   DEFAULT_MEMORY_CHAR_LIMIT,
   DEFAULT_USER_CHAR_LIMIT,
+  DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
+  DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
   MEMORY_FILE,
   USER_FILE,
 } from "../constants.js";
@@ -280,12 +282,17 @@ export class MemoryStore {
     if (this.snapshot.user) parts.push(this.fenceBlock(this.snapshot.user));
 
     // Add recent failure memories
-    const recentFailures = this.getFailureEntries(7);
-    if (recentFailures.length > 0) {
-      const maxFailures = 5;
-      const failures = recentFailures.slice(0, maxFailures);
-      const failureBlock = this.renderFailureBlock(failures);
-      parts.push(this.fenceBlock(failureBlock));
+    if (this.config.failureInjectionEnabled !== false) {
+      const maxAgeDays = this.config.failureInjectionMaxAgeDays ?? DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS;
+      const maxFailures = this.config.failureInjectionMaxEntries ?? DEFAULT_FAILURE_INJECTION_MAX_ENTRIES;
+      const recentFailures = this.getFailureEntries(maxAgeDays);
+      if (recentFailures.length > 0) {
+        const failures = recentFailures.slice(0, maxFailures);
+        if (failures.length > 0) {
+          const failureBlock = this.renderFailureBlock(failures);
+          parts.push(this.fenceBlock(failureBlock));
+        }
+      }
     }
 
     return parts.join("\n\n");
