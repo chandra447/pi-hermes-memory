@@ -18,6 +18,8 @@ export const DEFAULT_NUDGE_INTERVAL = 10;
 export const DEFAULT_FLUSH_MIN_TURNS = 6;
 export const DEFAULT_NUDGE_TOOL_CALLS = 15;
 export const DEFAULT_SKILL_TRIGGER_TOOL_CALLS = 8;
+export const DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS = 7;
+export const DEFAULT_FAILURE_INJECTION_MAX_ENTRIES = 5;
 
 // ─── File names ───
 export const MEMORY_FILE = "MEMORY.md";

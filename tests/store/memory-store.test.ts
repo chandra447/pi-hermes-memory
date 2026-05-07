@@ -65,16 +65,29 @@ async function removeFile(filePath: string): Promise<void> {
   try { await fs.unlink(filePath); } catch { /* ignore */ }
 }
 
+function dateDaysAgo(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  return date.toISOString().split("T")[0];
+}
+
+function failureEntry(text: string, createdDaysAgo = 0): string {
+  const date = dateDaysAgo(createdDaysAgo);
+  return `${text} <!-- created=${date}, last=${date} -->`;
+}
+
 // ─── Tests ───
 
 describe("MemoryStore", { concurrency: 1 }, () => {
   let memoryPath = "";
   let userPath = "";
+  let failurePath = "";
 
   before(async () => {
     MEMORY_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "pi-memory-test-"));
     memoryPath = path.join(MEMORY_DIR, MEMORY_FILE);
     userPath = path.join(MEMORY_DIR, USER_FILE);
+    failurePath = path.join(MEMORY_DIR, "failures.md");
   });
 
   after(async () => {
@@ -93,10 +106,12 @@ describe("MemoryStore", { concurrency: 1 }, () => {
   async function cleanSlate(): Promise<void> {
     await removeFile(memoryPath);
     await removeFile(userPath);
+    await removeFile(failurePath);
     await new Promise((r) => setTimeout(r, 250));
     // Remove again in case a pending write sneaked in during the wait
     await removeFile(memoryPath);
     await removeFile(userPath);
+    await removeFile(failurePath);
     await new Promise((r) => setTimeout(r, 50));
   }
 
@@ -449,6 +464,69 @@ describe("MemoryStore", { concurrency: 1 }, () => {
 
       const result = store.formatForSystemPrompt();
       assert.equal(result, "");
+    });
+
+    it("injects recent failure memories by default", async () => {
+      await writeRaw(failurePath, [
+        failureEntry(`${TEST_MARKER} failure 1`),
+        failureEntry(`${TEST_MARKER} failure 2`),
+        failureEntry(`${TEST_MARKER} failure 3`),
+        failureEntry(`${TEST_MARKER} failure 4`),
+        failureEntry(`${TEST_MARKER} failure 5`),
+        failureEntry(`${TEST_MARKER} failure 6`),
+      ].join(ENTRY_DELIMITER));
+
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+
+      const result = store.formatForSystemPrompt();
+      assert.ok(result.includes("RECENT FAILURES & LESSONS"));
+      assert.ok(result.includes(`${TEST_MARKER} failure 1`));
+      assert.ok(result.includes(`${TEST_MARKER} failure 5`));
+      assert.ok(!result.includes(`${TEST_MARKER} failure 6`), "default should preserve existing first-5 slice behavior");
+    });
+
+    it("does not inject failure memories when disabled", async () => {
+      await writeRaw(memoryPath, `${TEST_MARKER} regular memory`);
+      await writeRaw(failurePath, failureEntry(`${TEST_MARKER} disabled failure`));
+
+      const store = new MemoryStore(makeConfig({ failureInjectionEnabled: false }));
+      await store.loadFromDisk();
+
+      const result = store.formatForSystemPrompt();
+      assert.ok(result.includes(`${TEST_MARKER} regular memory`));
+      assert.ok(!result.includes("RECENT FAILURES & LESSONS"));
+      assert.ok(!result.includes(`${TEST_MARKER} disabled failure`));
+    });
+
+    it("respects configured failure injection max entries", async () => {
+      await writeRaw(failurePath, [
+        failureEntry(`${TEST_MARKER} max entry 1`),
+        failureEntry(`${TEST_MARKER} max entry 2`),
+        failureEntry(`${TEST_MARKER} max entry 3`),
+      ].join(ENTRY_DELIMITER));
+
+      const store = new MemoryStore(makeConfig({ failureInjectionMaxEntries: 2 }));
+      await store.loadFromDisk();
+
+      const result = store.formatForSystemPrompt();
+      assert.ok(result.includes(`${TEST_MARKER} max entry 1`));
+      assert.ok(result.includes(`${TEST_MARKER} max entry 2`));
+      assert.ok(!result.includes(`${TEST_MARKER} max entry 3`));
+    });
+
+    it("respects configured failure injection max age days", async () => {
+      await writeRaw(failurePath, [
+        failureEntry(`${TEST_MARKER} recent failure`, 1),
+        failureEntry(`${TEST_MARKER} old failure`, 3),
+      ].join(ENTRY_DELIMITER));
+
+      const store = new MemoryStore(makeConfig({ failureInjectionMaxAgeDays: 2 }));
+      await store.loadFromDisk();
+
+      const result = store.formatForSystemPrompt();
+      assert.ok(result.includes(`${TEST_MARKER} recent failure`));
+      assert.ok(!result.includes(`${TEST_MARKER} old failure`));
     });
 
     it("includes both memory and user blocks when both have entries", async () => {

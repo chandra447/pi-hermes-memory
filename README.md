@@ -363,6 +363,9 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "reviewEnabled": true,
   "autoConsolidate": true,
   "correctionDetection": true,
+  "failureInjectionEnabled": true,
+  "failureInjectionMaxAgeDays": 7,
+  "failureInjectionMaxEntries": 5,
   "flushOnCompact": true,
   "flushOnShutdown": true,
   "flushMinTurns": 6
@@ -380,6 +383,9 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `reviewEnabled` | `true` | Enable/disable background learning loop |
 | `autoConsolidate` | `true` | Auto-merge when memory hits capacity |
 | `correctionDetection` | `true` | Detect user corrections and save immediately |
+| `failureInjectionEnabled` | `true` | Enable/disable injecting recent failure memories into the system prompt |
+| `failureInjectionMaxAgeDays` | `7` | Maximum age in days for injected failure memories |
+| `failureInjectionMaxEntries` | `5` | Maximum number of failure memories to inject |
 | `flushOnCompact` | `true` | Flush memories before Pi compacts context |
 | `flushOnShutdown` | `true` | Flush memories when session ends |
 | `flushMinTurns` | `6` | Minimum turns before flush triggers |

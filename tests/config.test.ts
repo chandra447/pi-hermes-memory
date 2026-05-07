@@ -15,6 +15,9 @@ describe("loadConfig", () => {
     assert.strictEqual(config.flushOnCompact, true);
     assert.strictEqual(config.flushOnShutdown, true);
     assert.strictEqual(config.flushMinTurns, 6);
+    assert.strictEqual(config.failureInjectionEnabled, true);
+    assert.strictEqual(config.failureInjectionMaxAgeDays, 7);
+    assert.strictEqual(config.failureInjectionMaxEntries, 5);
   });
 
   it("overrides defaults when config file exists", () => {
@@ -23,10 +26,16 @@ describe("loadConfig", () => {
     fs.writeFileSync(DEFAULT_CONFIG_PATH, JSON.stringify({
       memoryCharLimit: 3000,
       nudgeInterval: 15,
+      failureInjectionEnabled: false,
+      failureInjectionMaxAgeDays: 30,
+      failureInjectionMaxEntries: 2,
     }));
     const config = loadConfig();
     assert.strictEqual(config.memoryCharLimit, 3000);
     assert.strictEqual(config.nudgeInterval, 15);
+    assert.strictEqual(config.failureInjectionEnabled, false);
+    assert.strictEqual(config.failureInjectionMaxAgeDays, 30);
+    assert.strictEqual(config.failureInjectionMaxEntries, 2);
     // Unset values use defaults
     assert.strictEqual(config.userCharLimit, 5000);
     assert.strictEqual(config.reviewEnabled, true);
@@ -40,6 +49,9 @@ describe("loadConfig", () => {
     const config = loadConfig();
     assert.strictEqual(config.reviewEnabled, false);
     assert.strictEqual(config.memoryCharLimit, 5000); // default
+    assert.strictEqual(config.failureInjectionEnabled, true);
+    assert.strictEqual(config.failureInjectionMaxAgeDays, 7);
+    assert.strictEqual(config.failureInjectionMaxEntries, 5);
     fs.rmSync(DEFAULT_CONFIG_PATH);
   });
 
