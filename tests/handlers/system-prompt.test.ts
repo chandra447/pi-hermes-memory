@@ -28,6 +28,7 @@ const testConfig = (): MemoryConfig => ({
   flushOnShutdown: true,
   flushMinTurns: 6,
   candidateShadowMode: true,
+    candidateConfidenceThreshold: 0.75,
   memoryDir: TEST_MEMORY_DIR,
 });
 

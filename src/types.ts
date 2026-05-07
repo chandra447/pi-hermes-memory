@@ -31,6 +31,8 @@ export interface MemoryConfig {
   nudgeToolCalls: number;
   /** Run candidate extraction in read-only report mode for v0.7 rollout. Default: true */
   candidateShadowMode: boolean;
+  /** Minimum confidence required to stage extracted candidates. Default: 0.75 */
+  candidateConfidenceThreshold: number;
   /** Enable session history search via SQLite FTS5. Default: true */
   sessionSearchEnabled?: boolean;
   /** Days to retain session history. Default: 90 */

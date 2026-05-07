@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { DatabaseManager } from "./db.js";
 import { addCandidate, type CandidateSourceType } from "./candidate-store.js";
+import type { MemoryConfig } from "../types.js";
 
 interface MessageRow {
   id: string | null;
@@ -31,6 +32,7 @@ export interface CandidateExtractionResult {
   messagesScanned: number;
   candidatesAdded: number;
   duplicatesSkipped: number;
+  lowConfidenceSkipped: number;
   byRule: Record<string, number>;
 }
 
@@ -242,7 +244,10 @@ function groupMessagesBySession(rows: MessageRow[]): Map<string, MessageRow[]> {
   return grouped;
 }
 
-export function extractCandidatesFromIndexedMessages(dbManager: DatabaseManager): CandidateExtractionResult {
+export function extractCandidatesFromIndexedMessages(
+  dbManager: DatabaseManager,
+  options: { minConfidence?: number } = {},
+): CandidateExtractionResult {
   const db = dbManager.getDb();
 
   const rows = db.prepare(`
@@ -264,6 +269,9 @@ export function extractCandidatesFromIndexedMessages(dbManager: DatabaseManager)
 
   let candidatesAdded = 0;
   let duplicatesSkipped = 0;
+  let lowConfidenceSkipped = 0;
+  const minConfidence = options.minConfidence ?? 0.75;
+  const seenInRun = new Set<string>();
 
   for (const [, messages] of grouped.entries()) {
     const drafts: CandidateDraft[] = [
@@ -274,6 +282,18 @@ export function extractCandidatesFromIndexedMessages(dbManager: DatabaseManager)
     ];
 
     for (const draft of drafts) {
+      const dedupeKey = makeDedupeKey(draft.sessionId, draft.messageId, draft.tag, draft.extractorRule, draft.snippet);
+      if (seenInRun.has(dedupeKey)) {
+        duplicatesSkipped++;
+        continue;
+      }
+      seenInRun.add(dedupeKey);
+
+      if (draft.confidence < minConfidence) {
+        lowConfidenceSkipped++;
+        continue;
+      }
+
       const result = addCandidate(dbManager, {
         sessionId: draft.sessionId,
         messageId: draft.messageId,
@@ -286,7 +306,7 @@ export function extractCandidatesFromIndexedMessages(dbManager: DatabaseManager)
         extractorRule: draft.extractorRule,
         timestamp: draft.timestamp,
         evidenceCount: draft.evidenceCount,
-        dedupeKey: makeDedupeKey(draft.sessionId, draft.messageId, draft.tag, draft.extractorRule, draft.snippet),
+        dedupeKey,
       });
 
       if (result) {
@@ -303,6 +323,7 @@ export function extractCandidatesFromIndexedMessages(dbManager: DatabaseManager)
     messagesScanned: rows.length,
     candidatesAdded,
     duplicatesSkipped,
+    lowConfidenceSkipped,
     byRule: Object.fromEntries(byRule.entries()),
   };
 }

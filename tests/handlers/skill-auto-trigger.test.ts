@@ -50,6 +50,7 @@ const config = {
   autoConsolidate: false,
   nudgeToolCalls: 15,
   candidateShadowMode: true,
+    candidateConfidenceThreshold: 0.75,
 };
 
 function makeBranchWithToolCalls(toolCallCount: number, distinctTools: string[]): any[] {

@@ -68,6 +68,7 @@ const defaultConfig = {
   correctionDetection: false,
   nudgeToolCalls: 15,
   candidateShadowMode: true,
+    candidateConfidenceThreshold: 0.75,
 };
 
 const mockStore = {

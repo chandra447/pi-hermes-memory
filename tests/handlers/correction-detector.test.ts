@@ -204,6 +204,7 @@ describe("setupCorrectionDetector handler", () => {
     autoConsolidate: false,
     nudgeToolCalls: 15,
     candidateShadowMode: true,
+    candidateConfidenceThreshold: 0.75,
   };
 
   function makeCtx(branch: any[] = []) {

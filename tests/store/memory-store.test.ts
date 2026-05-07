@@ -41,6 +41,7 @@ function makeConfig(overrides?: Partial<MemoryConfig>): MemoryConfig {
     correctionDetection: false,
     nudgeToolCalls: 15,
     candidateShadowMode: true,
+    candidateConfidenceThreshold: 0.75,
     memoryDir: MEMORY_DIR,
     ...overrides,
   };

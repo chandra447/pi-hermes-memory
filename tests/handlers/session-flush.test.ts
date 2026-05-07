@@ -50,6 +50,7 @@ function defaultConfig(overrides: Partial<MemoryConfig> = {}): MemoryConfig {
     flushOnShutdown: true,
     flushMinTurns: 6,
     candidateShadowMode: true,
+    candidateConfidenceThreshold: 0.75,
     ...overrides,
   };
 }

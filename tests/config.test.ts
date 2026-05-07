@@ -16,6 +16,7 @@ describe("loadConfig", () => {
     assert.strictEqual(config.flushOnShutdown, true);
     assert.strictEqual(config.flushMinTurns, 6);
     assert.strictEqual(config.candidateShadowMode, true);
+    assert.strictEqual(config.candidateConfidenceThreshold, 0.75);
   });
   it("overrides defaults when config file exists", () => {
     // Write a config file
@@ -79,11 +80,12 @@ describe("loadConfig", () => {
     fs.rmSync(DEFAULT_CONFIG_PATH);
   });
 
-  it("overrides candidateShadowMode from config", () => {
+  it("overrides candidate shadow settings from config", () => {
     fs.mkdirSync(path.dirname(DEFAULT_CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(DEFAULT_CONFIG_PATH, JSON.stringify({ candidateShadowMode: false }));
+    fs.writeFileSync(DEFAULT_CONFIG_PATH, JSON.stringify({ candidateShadowMode: false, candidateConfidenceThreshold: 0.82 }));
     const config = loadConfig();
     assert.strictEqual(config.candidateShadowMode, false);
+    assert.strictEqual(config.candidateConfidenceThreshold, 0.82);
     fs.rmSync(DEFAULT_CONFIG_PATH);
   });
 

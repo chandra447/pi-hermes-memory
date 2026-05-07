@@ -24,6 +24,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   correctionDetection: true,
   nudgeToolCalls: DEFAULT_NUDGE_TOOL_CALLS,
   candidateShadowMode: true,
+  candidateConfidenceThreshold: 0.75,
 };
 
 export const DEFAULT_CONFIG_PATH = path.join(
@@ -51,6 +52,7 @@ export function loadConfig(): MemoryConfig {
       if (typeof parsed.correctionDetection === "boolean") config.correctionDetection = parsed.correctionDetection;
       if (typeof parsed.nudgeToolCalls === "number") config.nudgeToolCalls = parsed.nudgeToolCalls;
       if (typeof parsed.candidateShadowMode === "boolean") config.candidateShadowMode = parsed.candidateShadowMode;
+      if (typeof parsed.candidateConfidenceThreshold === "number") config.candidateConfidenceThreshold = parsed.candidateConfidenceThreshold;
       if (typeof parsed.projectCharLimit === "number") config.projectCharLimit = parsed.projectCharLimit;
       if (typeof parsed.memoryDir === "string") config.memoryDir = parsed.memoryDir;
       return config;
