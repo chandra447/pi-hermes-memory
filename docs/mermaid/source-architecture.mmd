@@ -1,22 +1,30 @@
 graph LR
     subgraph "pi-hermes-memory/src/"
         IDX["index.ts<br/><i>Entry point</i>"]
+        CFG["config.ts<br/><i>Runtime config</i>"]
         MS["memory-store.ts<br/><i>Memory CRUD</i>"]
         SS["skill-store.ts<br/><i>Skill CRUD</i>"]
+        DB["db.ts<br/><i>SQLite manager</i>"]
+        SI["session-indexer.ts<br/><i>JSONL → SQLite</i>"]
+        CE["candidate-extractor.ts<br/><i>Heuristics + thresholds</i>"]
+        CS["candidate-store.ts<br/><i>Review queue store</i>"]
+        MC["memory-review-candidates.ts<br/><i>TUI review/promotion</i>"]
+        CO["candidate-observability.ts<br/><i>Stats + rebuild</i>"]
+        SD["skill-draft-composer.ts<br/><i>Skill draft synthesis</i>"]
         MT["memory-tool.ts<br/><i>Memory LLM tool</i>"]
         ST["skill-tool.ts<br/><i>Skill LLM tool</i>"]
-        CS["content-scanner.ts<br/><i>Security</i>"]
+        SEC["content-scanner.ts<br/><i>Security</i>"]
         BR["background-review.ts<br/><i>Learning loop</i>"]
         AC["auto-consolidate.ts<br/><i>Memory merge</i>"]
         CD["correction-detector.ts<br/><i>Instant save</i>"]
-        SA["skill-auto-trigger.ts<br/><i>Skill extraction</i>"]
+        SA["skill-auto-trigger.ts<br/><i>Skill extraction nudge</i>"]
         SF["session-flush.ts<br/><i>Pre-compaction flush</i>"]
-        IN["insights.ts<br/><i>/memory-insights</i>"]
-        SC["skills-command.ts<br/><i>/memory-skills</i>"]
     end
 
+    IDX --> CFG
     IDX --> MS
     IDX --> SS
+    IDX --> DB
     IDX --> MT
     IDX --> ST
     IDX --> BR
@@ -24,12 +32,21 @@ graph LR
     IDX --> CD
     IDX --> SA
     IDX --> SF
-    IDX --> IN
-    IDX --> SC
+    IDX --> SI
+    IDX --> MC
+    IDX --> CO
     MT --> MS
     ST --> SS
-    MS --> CS
-    SS --> CS
+    MS --> SEC
+    SS --> SEC
+    SI --> DB
+    CE --> CS
+    CE --> DB
+    MC --> CS
+    MC --> SS
+    MC --> SD
+    CO --> CE
+    CO --> CS
     BR --> MS
     AC --> MS
     CD --> MS
@@ -37,6 +54,10 @@ graph LR
     SA --> SS
 
     style IDX fill:#e94560,stroke:#fff,color:#fff
-    style MS fill:#0f3460,stroke:#fff,color:#fff
-    style SS fill:#0f3460,stroke:#fff,color:#fff
-    style CS fill:#ff6600,stroke:#fff,color:#fff
+    style DB fill:#0f3460,stroke:#fff,color:#fff
+    style CS fill:#14532d,stroke:#86efac,color:#fff
+    style CE fill:#1d4ed8,stroke:#93c5fd,color:#fff
+    style MC fill:#312e81,stroke:#c4b5fd,color:#fff
+    style CO fill:#0f766e,stroke:#5eead4,color:#fff
+    style SD fill:#7c3aed,stroke:#ddd6fe,color:#fff
+    style SEC fill:#ff6600,stroke:#fff,color:#fff

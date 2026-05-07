@@ -3,7 +3,9 @@ graph TB
         MEM["MEMORY.md<br/><i>Agent's notes</i>"]
         USR["USER.md<br/><i>User profile</i>"]
         FAIL["failures.md<br/><i>Failure memory</i><br/>corrections, insights, failures"]
-        SKL["skills/<br/><i>Procedural memory</i><br/>debug-ts.md<br/>deploy-checklist.md"]
+        SESS["sessions.db<br/><i>Sessions + extended memory</i>"]
+        CAND["memory_candidates<br/><i>Review queue</i><br/>pending / approved / rejected / promoted"]
+        SKL["skills/<br/><i>Procedural memory</i><br/>workflow-playbook.md"]
     end
 
     subgraph "System Prompt (frozen snapshot)"
@@ -13,8 +15,20 @@ graph TB
         SSKL["Skill index<br/>Names + descriptions only"]
     end
 
-    subgraph "On Demand (via skill tool)"
+    subgraph "Reviewed Candidate Workflow"
+        IDX["Indexed SQLite session messages<br/><i>sourced from JSONL</i>"]
+        EXT["Deterministic extractors<br/>corrections / failures / tool sequences"]
+        REV["/memory-review-candidates<br/>approve / reject / edit / merge"]
+        PRO["Promote to skill<br/>explicit confirm + evidence gate"]
+    end
+
+    subgraph "Existing Auto-Skill Path"
+        AUTO["skill-auto-trigger<br/>complex task prompt"]
+    end
+
+    subgraph "On Demand"
         FULL["Full skill content<br/>Loaded when needed"]
+        SEARCH["session_search / memory_search<br/>Unlimited retrieval"]
     end
 
     MEM --> SMEM
@@ -22,9 +36,17 @@ graph TB
     FAIL --> SFAIL
     SKL --> SSKL
     SSKL -.->|"skill view"| FULL
+    SESS --> SEARCH
+    IDX --> EXT --> CAND --> REV --> PRO --> SKL
+    AUTO --> SKL
 
     style SMEM fill:#1a1a2e,stroke:#e94560,color:#fff
     style SUSR fill:#1a1a2e,stroke:#e94560,color:#fff
     style SFAIL fill:#2d1b2e,stroke:#ff6b6b,color:#fff
     style SSKL fill:#16213e,stroke:#0f3460,color:#fff
+    style CAND fill:#1b4332,stroke:#52b788,color:#fff
+    style REV fill:#0a1128,stroke:#3b82f6,color:#fff
+    style PRO fill:#1f2937,stroke:#8b5cf6,color:#fff
     style FULL fill:#0a1128,stroke:#1282a2,color:#fff
+    style SEARCH fill:#0b3d3b,stroke:#10b981,color:#fff
+    style AUTO fill:#3f3f46,stroke:#d4d4d8,color:#fff

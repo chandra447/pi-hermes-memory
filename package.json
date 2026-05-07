@@ -1,7 +1,7 @@
 {
   "name": "pi-hermes-memory",
-  "version": "0.6.6",
-  "description": "🧠 Persistent memory + 🔍 session search + 🛡️ secret scanning for Pi. SQLite FTS5 search across every conversation, auto-consolidation, memory aging, procedural skills. 272 tests. Ported from Hermes agent.",
+  "version": "0.7.0",
+  "description": "🧠 Persistent memory + 🔍 session search + 🏷️ reviewed skill creation for Pi. SQLite FTS5 search, candidate review workflow, safe rebuilds, secret scanning, and procedural skills.",
   "type": "module",
   "main": "src/index.ts",
   "files": [
@@ -25,9 +25,13 @@
     "memory",
     "persistent-memory",
     "session-search",
+    "session-history",
     "sqlite",
     "fts5",
     "skills",
+    "candidate-review",
+    "reviewed-skills",
+    "skill-promotion",
     "learning-loop",
     "agent",
     "hermes",

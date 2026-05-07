@@ -3,48 +3,50 @@ sequenceDiagram
     participant Pi
     participant Extension
     participant Disk as ~/.pi/agent/memory/
+    participant DB as sessions.db
 
     Note over Pi,Disk: ── Session Start ──
     Pi->>Extension: session_start event
-    Extension->>Disk: loadFromDisk() — read MEMORY.md + USER.md + failures.md + skills/
+    Extension->>Disk: loadFromDisk() — MEMORY.md + USER.md + failures.md + skills/
     Extension-->>Extension: Capture frozen snapshot (memory + failures + skill index)
 
     Note over Pi,Disk: ── System Prompt Injection ──
     Pi->>Extension: before_agent_start event
     Extension-->>Pi: systemPrompt + frozen memory + failures block + skill index
-    Note right of Pi: Agent now "remembers"<br/>facts, failures, AND procedures<br/>from past sessions
 
-    Note over Pi,Disk: ── Agent Loop ──
-    User->>Pi: "Remember I prefer vim"
-    Pi->>Extension: tool_call (memory, add)
-    Extension->>Extension: scanContent() — security check
-    Extension->>Disk: Atomic write to USER.md
-    Extension-->>Pi: { success: true, usage: "3% — 41/5000" }
+    Note over Pi,DB: ── Session Search + Capture ──
+    User->>Pi: work normally
+    Pi->>Extension: memory / skill / session_search tools as needed
+    Extension->>Disk: atomic writes for memory + skills
+    Extension->>DB: extended memory + indexed sessions available on demand
 
-    Note over Pi,Disk: ── User Correction ──
-    User->>Pi: "No, don't use npm — use pnpm"
-    Extension->>Extension: isCorrection() = true
-    Extension->>Pi: pi.exec("pi -p", correctionPrompt)
-    Extension->>Disk: Save as failure memory [correction]
-    Note right of Pi: Immediate save<br/>no waiting for nudge
+    Note over Pi,DB: ── Candidate Extraction Pipeline (v0.7) ──
+    Pi->>Extension: /memory-index-sessions (bulk) or session auto-index on shutdown
+    Extension->>DB: store sessions/messages in SQLite
+    User->>Pi: /memory-candidates-shadow-run
+    Extension-->>Pi: read-only quality report
+    User->>Pi: /memory-candidates-rebuild
+    Extension->>DB: rebuild candidate projection from indexed SQLite session messages
 
-    Note over Pi,Disk: ── Failure Detection ──
-    User->>Pi: "That didn't work, try X instead"
-    Extension->>Extension: isCorrection() = true
-    Extension->>Disk: addFailure(category: "failure")
-    Note right of Pi: Stores what failed<br/>and why for learning
+    Note over Pi,DB: ── Candidate Review + Promotion ──
+    User->>Pi: /memory-review-candidates
+    Extension-->>Pi: TUI review queue with approve/reject/edit/merge
+    User->>Pi: promote approved candidates
+    Extension->>Pi: confirm skill creation
+    Extension->>Disk: save skill draft to skills/
+    Extension->>DB: mark candidates promoted
 
-    Note over Pi,Disk: ── Complex Task (8+ tool calls) ──
-    Pi->>Extension: turn_end (8 tool calls, 3 tool types)
-    Extension->>Pi: pi.exec("pi -p", skillExtractionPrompt)
-    Note right of Pi: Extract reusable<br/>procedure as skill
-
-    Note over Pi,Disk: ── Background Review (10 turns or 15 tool calls) ──
-    Pi->>Extension: turn_end event
+    Note over Pi,Disk: ── Background Learning ──
+    Pi->>Extension: turn_end (10 turns or 15 tool calls)
     Extension->>Pi: pi.exec("pi -p", reviewPrompt)
-    Note right of Pi: Reviews conversation<br/>saves memories, failures, AND skills
+    Note right of Pi: Saves memories/failures
+
+    Note over Pi,Disk: ── Auto-Skill Nudge (existing path) ──
+    Pi->>Extension: complex task threshold met
+    Extension->>Pi: pi.exec("pi -p", skillExtractionPrompt)
+    Note right of Pi: Auto-skill prompt path still exists<br/>alongside reviewed candidate promotion
 
     Note over Pi,Disk: ── Session End ──
     Pi->>Extension: session_shutdown event
     Extension->>Pi: pi.exec("pi -p", flushPrompt)
-    Note right of Pi: One last turn to flush<br/>anything worth saving
+    Extension->>DB: auto-index latest session for future search/extraction

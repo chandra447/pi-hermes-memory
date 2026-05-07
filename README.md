@@ -4,22 +4,22 @@
 
 # 🧠 Pi Hermes Memory
 
-**Persistent memory + session search + secret scanning for Pi**
+**Persistent memory + session search + reviewed skill creation for Pi**
 
 ---
 
 </div>
 
-Your Pi agent normally forgets everything when you close a session. **This extension fixes that.**
+Your Pi agent normally forgets everything when you close a session. **This extension fixes that** — and in v0.7 it adds a safe reviewed pipeline for turning repeated patterns from session history into reusable skills, while keeping the earlier auto-skill nudges available for complex tasks.
 
-- 🔍 **Search every conversation** — "what did we discuss about auth?" finds it instantly
+- 🔍 **Search every conversation** — `session_search` finds prior discussions fast
 - 🧠 **Persistent memory** — facts, preferences, corrections survive across sessions
-- ⚠️ **Learns from failures** — remembers what didn't work so you don't repeat mistakes
-- 🏷️ **Categorized memories** — failures, corrections, insights, conventions, and tool quirks organized for fast retrieval
+- ⚠️ **Learns from failures** — remembers what did not work so you do not repeat it
+- 🏷️ **Candidate review pipeline** — repeated patterns become reviewable candidates first
+- 📚 **Reviewed skill creation** — approved candidates can be promoted into skills with explicit confirmation
+- 🤖 **Auto-skill nudges still exist** — complex tasks can still trigger skill extraction prompts
 - 🛡️ **Secret scanning** — API keys and tokens are blocked from being saved
-- 📚 **Procedural skills** — the agent saves *how* it solved problems, not just what
-- ⚡ **Background learning** — reviews every 10 turns, saves what matters
-- 🔄 **Auto-consolidation** — merges entries when full, never loses data
+- 🔄 **Safe rebuild + observability** — rebuild candidates from session truth and inspect counts
 
 ## Quick Start
 
@@ -30,26 +30,46 @@ pi install npm:pi-hermes-memory
 # Index your past sessions (one-time)
 /memory-index-sessions
 
-# Learn how to use it
+# Build the candidate queue from indexed session messages
+/memory-candidates-rebuild
+
+# Review extracted candidates
+/memory-review-candidates
+
+# Learn the workflow
 /learn-memory-tool
 ```
+
+## What v0.7 Adds
+
+v0.7 introduces a **session → candidate → review → skill** workflow:
+
+1. **Index sessions** into SQLite with `/memory-index-sessions`
+2. **Extract candidate learnings** from repeated corrections, failure/fix pairs, and repeated successful tool sequences
+3. **Review candidates in TUI** with `/memory-review-candidates`
+4. **Approve / reject / edit / merge** candidates before promotion
+5. **Promote approved candidates** into a structured skill draft
+6. **Confirm explicitly** before the skill is saved and candidates are marked promoted
+
+This keeps the candidate-based path intentional. The extension can stage patterns into candidates via rebuild/shadow commands, and reviewed promotion requires explicit confirmation. Separately, the older auto-skill path for complex tasks still exists.
 
 ## Features
 
 | Feature | What happens |
 |---|---|
-| 🔍 **Session Search** | Search across all past conversations via SQLite FTS5 |
+| 🔍 **Session Search** | Search past conversations via SQLite FTS5 |
 | 🧠 **Persistent Memory** | Facts, preferences, lessons saved to markdown files |
-| ⚠️ **Failure Memory** | Learn from failures — stores what didn't work and why |
-| 📚 **Procedural Skills** | The agent saves *how* it solved problems as reusable docs |
-| ⚡ **Background Learning** | Every 10 turns (or 15 tool calls) the agent reviews and saves |
+| ⚠️ **Failure Memory** | Learn from failures — stores what did not work and why |
+| 🏷️ **Candidate Pipeline** | Deterministic extractors stage reviewable candidates |
+| 🧪 **TUI Review Flow** | Approve / reject / edit / merge / promote candidates in `/memory-review-candidates` |
+| 📚 **Reviewed Skills** | Approved candidates become draft skills with explicit confirmation |
+| 🤖 **Auto-Skill Nudge** | Complex tasks can still trigger the earlier skill extraction prompt |
+| 📈 **Candidate Observability** | `/memory-candidates-stats` shows pending / approved / rejected / promoted counts |
+| ♻️ **Safe Candidate Rebuild** | `/memory-candidates-rebuild` regenerates candidates from indexed session truth |
+| 🛡️ **Secret Scanning** | API keys, tokens, SSH keys blocked from persistence |
 | 🔧 **Correction Detection** | When you correct the agent, it saves immediately |
 | 🔄 **Auto-Consolidation** | When memory hits capacity, auto-merges instead of erroring |
-| 🛡️ **Secret Scanning** | API keys, tokens, SSH keys blocked from persistence |
-| 📊 **Memory Aging** | Entries carry timestamps — consolidation knows what's stale |
 | 🏗️ **Two-Tier Memory** | Global + per-project memory, both searchable |
-| 💾 **Extended Store** | Unlimited searchable memories beyond core 5,000-char limit |
-| 🎓 **Onboarding** | `/memory-interview` pre-fills your profile on first session |
 
 ## How It Works
 
@@ -57,23 +77,89 @@ pi install npm:pi-hermes-memory
 
 ![Session Lifecycle](docs/images/session-lifecycle.svg)
 
-### Memory + Skills Architecture
+### Memory + Candidate + Skill Architecture
 
-The extension manages three types of knowledge:
+The extension now manages four layers of knowledge:
 
 | Type | What | Storage | Token cost |
 |---|---|---|---|
-| **Memory** (MEMORY.md) | Facts — env details, project conventions, tool quirks | 2,200 chars max | Fixed per session |
-| **User Profile** (USER.md) | Who you are — name, preferences, communication style | 1,375 chars max | Fixed per session |
-| **Skills** (skills/*.md) | Procedures — *how* to do something, reusable across sessions | Unlimited | ~3K for index, full on demand |
+| **Memory** | Facts — env details, project conventions, tool quirks | `MEMORY.md` | Fixed per session |
+| **User Profile** | Who you are — name, preferences, communication style | `USER.md` | Fixed per session |
+| **Candidates** | Review queue of repeated patterns from session history | `memory_candidates` in SQLite | Not injected |
+| **Skills** | Procedures — reusable operational playbooks | `skills/*.md` | Index injected, full content on demand |
 
 ![Memory + Skills Architecture](docs/images/memory-architecture.svg)
 
 ### Security: Content Scanning
 
-Every write — memory and skills — passes through a scanner before being accepted. This prevents the LLM from being tricked into storing malicious content that would later be injected into the system prompt.
+Memory writes and skill persistence pass through a scanner before being accepted. This blocks malicious prompt-injection or secret-like content from being persisted in those stores.
 
 ![Security: Content Scanning](docs/images/security-flow.svg)
+
+## Candidate Review Workflow (v0.7)
+
+### 1. Index session history
+
+```bash
+/memory-index-sessions
+```
+
+This imports Pi session JSONL into SQLite so the extractor can work from indexed session messages.
+
+### 2. Inspect extraction quality safely
+
+```bash
+/memory-candidates-shadow-run
+```
+
+Shadow mode runs the extractor in **read-only** mode so you can inspect quality before writing candidates.
+
+### 3. Rebuild candidates from indexed sessions
+
+```bash
+/memory-candidates-rebuild
+```
+
+This clears the current candidate projection and rebuilds it from indexed SQLite session messages using deterministic rules. Rebuild is transactional — if extraction fails, existing candidates are restored.
+
+### 4. Review candidates in TUI
+
+```bash
+/memory-review-candidates
+```
+
+Available actions:
+- approve
+- reject
+- edit
+- merge
+- promote
+
+### 5. Promote approved candidates into a skill draft
+
+Promotion is gated by:
+- all selected candidates must be **approved**
+- at least one selected approved candidate must have **`evidence_count >= 2`**
+- explicit **final confirmation** before skill creation
+
+The generated draft includes:
+- `## When to Use`
+- `## Procedure`
+- `## Pitfalls`
+- `## Verification`
+
+### 6. Inspect pipeline counts
+
+```bash
+/memory-candidates-stats
+```
+
+Shows:
+- pending
+- approved
+- rejected
+- promoted
+- total
 
 ## Installation
 
@@ -93,260 +179,61 @@ Or test locally without installing:
 pi -e /path/to/pi-hermes-memory/src/index.ts
 ```
 
-## Two-Tier Memory Architecture
-
-The extension stores memory at two levels:
-
-| Tier | Location | What goes here | Injected when |
-|---|---|---|---|
-| **Global** | `~/.pi/agent/memory/` | Facts that apply everywhere — your name, preferences, OS, tools | Always (every session) |
-| **Project** | `~/.pi/agent/<project>/` | Facts scoped to one codebase — architecture decisions, API quirks, team norms | When cwd matches the project |
-
-Both tiers are injected into the system prompt under separate `<memory-context>` blocks.
-
-```
-System Prompt
-┌─────────────────────────────────────────┐
-│ <memory-context>                        │
-│ MEMORY (your personal notes)            │
-│ • prefers vim over nano                 │
-│ • uses pnpm not npm                     │
-│ ═══ END MEMORY ═══                     │
-│ </memory-context>                       │
-│                                         │
-│ <memory-context>                        │
-│ USER PROFILE (who the user is)          │
-│ • name: Chandrateja                     │
-│ • timezone: AEST                        │
-│ ═══ END MEMORY ═══                     │
-│ </memory-context>                       │
-│                                         │
-│ <memory-context>                        │
-│ PROJECT MEMORY: pi-hermes-memory        │
-│ • uses jiti for runtime TS loading      │
-│ • tests use node:test with tsx          │
-│ ═══ END MEMORY ═══                     │
-│ </memory-context>                       │
-│                                         │
-│ <memory-context>                        │
-│ RECENT FAILURES & LESSONS (learn from): │
-│ • [correction] Use pnpm, not npm        │
-│ • [failure] Tried localStorage — XSS    │
-│ • [insight] Auth0 handles refresh tokens│
-│ ═══ END MEMORY ═══                     │
-│ </memory-context>                       │
-└─────────────────────────────────────────┘
-```
-
-## Failure Memory
-
-The agent learns from failures, corrections, and insights — just like humans do.
-
-### Memory Categories
-
-| Category | What it stores | Example |
-|---|---|---|
-| `failure` | What didn't work and why | "Tried localStorage for tokens — XSS vulnerability" |
-| `correction` | User corrections | "Use pnpm, not npm" |
-| `insight` | Learnings from experience | "Auth0 SDK handles refresh tokens automatically" |
-| `preference` | User preferences | "Prefers dark theme" |
-| `convention` | Project conventions | "Monorepo uses turborepo" |
-| `tool-quirk` | Tool-specific knowledge | "CI needs --frozen-lockfile" |
-
-### How It Works
-
-1. **Auto-detection**: Background review extracts failures from conversations
-2. **Correction capture**: When you correct the agent, it saves what went wrong
-3. **System prompt injection**: Recent failures (last 7 days) are injected at session start
-4. **Searchable**: Use `memory_search("auth", category: "failure")` to find past failures
-
-### Example
-
-```
-User: No, use pnpm not npm
-Agent: [saves correction memory]
-
-Next session:
-Agent: "I remember you prefer pnpm over npm. Let me use that."
-```
-
-The agent learns from its mistakes so you don't have to repeat yourself.
-
-Memory blocks are wrapped in `<memory-context>` XML tags with a guard note ("NOT new user input") to prevent the LLM from treating stored facts as instructions.
-
 ## Usage
 
-Once installed, the extension works automatically. You don't need to do anything special — the agent will start saving memories and skills on its own.
+### Automatic behavior
+
+Once installed, the extension automatically:
+- injects saved memory, user profile, recent failures, and skill index into the system prompt
+- detects corrections and failures
+- runs background review on active sessions
+- indexes sessions for later search
+
+### Intentional review flow
+
+For v0.7 candidate promotion, the recommended workflow is:
+
+1. `/memory-index-sessions`
+2. optional `/memory-candidates-shadow-run`
+3. `/memory-candidates-rebuild`
+4. `/memory-review-candidates`
+5. `/memory-candidates-stats`
 
 ### The `memory` Tool
 
-The agent gets a `memory` tool it can call proactively:
-
 | Action | Target | What it does |
 |---|---|---|
-| `add` | `memory` or `user` | Append a new entry |
-| `replace` | `memory` or `user` | Update an existing entry (matched by substring) |
-| `remove` | `memory` or `user` | Delete an entry (matched by substring) |
+| `add` | `memory`, `user`, `failure`, `project` | Append a new entry |
+| `replace` | `memory`, `user`, `failure`, `project` | Update an existing entry |
+| `remove` | `memory`, `user`, `failure`, `project` | Delete an existing entry |
 
 ### The `skill` Tool
 
-The agent also gets a `skill` tool for saving reusable procedures:
-
 | Action | What it does |
 |---|---|
-| `create` | Save a new skill (name, description, step-by-step body) |
-| `view` | Read a skill's full content, or list all skills if no name given |
-| `patch` | Update one section of an existing skill (e.g., just the Procedure section) |
-| `edit` | Replace the description and/or full body of a skill |
+| `create` | Save a new skill |
+| `view` | Read a skill's full content |
+| `patch` | Update one section of an existing skill |
+| `edit` | Replace the description and/or body |
 | `delete` | Remove a skill |
 
-Skills are stored as `SKILL.md` files in `~/.pi/agent/memory/skills/`. Each has a structured body:
-
-```markdown
----
-name: debug-typescript-errors
-description: Step-by-step approach to debugging TS errors in monorepos
-version: 1
-created: 2026-04-26
-updated: 2026-04-26
----
-## When to Use
-When you see TypeScript compilation errors, especially in monorepo setups.
-
-## Procedure
-1. Read the error message carefully
-2. Check tsconfig.json extends chain
-3. Run tsc --noEmit to get full error list
-4. Fix errors bottom-up (dependencies first)
-
-## Pitfalls
-- Don't trust VSCode's error display — use the CLI
-
-## Verification
-Run `tsc --noEmit` and confirm zero errors.
-```
-
-### Memory vs User Profile vs Skills
-
-| Store | File | What goes here | Limit |
-|---|---|---|---|
-| **memory** | `MEMORY.md` | Agent's notes — env facts, project conventions, tool quirks, lessons learned | 5,000 chars |
-| **user** | `USER.md` | User profile — name, preferences, communication style, habits | 5,000 chars |
-| **skills** | `skills/*.md` | Procedures — *how* to debug, deploy, test, or fix something | Unlimited |
-| **extended** | `sessions.db` | Searchable memories beyond the core limit | Unlimited |
-| **sessions** | `sessions.db` | Past conversation history (searchable via FTS5) | Unlimited |
-
-### Session History Search
-
-The extension indexes your Pi session history into a SQLite database with FTS5 full-text search. The agent can search across all past conversations using the `session_search` tool:
-
-| Tool | What it does |
-|---|---|---|
-| `session_search` | Search past conversations — "what did we discuss about auth?" |
-| `memory_search` | Search extended memory store — unlimited capacity, keyword-based |
-
-Session history is indexed automatically on session shutdown. To bulk-import existing sessions:
-
-```
-/memory-index-sessions
-```
-
-### Extended Memory Store
-
-When the core memory (5,000 chars) isn't enough, the agent can store additional memories in the SQLite-backed extended store. These are searchable via `memory_search` but not automatically injected into the system prompt.
-
-This is the **hybrid memory architecture**:
-- **Core memory** (MEMORY.md/USER.md): Always injected, 5,000 chars each, human-readable
-- **Extended memory** (SQLite): Unlimited, searchable on demand, agent-driven
-
-### Correction Detection
-
-When you correct the agent, it saves immediately — no waiting for the background review. Examples of corrections the agent detects:
-
-| You say | What happens |
-|---|---|
-| "don't do that" | ✅ Immediate save |
-| "no, use yarn instead" | ✅ Immediate save |
-| "actually, fix the test first" | ✅ Immediate save |
-| "I said use pnpm" | ✅ Immediate save |
-| "no worries" | ❌ Not a correction — ignored |
-| "actually looks great" | ❌ Not a correction — ignored |
-
-### Auto-Consolidation
-
-When memory or user profile hits its character limit, the extension automatically consolidates instead of returning an error:
-
-1. Spawns a one-shot `pi.exec()` process with a consolidation prompt
-2. The child agent merges related entries, removes outdated ones, keeps the most important facts
-3. Parent reloads from disk and retries the original save
-4. If consolidation fails, falls back to the original error
-
-You can also trigger this manually with `/memory-consolidate`.
-
-### Tool-Call-Aware Review
-
-Background review triggers based on **activity level**, not just turn count:
-
-- **Every 10 turns** — the default nudge interval
-- **OR every 15 tool calls** — catches complex tasks that involve many reads/edits/bash calls
-
-Both counters reset after each review.
-
-### Skill Auto-Extraction
-
-After a complex task (8+ tool calls using 2+ different tools in a single turn), the extension automatically asks the agent:
-
-> "This was a complex task — should we save a reusable procedure?"
-
-This means skills build up naturally over time without you having to ask.
+Skills are stored in `~/.pi/agent/memory/skills/` as markdown files with frontmatter and required sections.
 
 ### Commands
 
 | Command | What it does |
 |---|---|
 | `/memory-insights` | Shows everything stored in memory and user profile |
-| `/memory-skills` | Lists all agent-created skills |
-| `/memory-consolidate` | Manually trigger memory consolidation to free space |
-| `/memory-interview` | Answer a few questions to pre-fill your user profile |
-| `/memory-switch-project` | List all project memories and their entry counts |
+| `/memory-skills` | Lists all saved skills |
+| `/memory-consolidate` | Manually trigger memory consolidation |
+| `/memory-interview` | Pre-fill your user profile |
+| `/memory-switch-project` | List project memories |
 | `/memory-index-sessions` | Import past Pi sessions into the search database |
-| `/learn-memory-tool` | Skill that teaches users how to use the memory system |
-
-### `/memory-insights` Output
-
-```
-╔══════════════════════════════════════════════╗
-║            🧠 Memory Insights                ║
-╚══════════════════════════════════════════════╝
-
-📋 MEMORY (your personal notes)
-──────────────────────────────────────────────
-1. project uses pnpm not npm
-2. test files go in __tests__/ directory
-3. user prefers dark theme for UI
-
-👤 USER PROFILE
-──────────────────────────────────────────────
-1. name: Chandrateja
-2. prefers concise answers over verbose ones
-3. codes primarily in TypeScript
-```
-
-### `/memory-skills` Output
-
-```
-╔══════════════════════════════════════════════╗
-║            🧠 Procedural Skills             ║
-╚══════════════════════════════════════════════╝
-
-📄 debug-typescript-errors
-   Step-by-step approach to debugging TS errors in monorepos
-   file: debug-typescript-errors.md
-
-📄 deploy-checklist
-   Pre-deploy verification steps for this project
-   file: deploy-checklist.md
-```
+| `/memory-candidates-shadow-run` | Run read-only candidate extraction report |
+| `/memory-review-candidates` | Review / triage / promote extracted candidates |
+| `/memory-candidates-stats` | Show candidate pipeline counts |
+| `/memory-candidates-rebuild` | Rebuild candidate projection from indexed sessions |
+| `/learn-memory-tool` | Built-in guide for the memory + candidate workflow |
 
 ## Configuration
 
@@ -365,48 +252,51 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "correctionDetection": true,
   "flushOnCompact": true,
   "flushOnShutdown": true,
-  "flushMinTurns": 6
+  "flushMinTurns": 6,
+  "candidateShadowMode": true,
+  "candidateConfidenceThreshold": 0.75
 }
 ```
 
 | Setting | Default | Description |
 |---|---|---|
-| `memoryCharLimit` | `5000` | Max characters in MEMORY.md |
-| `userCharLimit` | `5000` | Max characters in USER.md |
-| `projectCharLimit` | `5000` | Max characters in project-scoped MEMORY.md |
+| `memoryCharLimit` | `5000` | Max characters in `MEMORY.md` |
+| `userCharLimit` | `5000` | Max characters in `USER.md` |
+| `projectCharLimit` | `5000` | Max characters in project-scoped memory |
 | `memoryDir` | `~/.pi/agent/memory` | Custom directory for memory files |
 | `nudgeInterval` | `10` | Turns between auto-reviews |
-| `nudgeToolCalls` | `15` | Tool calls between auto-reviews (OR with turns) |
-| `reviewEnabled` | `true` | Enable/disable background learning loop |
+| `nudgeToolCalls` | `15` | Tool calls between auto-reviews |
+| `reviewEnabled` | `true` | Enable background learning loop |
 | `autoConsolidate` | `true` | Auto-merge when memory hits capacity |
 | `correctionDetection` | `true` | Detect user corrections and save immediately |
 | `flushOnCompact` | `true` | Flush memories before Pi compacts context |
 | `flushOnShutdown` | `true` | Flush memories when session ends |
 | `flushMinTurns` | `6` | Minimum turns before flush triggers |
+| `candidateShadowMode` | `true` | Enable read-only candidate extraction reporting |
+| `candidateConfidenceThreshold` | `0.75` | Minimum confidence accepted during candidate rebuild |
 
 ## Where Data Lives
 
-```
+```text
 ~/.pi/agent/memory/
-├── MEMORY.md          ← Agent's personal notes (env facts, patterns, lessons)
-├── USER.md            ← User profile (name, preferences, habits)
-├── sessions.db        ← SQLite database (session history + extended memory)
+├── MEMORY.md
+├── USER.md
+├── failures.md
+├── sessions.db
 └── skills/
-    ├── debug-typescript-errors.md
-    └── deploy-checklist.md
+    └── *.md
 ```
 
-These are plain markdown files. You can read and edit them directly if you want to curate what the agent remembers. Memory entries are separated by `§` (section sign). Skills use standard SKILL.md format with frontmatter.
-
-The `sessions.db` SQLite database stores session history and extended memory entries. It's searchable via FTS5 full-text search.
+Candidate rows live in the SQLite `memory_candidates` table inside `sessions.db`. They are a rebuildable projection derived from indexed session messages.
 
 ## Known Limitations
 
-- **`§` delimiter**: Memory entries are separated by `§` (section sign). If an entry naturally contains `§`, it will be split incorrectly on reload. This is rare in English text but possible. [Hermes uses the same delimiter.]
-- **Background review cost**: Each review cycle costs one full LLM API call via a child `pi -p` process. Correction detection and skill auto-extraction add occasional extra calls.
-- **Session search requires indexing**: Past sessions must be indexed before they're searchable. Run `/memory-index-sessions` to bulk-import, or let the extension auto-index on session shutdown.
-- **System prompts are invisible**: Pi's TUI does not display the system prompt. Memory injection works but you won't see it in the interface — verify by asking the agent a question that relies on stored memory.
-- **Skills are agent-generated**: Skills are created by the agent based on its experience. They may not always be perfectly structured. You can edit or delete them in `~/.pi/agent/memory/skills/`.
+- **`§` delimiter**: core markdown memory files still use `§` as the entry delimiter
+- **Background review cost**: each review cycle uses a child `pi -p` call
+- **Session search requires indexing**: bulk-import old sessions with `/memory-index-sessions`
+- **Candidates are a projection**: indexed SQLite session messages are the source for rebuilds; candidates can be regenerated from them
+- **Skill drafts still need human judgment**: the candidate-review path generates structured drafts, but review quality still matters
+- **Two skill paths exist today**: reviewed candidate promotion and the earlier auto-skill prompt for complex tasks
 
 ## Architecture
 
@@ -414,12 +304,7 @@ The `sessions.db` SQLite database stores session history and extended memory ent
 
 ## Credits
 
-Ported from the [Hermes agent](https://github.com/nousresearch/hermes-agent) by Nous Research. Specifically:
-
-- `tools/memory_tool.py` — `MemoryStore` class, content scanner, tool schema
-- `run_agent.py` — Background review loop, session flush, nudge interval
-- `agent/memory_provider.py` — Provider lifecycle pattern
-- `agent/memory_manager.py` — System prompt injection, context fencing
+Ported from the [Hermes agent](https://github.com/nousresearch/hermes-agent) by Nous Research, then extended for Pi with persistent memory, SQLite-backed search, and reviewed skill creation.
 
 ## License
 
@@ -427,4 +312,4 @@ MIT
 
 ---
 
-**[Full Roadmap →](docs/ROADMAP.md)** · **[Changelog →](CHANGELOG.md)**
+**[Full Roadmap →](docs/ROADMAP.md)** · **[v0.7 Changelog →](docs/0.7/CHANGELOG.md)**
