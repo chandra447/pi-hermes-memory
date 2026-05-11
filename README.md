@@ -412,6 +412,8 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 
 These are plain markdown files. You can read and edit them directly if you want to curate what the agent remembers. Memory entries are separated by `§` (section sign). Skills use standard SKILL.md format with frontmatter.
 
+If you are upgrading from a version that stored project memory directly at `~/.pi/agent/<project>/MEMORY.md`, the extension copies or merges those entries into `~/.pi/agent/projects-memory/<project>/MEMORY.md` on startup. The old folders are left in place as a backup.
+
 The `sessions.db` SQLite database stores session history and extended memory entries. It's searchable via FTS5 full-text search.
 
 ## Known Limitations

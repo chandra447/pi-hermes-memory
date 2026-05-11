@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-05-11
+
+### Fixed
+
+- **Legacy project memory migration**: Users upgrading from the old `~/.pi/agent/<project>/MEMORY.md` layout now keep their existing project memories. On startup, legacy project memory files are copied or merged into `~/.pi/agent/projects-memory/<project>/MEMORY.md` without deleting the old folders.
+- **Markdown backfill compatibility**: `/memory-sync-markdown` now scans both the new `projects-memory/<project>` layout and legacy `~/.pi/agent/<project>` project folders, so existing project memories can still be imported into SQLite search.
+
+### Tests
+
+- Added migration coverage for copy, merge/dedupe, skip behavior, and legacy project backfill.
+
 ## [0.7.0] - 2026-05-11
 
 ### Added

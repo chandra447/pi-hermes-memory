@@ -52,12 +52,33 @@ function importEntries(
 
 function scanProjectDirs(agentRoot: string, globalDir: string, projectsMemoryDir = "projects-memory"): Array<{ name: string; memoryFile: string }> {
   const projectsRoot = path.join(agentRoot, projectsMemoryDir);
-  if (!fs.existsSync(projectsRoot)) return [];
+  const projects = new Map<string, string>();
 
-  return fs.readdirSync(projectsRoot)
-    .map((name) => ({ name, dir: path.join(projectsRoot, name) }))
-    .filter(({ dir }) => fs.existsSync(dir) && fs.statSync(dir).isDirectory())
-    .map(({ name, dir }) => ({ name, memoryFile: path.join(dir, MEMORY_FILE) }))
+  if (fs.existsSync(projectsRoot)) {
+    for (const name of fs.readdirSync(projectsRoot)) {
+      const dir = path.join(projectsRoot, name);
+      const memoryFile = path.join(dir, MEMORY_FILE);
+      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory() && fs.existsSync(memoryFile)) {
+        projects.set(name, memoryFile);
+      }
+    }
+  }
+
+  const globalDirName = path.basename(globalDir);
+  if (fs.existsSync(agentRoot)) {
+    for (const name of fs.readdirSync(agentRoot)) {
+      if (name === globalDirName || name === projectsMemoryDir || name === 'skills' || name.startsWith('.')) continue;
+      if (projects.has(name)) continue;
+      const dir = path.join(agentRoot, name);
+      const memoryFile = path.join(dir, MEMORY_FILE);
+      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory() && fs.existsSync(memoryFile)) {
+        projects.set(name, memoryFile);
+      }
+    }
+  }
+
+  return [...projects.entries()]
+    .map(([name, memoryFile]) => ({ name, memoryFile }))
     .filter(({ memoryFile }) => fs.existsSync(memoryFile));
 }
 

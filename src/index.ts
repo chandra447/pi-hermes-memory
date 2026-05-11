@@ -50,6 +50,7 @@ import { registerPreviewContextCommand } from "./handlers/preview-context.js";
 import { loadConfig } from "./config.js";
 import { detectProject } from "./project.js";
 import { buildPromptContext } from "./prompt-context.js";
+import { migrateLegacyProjectMemoryDirs } from "./project-memory-migration.js";
 
 export default function (pi: ExtensionAPI) {
   const config = loadConfig();
@@ -58,6 +59,11 @@ export default function (pi: ExtensionAPI) {
   const store = new MemoryStore(config);
   const skillStore = new SkillStore(path.join(globalDir, "skills"));
   const dbManager = new DatabaseManager(globalDir);
+
+  // Keep project memory available for users upgrading from the old
+  // ~/.pi/agent/<project>/ layout. This is non-destructive: legacy folders
+  // remain in place while entries are copied/merged into projects-memory/.
+  migrateLegacyProjectMemoryDirs(globalDir, config.projectsMemoryDir);
 
   // Detect project from cwd using shared helper
   const project = detectProject(config.projectsMemoryDir);

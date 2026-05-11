@@ -125,4 +125,34 @@ describe('memory sqlite sync + markdown backfill', () => {
       'command should report completion',
     );
   });
+
+  it('backfills legacy project memory directories from the old ~/.pi/agent/<project> layout', async () => {
+    const legacyProjectDir = path.join(agentRoot, 'legacy-project');
+    fs.mkdirSync(legacyProjectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyProjectDir, 'MEMORY.md'),
+      'legacy project entry <!-- created=2026-05-08, last=2026-05-09 -->',
+      'utf-8',
+    );
+
+    let handler: any;
+    const mockPi = {
+      registerCommand: (_name: string, opts: any) => {
+        handler = opts.handler;
+      },
+    } as unknown as ExtensionAPI;
+
+    const ctx = {
+      ui: {
+        notify: () => {},
+      },
+    } as any;
+
+    registerSyncMarkdownMemoriesCommand(mockPi, dbManager, globalDir);
+    await handler({}, ctx);
+
+    const projectRows = getMemories(dbManager, { project: 'legacy-project', target: 'memory' });
+    assert.strictEqual(projectRows.length, 1);
+    assert.strictEqual(projectRows[0].content, 'legacy project entry');
+  });
 });
