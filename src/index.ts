@@ -128,7 +128,7 @@ export default function (pi: ExtensionAPI) {
   registerSwitchProjectCommand(pi, config);
   registerLearnMemoryCommand(pi);
   registerSyncMarkdownMemoriesCommand(pi, dbManager, globalDir, config.projectsMemoryDir);
-  registerPreviewContextCommand(pi, store, projectStore, skillStore, projectName, config.memoryMode);
+  registerPreviewContextCommand(pi, store, projectStore, skillStore, projectName, config);
 
   // ── 11. SQLite session search + extended memory ──
   registerSessionSearchTool(pi, dbManager);

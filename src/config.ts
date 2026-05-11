@@ -18,6 +18,7 @@ import {
 
 const DEFAULT_CONFIG: MemoryConfig = {
   memoryMode: "policy-only",
+  memoryPolicyStyle: "full",
   memoryCharLimit: DEFAULT_MEMORY_CHAR_LIMIT,
   userCharLimit: DEFAULT_USER_CHAR_LIMIT,
   projectCharLimit: DEFAULT_PROJECT_CHAR_LIMIT,
@@ -55,6 +56,13 @@ export function loadConfig(): MemoryConfig {
         typeof value === "number" && Number.isFinite(value) && value >= 0
       );
       if (parsed.memoryMode === "policy-only" || parsed.memoryMode === "legacy-inject") config.memoryMode = parsed.memoryMode;
+      if (
+        parsed.memoryPolicyStyle === "full" ||
+        parsed.memoryPolicyStyle === "compact" ||
+        parsed.memoryPolicyStyle === "custom" ||
+        parsed.memoryPolicyStyle === "none"
+      ) config.memoryPolicyStyle = parsed.memoryPolicyStyle;
+      if (typeof parsed.memoryPolicyCustomText === "string") config.memoryPolicyCustomText = parsed.memoryPolicyCustomText;
       if (typeof parsed.memoryCharLimit === "number") config.memoryCharLimit = parsed.memoryCharLimit;
       if (typeof parsed.userCharLimit === "number") config.userCharLimit = parsed.userCharLimit;
       if (typeof parsed.nudgeInterval === "number") config.nudgeInterval = parsed.nudgeInterval;

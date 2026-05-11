@@ -6,7 +6,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import { SkillStore } from "../store/skill-store.js";
-import { MEMORY_POLICY_PROMPT } from "../constants.js";
+import { resolveMemoryPolicyPrompt } from "../prompt-context.js";
 import type { MemoryConfig } from "../types.js";
 
 export function registerPreviewContextCommand(
@@ -15,12 +15,13 @@ export function registerPreviewContextCommand(
   projectStore: MemoryStore | null,
   skillStore: SkillStore,
   projectName: string,
-  memoryMode: MemoryConfig["memoryMode"] = "policy-only",
+  config: Pick<MemoryConfig, "memoryMode" | "memoryPolicyStyle" | "memoryPolicyCustomText"> = { memoryMode: "policy-only" },
 ): void {
   pi.registerCommand("memory-preview-context", {
     description: "Preview the memory policy or legacy memory/skill context blocks",
     handler: async (_args, ctx) => {
-      if (memoryMode === "policy-only") {
+      if (config.memoryMode === "policy-only") {
+        const policyPrompt = resolveMemoryPolicyPrompt(config);
         const lines: string[] = [];
         lines.push("");
         lines.push("  ╔══════════════════════════════════════════════╗");
@@ -28,12 +29,19 @@ export function registerPreviewContextCommand(
         lines.push("  ╚══════════════════════════════════════════════╝");
         lines.push("");
         lines.push("  Mode: policy-only");
+        lines.push(`  Policy style: ${config.memoryPolicyStyle ?? "full"}`);
         lines.push("  This is the memory policy appended to the system prompt.");
         lines.push("  Full Markdown memories are NOT injected in this mode.");
         lines.push("");
-        lines.push(MEMORY_POLICY_PROMPT);
-        lines.push("");
-        lines.push("  Blocks shown: 1");
+        if (policyPrompt) {
+          lines.push(policyPrompt);
+          lines.push("");
+          lines.push("  Blocks shown: 1");
+        } else {
+          lines.push("  No memory policy context is injected for this policy style.");
+          lines.push("");
+          lines.push("  Blocks shown: 0");
+        }
         ctx.ui.notify(lines.join("\n"), "info");
         return;
       }

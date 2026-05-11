@@ -7,6 +7,10 @@ import type { TextContent } from "@mariozechner/pi-ai";
 export interface MemoryConfig {
   /** Prompt memory mode. Default: policy-only */
   memoryMode: "policy-only" | "legacy-inject";
+  /** Policy prompt style used when memoryMode is policy-only. Default: full */
+  memoryPolicyStyle?: "full" | "compact" | "custom" | "none";
+  /** Custom policy prompt text used when memoryPolicyStyle is custom */
+  memoryPolicyCustomText?: string;
   /** Max chars for MEMORY.md (agent notes). Default: 5000 */
   memoryCharLimit: number;
   /** Max chars for USER.md (user profile). Default: 5000 */

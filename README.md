@@ -106,7 +106,7 @@ The extension stores memory at two levels:
 | **Global** | `~/.pi/agent/memory/` | Facts that apply everywhere — your name, preferences, OS, tools | Searchable via `memory_search` |
 | **Project** | `~/.pi/agent/projects-memory/<project>/` | Facts scoped to one codebase — architecture decisions, API quirks, team norms | Searchable when cwd matches the project |
 
-By default, full Markdown memories are **not** injected into the system prompt. The system prompt gets a compact `<memory-policy>` that tells the agent when to call `memory_search` and how to treat memory results. This keeps first-turn token usage low while preserving access to user, project, failure, correction, insight, preference, convention, and tool-quirk memories.
+By default, full Markdown memories are **not** injected into the system prompt. The system prompt gets a full-detail `<memory-policy>` that tells the agent when to call `memory_search` and how to treat memory results. This keeps first-turn token usage low while preserving access to user, project, failure, correction, insight, preference, convention, and tool-quirk memories.
 
 ```
 System Prompt
@@ -119,7 +119,7 @@ System Prompt
 └─────────────────────────────────────────┘
 ```
 
-Set `"memoryMode": "legacy-inject"` to restore the old behavior that injects MEMORY.md, USER.md, project memory, recent failures, and the skill index into the prompt.
+Set `"memoryPolicyStyle"` to `"compact"`, `"custom"`, or `"none"` to change only the policy text while keeping policy-only mode. Set `"memoryMode": "legacy-inject"` to restore the old behavior that injects MEMORY.md, USER.md, project memory, recent failures, and the skill index into the prompt.
 
 ## Failure Memory
 
@@ -347,6 +347,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 ```json
 {
   "memoryMode": "policy-only",
+  "memoryPolicyStyle": "full",
   "memoryCharLimit": 5000,
   "userCharLimit": 5000,
   "projectCharLimit": 5000,
@@ -371,6 +372,8 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | Setting | Default | Description |
 |---|---|---|
 | `memoryMode` | `policy-only` | Prompt behavior: `policy-only` injects only memory policy; `legacy-inject` restores full memory/skill prompt injection |
+| `memoryPolicyStyle` | `full` | Policy text used in `policy-only` mode: `full` preserves the default v0.7 policy; `compact` uses shorter built-in guidance; `custom` uses `memoryPolicyCustomText`; `none` injects no policy text |
+| `memoryPolicyCustomText` | unset | Custom policy text used when `memoryPolicyStyle` is `custom`; blank or missing text falls back to `compact` |
 | `memoryCharLimit` | `5000` | Max characters in MEMORY.md |
 | `userCharLimit` | `5000` | Max characters in USER.md |
 | `projectCharLimit` | `5000` | Max characters in project-scoped MEMORY.md |

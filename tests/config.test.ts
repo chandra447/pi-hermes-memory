@@ -9,6 +9,8 @@ describe("loadConfig", () => {
   it("returns defaults when no config file exists", () => {
     const config = loadConfig();
     assert.strictEqual(config.memoryMode, "policy-only");
+    assert.strictEqual(config.memoryPolicyStyle, "full");
+    assert.strictEqual(config.memoryPolicyCustomText, undefined);
     assert.strictEqual(config.memoryCharLimit, 5000);
     assert.strictEqual(config.userCharLimit, 5000);
     assert.strictEqual(config.nudgeInterval, 10);
@@ -30,6 +32,8 @@ describe("loadConfig", () => {
     fs.writeFileSync(DEFAULT_CONFIG_PATH, JSON.stringify({
       memoryCharLimit: 3000,
       memoryMode: "legacy-inject",
+      memoryPolicyStyle: "custom",
+      memoryPolicyCustomText: "<memory-policy>Custom</memory-policy>",
       nudgeInterval: 15,
       reviewRecentMessages: 25,
       flushRecentMessages: 40,
@@ -40,6 +44,8 @@ describe("loadConfig", () => {
     }));
     const config = loadConfig();
     assert.strictEqual(config.memoryMode, "legacy-inject");
+    assert.strictEqual(config.memoryPolicyStyle, "custom");
+    assert.strictEqual(config.memoryPolicyCustomText, "<memory-policy>Custom</memory-policy>");
     assert.strictEqual(config.memoryCharLimit, 3000);
     assert.strictEqual(config.nudgeInterval, 15);
     assert.strictEqual(config.reviewRecentMessages, 25);
@@ -61,6 +67,7 @@ describe("loadConfig", () => {
     const config = loadConfig();
     assert.strictEqual(config.reviewEnabled, false);
     assert.strictEqual(config.memoryMode, "policy-only");
+    assert.strictEqual(config.memoryPolicyStyle, "full");
     assert.strictEqual(config.memoryCharLimit, 5000); // default
     assert.strictEqual(config.reviewRecentMessages, 0);
     assert.strictEqual(config.flushRecentMessages, 0);
@@ -152,6 +159,44 @@ describe("loadConfig", () => {
     }));
     const config = loadConfig();
     assert.strictEqual(config.memoryMode, "policy-only");
+    fs.rmSync(DEFAULT_CONFIG_PATH);
+  });
+
+  it("accepts valid memoryPolicyStyle values", () => {
+    fs.mkdirSync(path.dirname(DEFAULT_CONFIG_PATH), { recursive: true });
+
+    for (const style of ["full", "compact", "custom", "none"] as const) {
+      fs.writeFileSync(DEFAULT_CONFIG_PATH, JSON.stringify({ memoryPolicyStyle: style }));
+      const config = loadConfig();
+      assert.strictEqual(config.memoryPolicyStyle, style);
+    }
+
+    fs.rmSync(DEFAULT_CONFIG_PATH);
+  });
+
+  it("ignores invalid memoryPolicyStyle values", () => {
+    fs.mkdirSync(path.dirname(DEFAULT_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(DEFAULT_CONFIG_PATH, JSON.stringify({
+      memoryPolicyStyle: "invalid",
+    }));
+    const config = loadConfig();
+    assert.strictEqual(config.memoryPolicyStyle, "full");
+    fs.rmSync(DEFAULT_CONFIG_PATH);
+  });
+
+  it("accepts string memoryPolicyCustomText and ignores non-string values", () => {
+    fs.mkdirSync(path.dirname(DEFAULT_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(DEFAULT_CONFIG_PATH, JSON.stringify({
+      memoryPolicyCustomText: "custom policy",
+    }));
+    let config = loadConfig();
+    assert.strictEqual(config.memoryPolicyCustomText, "custom policy");
+
+    fs.writeFileSync(DEFAULT_CONFIG_PATH, JSON.stringify({
+      memoryPolicyCustomText: 123,
+    }));
+    config = loadConfig();
+    assert.strictEqual(config.memoryPolicyCustomText, undefined);
     fs.rmSync(DEFAULT_CONFIG_PATH);
   });
 });
