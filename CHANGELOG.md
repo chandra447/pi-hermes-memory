@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-05-11
+
+### Fixed
+
+- **Searchable project-memory backfill**: Startup now runs the same Markdown-to-SQLite sync used by `/memory-sync-markdown` after migrating legacy project folders. This makes memories in `~/.pi/agent/projects-memory/<project>/MEMORY.md` searchable via `memory_search` automatically, including entries copied forward from the old `~/.pi/agent/<project>/MEMORY.md` layout.
+- **Project-scoped correction search**: Correction/failure memories captured while a project is active are now synced into SQLite with that project scope, so `memory_search` can retrieve them using the project filter.
+- **Explicit project writes**: `target="project"` now routes to the project `MEMORY.md` target explicitly before mirroring the entry into SQLite.
+
+### Tests
+
+- Added coverage proving new-layout project Markdown is indexed into SQLite and returned by `memory_search`.
+- Added coverage for project-scoped correction memory sync and explicit project target routing.
+
 ## [0.7.1] - 2026-05-11
 
 ### Fixed

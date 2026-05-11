@@ -78,6 +78,7 @@ export function setupCorrectionDetector(
   projectStore: MemoryStore | null,
   config: MemoryConfig,
   dbManager: DatabaseManager | null = null,
+  projectName?: string | null,
 ): void {
   if (!config.correctionDetection) return;
 
@@ -174,11 +175,11 @@ export function setupCorrectionDetector(
         if (correctionText) {
           const directive = extractCorrectionDirective(correctionText);
           const failureReason = "User corrected the agent";
-          const projectMarker = projectStore ? "project" : undefined;
+          const scopedProjectName = projectStore ? projectName?.trim() || null : null;
           const addResult = await store.addFailure(directive, {
             category: "correction",
             failureReason,
-            project: projectMarker,
+            project: scopedProjectName ?? undefined,
           });
 
           if (addResult.success && dbManager) {
@@ -187,9 +188,10 @@ export function setupCorrectionDetector(
                 content: formatFailureMemoryContent(directive, {
                   category: "correction",
                   failureReason,
-                  project: projectMarker,
+                  project: scopedProjectName,
                 }),
                 target: "failure",
+                project: scopedProjectName,
                 category: "correction",
                 failureReason,
               });

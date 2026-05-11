@@ -179,8 +179,8 @@ export function registerMemoryTool(
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const { action, target: rawTarget, content, old_text, category, failure_reason } = params;
 
-      // Route 'project' to projectStore (internal target 'memory')
-      const target = rawTarget as "memory" | "user" | "failure";
+      // Route 'project' to projectStore using the normal MEMORY.md target.
+      const target = rawTarget === "project" ? "memory" : rawTarget as "memory" | "user" | "failure";
       const activeStore = rawTarget === "project" ? projectStore : store;
 
       if (rawTarget === "project" && !projectStore) {

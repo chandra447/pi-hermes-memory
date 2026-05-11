@@ -6,7 +6,10 @@ import path from 'node:path';
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
 import { DatabaseManager } from '../../src/store/db.js';
 import { registerMemoryTool } from '../../src/tools/memory-tool.js';
-import { registerSyncMarkdownMemoriesCommand } from '../../src/handlers/sync-markdown-memories.js';
+import {
+  registerSyncMarkdownMemoriesCommand,
+  syncMarkdownMemoriesToSqlite,
+} from '../../src/handlers/sync-markdown-memories.js';
 import { ENTRY_DELIMITER } from '../../src/constants.js';
 import { getMemories, searchMemories } from '../../src/store/sqlite-memory-store.js';
 
@@ -154,5 +157,27 @@ describe('memory sqlite sync + markdown backfill', () => {
     const projectRows = getMemories(dbManager, { project: 'legacy-project', target: 'memory' });
     assert.strictEqual(projectRows.length, 1);
     assert.strictEqual(projectRows[0].content, 'legacy project entry');
+  });
+
+  it('makes new-layout project markdown searchable when startup sync runs', () => {
+    const projectDir = path.join(agentRoot, 'projects-memory', 'latest-project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, 'MEMORY.md'),
+      'latest path searchable entry <!-- created=2026-05-11, last=2026-05-11 -->',
+      'utf-8',
+    );
+
+    const counters = syncMarkdownMemoriesToSqlite(dbManager, globalDir);
+
+    assert.strictEqual(counters.projectCount, 1);
+    assert.strictEqual(counters.imported, 1);
+
+    const results = searchMemories(dbManager, 'latest path searchable entry', {
+      project: 'latest-project',
+      target: 'memory',
+    });
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0].content, 'latest path searchable entry');
   });
 });

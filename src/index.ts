@@ -45,7 +45,7 @@ import { registerInterviewCommand } from "./handlers/interview.js";
 import { registerSwitchProjectCommand } from "./handlers/switch-project.js";
 import { registerIndexSessionsCommand } from "./handlers/index-sessions.js";
 import { registerLearnMemoryCommand } from "./handlers/learn-memory.js";
-import { registerSyncMarkdownMemoriesCommand } from "./handlers/sync-markdown-memories.js";
+import { registerSyncMarkdownMemoriesCommand, syncMarkdownMemoriesToSqlite } from "./handlers/sync-markdown-memories.js";
 import { registerPreviewContextCommand } from "./handlers/preview-context.js";
 import { loadConfig } from "./config.js";
 import { detectProject } from "./project.js";
@@ -64,6 +64,11 @@ export default function (pi: ExtensionAPI) {
   // ~/.pi/agent/<project>/ layout. This is non-destructive: legacy folders
   // remain in place while entries are copied/merged into projects-memory/.
   migrateLegacyProjectMemoryDirs(globalDir, config.projectsMemoryDir);
+  try {
+    syncMarkdownMemoriesToSqlite(dbManager, globalDir, config.projectsMemoryDir);
+  } catch {
+    // Best-effort only: failed SQLite backfill should not block extension startup.
+  }
 
   // Detect project from cwd using shared helper
   const project = detectProject(config.projectsMemoryDir);
@@ -111,7 +116,7 @@ export default function (pi: ExtensionAPI) {
   registerConsolidateCommand(pi, store);
 
   // ── 8. Setup correction detection ──
-  setupCorrectionDetector(pi, store, projectStore, config, dbManager);
+  setupCorrectionDetector(pi, store, projectStore, config, dbManager, projectName);
 
   // ── 9. Setup skill auto-trigger ──
   setupSkillAutoTrigger(pi, store, skillStore, config);

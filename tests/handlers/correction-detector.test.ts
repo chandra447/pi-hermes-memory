@@ -330,6 +330,34 @@ describe("setupCorrectionDetector handler", () => {
     assert.strictEqual(failures[0].category, 'correction');
   });
 
+  it("syncs project correction saves into SQLite with project scope", async () => {
+    const pi = createMockPi();
+    const correctionStore = {
+      ...mockStore,
+      addFailure: async () => ({ success: true, target: 'failure', entry_count: 1, message: 'Failure memory saved: correction' }),
+    } as any;
+    const projectStore = {
+      getMemoryEntries: () => [],
+    } as any;
+
+    setupCorrectionDetector(pi, correctionStore, projectStore, config, dbManager, 'project-a');
+
+    const branch = [
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "no, use pnpm in this repo" }] } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "ok" }] } },
+    ];
+
+    fireMessageEnd("user", "no, use pnpm in this repo");
+    fireTurnEnd(branch);
+    await settle();
+
+    const projectFailures = getMemories(dbManager, { target: 'failure', project: 'project-a' });
+    assert.strictEqual(projectFailures.length, 1);
+    assert.match(projectFailures[0].content, /use pnpm in this repo/);
+    assert.match(projectFailures[0].content, /Project: project-a/);
+    assert.strictEqual(projectFailures[0].category, 'correction');
+  });
+
   it("does not break correction handling when SQLite sync fails", async () => {
     const pi = createMockPi();
     let addFailureCalls = 0;

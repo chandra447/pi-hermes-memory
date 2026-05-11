@@ -120,15 +120,19 @@ describe("registerMemoryTool", () => {
       },
     } as unknown as ExtensionAPI;
 
+    const addTargets: string[] = [];
     const mockProjectStore = {
-      add: () => ({
-        success: true,
-        target: "memory",
-        entries: ["Project entry"],
-        usage: "2% — 20/5000 chars",
-        entry_count: 1,
-        message: "Entry added.",
-      }),
+      add: (target: string) => {
+        addTargets.push(target);
+        return {
+          success: true,
+          target,
+          entries: ["Project entry"],
+          usage: "2% — 20/5000 chars",
+          entry_count: 1,
+          message: "Entry added.",
+        };
+      },
     } as unknown as MemoryStore;
 
     registerMemoryTool(mockPi, {} as MemoryStore, mockProjectStore, dbManager, 'project-a');
@@ -136,6 +140,8 @@ describe("registerMemoryTool", () => {
 
     const parsed = JSON.parse(result.content[0].text);
     assert.strictEqual(parsed.target, 'project');
+    assert.strictEqual(result.details.target, 'project');
+    assert.deepStrictEqual(addTargets, ['memory']);
 
     const results = getMemories(dbManager, { project: 'project-a', target: 'memory' });
     assert.strictEqual(results.length, 1);
