@@ -385,6 +385,10 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `reviewEnabled` | `true` | Enable/disable background learning loop |
 | `autoConsolidate` | `true` | Auto-merge when memory hits capacity |
 | `correctionDetection` | `true` | Detect user corrections and save immediately |
+| `correctionStrongPatterns` | unset | Optional case-insensitive regex sources replacing strong correction patterns; omitted preserves defaults, invalid entries are ignored |
+| `correctionWeakPatterns` | unset | Optional case-insensitive regex sources replacing weak correction patterns; omitted preserves defaults, invalid entries are ignored |
+| `correctionNegativePatterns` | unset | Optional case-insensitive regex sources replacing negative correction patterns; omitted preserves defaults, invalid entries are ignored |
+| `correctionDirectiveWords` | unset | Optional directive words replacing the weak-pattern directive words; omitted preserves defaults |
 | `failureInjectionEnabled` | `true` | Legacy mode only: enable/disable injecting recent failure memories into the system prompt |
 | `failureInjectionMaxAgeDays` | `7` | Legacy mode only: maximum age in days for injected failure memories |
 | `failureInjectionMaxEntries` | `5` | Legacy mode only: maximum number of failure memories to inject |

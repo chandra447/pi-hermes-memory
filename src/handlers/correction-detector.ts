@@ -20,6 +20,7 @@ import {
   CORRECTION_STRONG_PATTERNS,
   CORRECTION_WEAK_PATTERNS,
   CORRECTION_NEGATIVE_PATTERNS,
+  CORRECTION_DIRECTIVE_WORDS,
   ENTRY_DELIMITER,
 } from "../constants.js";
 import type { MemoryConfig } from "../types.js";
@@ -38,23 +39,71 @@ function extractCorrectionDirective(text: string): string {
   return cleaned || text;
 }
 
+function compileCorrectionPatterns(
+  configured: string[] | undefined,
+  defaults: RegExp[],
+): RegExp[] {
+  if (configured === undefined) return defaults;
+
+  const patterns: RegExp[] = [];
+  for (const source of configured) {
+    try {
+      patterns.push(new RegExp(source, "i"));
+    } catch {
+      // Ignore invalid configured regex entries; valid entries still apply.
+    }
+  }
+  return patterns;
+}
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasDirectiveWord(remainder: string, words: string[]): boolean {
+  if (words.length === 0) return false;
+  const source = words.map(escapeRegexLiteral).join("|");
+  return new RegExp(`\\b(${source})\\b`, "i").test(remainder);
+}
+
 /**
  * Check if a user message is a correction using the two-pass filter.
  * Returns true if the message should trigger an immediate save.
  */
-export function isCorrection(text: string): boolean {
+type CorrectionPatternConfig = Pick<MemoryConfig,
+  "correctionStrongPatterns" |
+  "correctionWeakPatterns" |
+  "correctionNegativePatterns" |
+  "correctionDirectiveWords"
+>;
+
+export function isCorrection(text: string, config?: CorrectionPatternConfig): boolean {
+  const negativePatterns = compileCorrectionPatterns(
+    config?.correctionNegativePatterns,
+    CORRECTION_NEGATIVE_PATTERNS,
+  );
+  const strongPatterns = compileCorrectionPatterns(
+    config?.correctionStrongPatterns,
+    CORRECTION_STRONG_PATTERNS,
+  );
+  const weakPatterns = compileCorrectionPatterns(
+    config?.correctionWeakPatterns,
+    CORRECTION_WEAK_PATTERNS,
+  );
+  const directiveWords = config?.correctionDirectiveWords ?? CORRECTION_DIRECTIVE_WORDS;
+
   // Check negative patterns first — suppress even if positive matches
-  for (const pattern of CORRECTION_NEGATIVE_PATTERNS) {
+  for (const pattern of negativePatterns) {
     if (pattern.test(text)) return false;
   }
 
   // Check strong patterns — always trigger
-  for (const pattern of CORRECTION_STRONG_PATTERNS) {
+  for (const pattern of strongPatterns) {
     if (pattern.test(text)) return true;
   }
 
   // Check weak patterns — only trigger if followed by a directive clause
-  for (const pattern of CORRECTION_WEAK_PATTERNS) {
+  for (const pattern of weakPatterns) {
     if (pattern.test(text)) {
       // Look for a directive after the weak pattern match
       // Directive = a verb or "the/that/this" in the remainder of the text
@@ -62,7 +111,7 @@ export function isCorrection(text: string): boolean {
       if (match && match.index === 0) {
         const remainder = text.slice(match[0].length).trim();
         // Simple heuristic: remainder contains something directive-ish
-        if (/\b(use|don'?t|do|try|make|run|install|add|remove|delete|change|fix|put|set|write|go|stop|start|the|that|this|it)\b/i.test(remainder)) {
+        if (hasDirectiveWord(remainder, directiveWords)) {
           return true;
         }
       }
@@ -91,7 +140,7 @@ export function setupCorrectionDetector(
     if (event.message.role !== "user") return;
     const text = getMessageText(event.message);
     if (!text) return;
-    if (isCorrection(text)) {
+    if (isCorrection(text, config)) {
       pendingCorrection = true;
     }
   });

@@ -45,15 +45,18 @@ export const DEFAULT_CONFIG_PATH = path.join(
   "hermes-memory-config.json",
 );
 
-export function loadConfig(): MemoryConfig {
+export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
   try {
-    if (fs.existsSync(DEFAULT_CONFIG_PATH)) {
-      const raw = fs.readFileSync(DEFAULT_CONFIG_PATH, "utf-8");
+    if (fs.existsSync(configPath)) {
+      const raw = fs.readFileSync(configPath, "utf-8");
       const parsed = JSON.parse(raw);
       // Merge: override defaults with user config
       const config: MemoryConfig = { ...DEFAULT_CONFIG };
       const isNonNegativeNumber = (value: unknown): value is number => (
         typeof value === "number" && Number.isFinite(value) && value >= 0
+      );
+      const isStringArray = (value: unknown): value is string[] => (
+        Array.isArray(value) && value.every((item) => typeof item === "string")
       );
       if (parsed.memoryMode === "policy-only" || parsed.memoryMode === "legacy-inject") config.memoryMode = parsed.memoryMode;
       if (
@@ -74,6 +77,10 @@ export function loadConfig(): MemoryConfig {
       if (isNonNegativeNumber(parsed.flushRecentMessages)) config.flushRecentMessages = parsed.flushRecentMessages;
       if (typeof parsed.autoConsolidate === "boolean") config.autoConsolidate = parsed.autoConsolidate;
       if (typeof parsed.correctionDetection === "boolean") config.correctionDetection = parsed.correctionDetection;
+      if (isStringArray(parsed.correctionStrongPatterns)) config.correctionStrongPatterns = parsed.correctionStrongPatterns;
+      if (isStringArray(parsed.correctionWeakPatterns)) config.correctionWeakPatterns = parsed.correctionWeakPatterns;
+      if (isStringArray(parsed.correctionNegativePatterns)) config.correctionNegativePatterns = parsed.correctionNegativePatterns;
+      if (isStringArray(parsed.correctionDirectiveWords)) config.correctionDirectiveWords = parsed.correctionDirectiveWords;
       if (typeof parsed.failureInjectionEnabled === "boolean") config.failureInjectionEnabled = parsed.failureInjectionEnabled;
       if (typeof parsed.failureInjectionMaxAgeDays === "number") config.failureInjectionMaxAgeDays = parsed.failureInjectionMaxAgeDays;
       if (typeof parsed.failureInjectionMaxEntries === "number") config.failureInjectionMaxEntries = parsed.failureInjectionMaxEntries;

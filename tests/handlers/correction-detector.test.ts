@@ -166,6 +166,54 @@ describe("isCorrection", () => {
       assert.strictEqual(isCorrection("No Worries"), false);
     });
   });
+
+  describe("custom pattern config", () => {
+    it("matches custom strong patterns", () => {
+      assert.strictEqual(
+        isCorrection("custom correction", { correctionStrongPatterns: ["^custom correction$"] }),
+        true,
+      );
+    });
+
+    it("uses custom negative patterns to suppress matches", () => {
+      assert.strictEqual(
+        isCorrection("custom correction", {
+          correctionStrongPatterns: ["^custom"],
+          correctionNegativePatterns: ["^custom correction$"],
+        }),
+        false,
+      );
+    });
+
+    it("uses custom directive words for weak patterns", () => {
+      assert.strictEqual(
+        isCorrection("no, shipit now", { correctionDirectiveWords: ["shipit"] }),
+        true,
+      );
+      assert.strictEqual(
+        isCorrection("no, use yarn", { correctionDirectiveWords: ["shipit"] }),
+        false,
+      );
+    });
+
+    it("ignores invalid custom regex entries and keeps valid entries", () => {
+      assert.strictEqual(
+        isCorrection("custom correction", { correctionStrongPatterns: ["bad(", "^custom"] }),
+        true,
+      );
+    });
+
+    it("treats explicit empty or all-invalid pattern arrays as empty", () => {
+      assert.strictEqual(
+        isCorrection("don't do that", { correctionStrongPatterns: [] }),
+        false,
+      );
+      assert.strictEqual(
+        isCorrection("don't do that", { correctionStrongPatterns: ["bad("] }),
+        false,
+      );
+    });
+  });
 });
 
 // ─── Handler behavior tests ───

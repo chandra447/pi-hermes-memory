@@ -182,6 +182,33 @@ export const CORRECTION_NEGATIVE_PATTERNS: RegExp[] = [
   /^stop.{0,5}(there|here|for now)/i,
 ];
 
+/** Directive words required after weak correction patterns */
+export const CORRECTION_DIRECTIVE_WORDS: string[] = [
+  "use",
+  "don't",
+  "dont",
+  "do",
+  "try",
+  "make",
+  "run",
+  "install",
+  "add",
+  "remove",
+  "delete",
+  "change",
+  "fix",
+  "put",
+  "set",
+  "write",
+  "go",
+  "stop",
+  "start",
+  "the",
+  "that",
+  "this",
+  "it",
+];
+
 // ─── Correction save prompt ───
 export const CORRECTION_SAVE_PROMPT = `The user just corrected you. Review what went wrong and save the correction to persistent memory.
 

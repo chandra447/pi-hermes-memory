@@ -39,6 +39,14 @@ export interface MemoryConfig {
   autoConsolidate: boolean;
   /** Detect user corrections and trigger immediate memory save. Default: true */
   correctionDetection: boolean;
+  /** Override strong correction regex sources. Missing = defaults; [] = none. */
+  correctionStrongPatterns?: string[];
+  /** Override weak correction regex sources. Missing = defaults; [] = none. */
+  correctionWeakPatterns?: string[];
+  /** Override negative correction regex sources. Missing = defaults; [] = none. */
+  correctionNegativePatterns?: string[];
+  /** Override directive words used after weak correction patterns. Missing = defaults; [] = none. */
+  correctionDirectiveWords?: string[];
   /** Inject recent failure memories into the system prompt. Default: true */
   failureInjectionEnabled: boolean;
   /** Maximum age in days for injected failure memories. Default: 7 */

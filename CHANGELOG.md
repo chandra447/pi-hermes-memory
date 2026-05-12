@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Configurable correction detection patterns**: Strong, weak, and negative correction patterns plus weak-pattern directive words can now be overridden with optional config fields. Omitted fields preserve the existing defaults.
+
+### Tests
+
+- Config loading tests now use an injected temporary config path instead of writing to `~/.pi/agent/hermes-memory-config.json`.
+
 ## [0.7.3] - 2026-05-12
 
 ### Added
