@@ -26,6 +26,8 @@ describe("loadConfig", () => {
     assert.strictEqual(config.flushOnShutdown, true);
     assert.strictEqual(config.flushMinTurns, 6);
     assert.strictEqual(config.flushRecentMessages, 0);
+    assert.strictEqual(config.memoryOverflowStrategy, "auto-consolidate");
+    assert.strictEqual(config.autoConsolidate, true);
     assert.strictEqual(config.failureInjectionEnabled, true);
     assert.strictEqual(config.failureInjectionMaxAgeDays, 7);
     assert.strictEqual(config.failureInjectionMaxEntries, 5);
@@ -190,6 +192,60 @@ describe("loadConfig", () => {
     }));
     config = loadConfig(TEST_CONFIG_PATH);
     assert.strictEqual(config.memoryPolicyCustomText, undefined);
+  });
+
+  it("accepts valid memoryOverflowStrategy values", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+
+    for (const policy of ["auto-consolidate", "reject", "fifo-evict"] as const) {
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ memoryOverflowStrategy: policy }));
+      const config = loadConfig(TEST_CONFIG_PATH);
+      assert.strictEqual(config.memoryOverflowStrategy, policy);
+      assert.strictEqual(config.autoConsolidate, policy === "auto-consolidate");
+    }
+  });
+
+  it("ignores invalid memoryOverflowStrategy values", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      memoryOverflowStrategy: "invalid",
+    }));
+    const config = loadConfig(TEST_CONFIG_PATH);
+    assert.strictEqual(config.memoryOverflowStrategy, "auto-consolidate");
+    assert.strictEqual(config.autoConsolidate, true);
+  });
+
+  it("maps legacy autoConsolidate boolean to memoryOverflowStrategy when strategy is absent", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ autoConsolidate: false }));
+    let config = loadConfig(TEST_CONFIG_PATH);
+    assert.strictEqual(config.autoConsolidate, false);
+    assert.strictEqual(config.memoryOverflowStrategy, "reject");
+
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ autoConsolidate: true }));
+    config = loadConfig(TEST_CONFIG_PATH);
+    assert.strictEqual(config.autoConsolidate, true);
+    assert.strictEqual(config.memoryOverflowStrategy, "auto-consolidate");
+  });
+
+  it("lets explicit memoryOverflowStrategy override legacy autoConsolidate", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      autoConsolidate: true,
+      memoryOverflowStrategy: "fifo-evict",
+    }));
+    let config = loadConfig(TEST_CONFIG_PATH);
+    assert.strictEqual(config.memoryOverflowStrategy, "fifo-evict");
+    assert.strictEqual(config.autoConsolidate, false);
+
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      autoConsolidate: false,
+      memoryOverflowStrategy: "auto-consolidate",
+    }));
+    config = loadConfig(TEST_CONFIG_PATH);
+    assert.strictEqual(config.memoryOverflowStrategy, "auto-consolidate");
+    assert.strictEqual(config.autoConsolidate, true);
   });
 
   it("accepts correction pattern string arrays including empty arrays", () => {

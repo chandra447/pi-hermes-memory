@@ -4,6 +4,8 @@
 
 import type { TextContent } from "@mariozechner/pi-ai";
 
+export type MemoryOverflowStrategy = "auto-consolidate" | "reject" | "fifo-evict";
+
 export interface MemoryConfig {
   /** Prompt memory mode. Default: policy-only */
   memoryMode: "policy-only" | "legacy-inject";
@@ -35,7 +37,9 @@ export interface MemoryConfig {
   memoryDir?: string;
   /** Directory for project-scoped memory (relative to ~/.pi/agent). Default: "projects-memory" */
   projectsMemoryDir?: string;
-  /** Auto-consolidate when memory is full instead of returning error. Default: true */
+  /** Strategy when memory is full. Default: auto-consolidate */
+  memoryOverflowStrategy?: MemoryOverflowStrategy;
+  /** Legacy alias for memoryOverflowStrategy. Default: true */
   autoConsolidate: boolean;
   /** Detect user corrections and trigger immediate memory save. Default: true */
   correctionDetection: boolean;
@@ -79,6 +83,8 @@ export interface MemoryResult {
   entries?: string[];
   usage?: string;
   entry_count?: number;
+  evicted_entries?: string[];
+  evicted_count?: number;
   matches?: string[];
 }
 

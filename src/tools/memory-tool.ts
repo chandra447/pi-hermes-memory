@@ -29,6 +29,29 @@ function appendSyncWarning(result: MemoryResult, warning: string): MemoryResult 
   } as MemoryResult;
 }
 
+function formatMemoryToolText(result: MemoryResult): string {
+  const evictedEntries = result.evicted_entries ?? [];
+  if (result.success && evictedEntries.length > 0) {
+    const lines = [
+      result.message ?? `Memory updated. Rotated ${evictedEntries.length} older ${evictedEntries.length === 1 ? "entry" : "entries"} to stay within the limit.`,
+      "",
+      "Rotated active memory entries:",
+      "",
+    ];
+
+    evictedEntries.forEach((entry, index) => {
+      lines.push(`${index + 1}. ${entry}`);
+      lines.push("");
+    });
+
+    lines.push("If one of these entries should stay active, add it again.");
+    if (result.usage) lines.push(`Usage: ${result.usage}`);
+    return lines.join("\n").trim();
+  }
+
+  return JSON.stringify(result);
+}
+
 function sqliteProjectFor(rawTarget: "memory" | "user" | "project" | "failure", projectName?: string | null): string | null | undefined {
   if (rawTarget === "project") return projectName?.trim() || null;
   if (rawTarget === "memory") return null;
@@ -305,7 +328,7 @@ export function registerMemoryTool(
       }
 
       return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
+        content: [{ type: "text", text: formatMemoryToolText(result) }],
         details: result,
       };
     },

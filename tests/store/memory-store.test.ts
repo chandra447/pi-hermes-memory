@@ -182,6 +182,83 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.ok(result.error!.includes("chars"));
     });
 
+    it("rejects without consolidation when memoryOverflowStrategy is reject", async () => {
+      let consolidatorCalled = false;
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 50,
+        memoryOverflowStrategy: "reject",
+        autoConsolidate: true,
+      }));
+      store.setConsolidator(async () => {
+        consolidatorCalled = true;
+        return { consolidated: true };
+      });
+      await store.loadFromDisk();
+
+      const result = await store.add("memory", `${TEST_MARKER} ${"x".repeat(60)}`);
+      await settle();
+
+      assert.ok(!result.success);
+      assert.equal(consolidatorCalled, false);
+      assert.ok(result.error!.includes("exceed the limit"));
+    });
+
+    it("evicts oldest entries in file order when memoryOverflowStrategy is fifo-evict", async () => {
+      let consolidatorCalled = false;
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 150,
+        memoryOverflowStrategy: "fifo-evict",
+        autoConsolidate: true,
+      }));
+      store.setConsolidator(async () => {
+        consolidatorCalled = true;
+        return { consolidated: true };
+      });
+      await store.loadFromDisk();
+
+      const first = `${TEST_MARKER} fifo first`;
+      const second = `${TEST_MARKER} fifo second`;
+      const next = `${TEST_MARKER} fifo next`;
+
+      assert.ok((await store.add("memory", first)).success);
+      assert.ok((await store.add("memory", second)).success);
+
+      const result = await store.add("memory", next);
+      await settle();
+
+      assert.ok(result.success, result.error);
+      assert.equal(consolidatorCalled, false);
+      assert.equal(result.message, "Memory updated. Rotated 1 older entry to stay within the limit.");
+      assert.deepEqual(result.evicted_entries, [first]);
+      assert.equal(result.evicted_count, 1);
+      assert.equal(result.entry_count, 2);
+
+      const raw = await readRaw(memoryPath);
+      assert.ok(!raw.includes(first));
+      assert.ok(raw.includes(second));
+      assert.ok(raw.includes(next));
+      assert.ok(raw.indexOf(second) < raw.indexOf(next));
+    });
+
+    it("does not evict when the new entry cannot fit an empty memory", async () => {
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 80,
+        memoryOverflowStrategy: "fifo-evict",
+      }));
+      await store.loadFromDisk();
+
+      const existing = `${TEST_MARKER} keep me`;
+      assert.ok((await store.add("memory", existing)).success);
+
+      const result = await store.add("memory", `${TEST_MARKER} ${"x".repeat(120)}`);
+      await settle();
+
+      assert.ok(!result.success);
+      assert.ok(result.error!.includes("exceed the limit"));
+      const raw = await readRaw(memoryPath);
+      assert.ok(raw.includes(existing));
+    });
+
     it("returns error for empty content", async () => {
       const store = new MemoryStore(makeConfig());
 

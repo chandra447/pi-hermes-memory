@@ -357,6 +357,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "nudgeToolCalls": 15,
   "reviewRecentMessages": 0,
   "reviewEnabled": true,
+  "memoryOverflowStrategy": "auto-consolidate",
   "autoConsolidate": true,
   "correctionDetection": true,
   "failureInjectionEnabled": true,
@@ -383,7 +384,8 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `nudgeToolCalls` | `15` | Tool calls between auto-reviews (OR with turns) |
 | `reviewRecentMessages` | `0` | Recent messages included in background review (`0` = all) |
 | `reviewEnabled` | `true` | Enable/disable background learning loop |
-| `autoConsolidate` | `true` | Auto-merge when memory hits capacity |
+| `memoryOverflowStrategy` | `auto-consolidate` | Behavior when MEMORY.md, USER.md, or project-scoped memory reaches its character limit: `auto-consolidate` runs the existing consolidation flow; `reject` returns an error; `fifo-evict` rotates older entries in file order until the new entry fits |
+| `autoConsolidate` | `true` | Legacy alias for `memoryOverflowStrategy` when `memoryOverflowStrategy` is not set (`true` = `auto-consolidate`, `false` = `reject`) |
 | `correctionDetection` | `true` | Detect user corrections and save immediately |
 | `correctionStrongPatterns` | unset | Optional case-insensitive regex sources replacing strong correction patterns; omitted preserves defaults, invalid entries are ignored |
 | `correctionWeakPatterns` | unset | Optional case-insensitive regex sources replacing weak correction patterns; omitted preserves defaults, invalid entries are ignored |

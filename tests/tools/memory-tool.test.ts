@@ -85,6 +85,44 @@ describe("registerMemoryTool", () => {
     assert.strictEqual(result.details.success, true, "details should mirror result");
   });
 
+  it("execute add with FIFO evictions returns normal text with full rotated entries", async () => {
+    let capturedResult: any;
+
+    const mockPi = {
+      registerTool: (def: any) => {
+        capturedResult = def;
+      },
+    } as unknown as ExtensionAPI;
+
+    const evictedOne = "First rotated entry with full detail.";
+    const evictedTwo = "Second rotated entry with\nmultiple lines preserved.";
+    const mockStore = {
+      add: () => ({
+        success: true,
+        target: "memory",
+        entries: ["New entry"],
+        usage: "90% — 4500/5000 chars",
+        entry_count: 1,
+        message: "Memory updated. Rotated 2 older entries to stay within the limit.",
+        evicted_entries: [evictedOne, evictedTwo],
+        evicted_count: 2,
+      }),
+    } as unknown as MemoryStore;
+
+    registerMemoryTool(mockPi, mockStore, null);
+    const result = await capturedResult.execute("tc-1", { action: "add", target: "memory", content: "New entry" }, undefined as any, undefined as any, undefined as any);
+
+    const text = result.content[0].text;
+    assert.throws(() => JSON.parse(text));
+    assert.match(text, /Memory updated\. Rotated 2 older entries/);
+    assert.match(text, /Rotated active memory entries:/);
+    assert.ok(text.includes(`1. ${evictedOne}`));
+    assert.ok(text.includes(`2. ${evictedTwo}`));
+    assert.match(text, /If one of these entries should stay active, add it again\./);
+    assert.match(text, /Usage: 90%/);
+    assert.deepStrictEqual(result.details.evicted_entries, [evictedOne, evictedTwo]);
+  });
+
   it("syncs successful adds into SQLite", async () => {
     let capturedResult: any;
     const mockPi = {

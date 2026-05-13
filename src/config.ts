@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import type { MemoryConfig } from "./types.js";
+import type { MemoryConfig, MemoryOverflowStrategy } from "./types.js";
 import {
   DEFAULT_MEMORY_CHAR_LIMIT,
   DEFAULT_USER_CHAR_LIMIT,
@@ -16,6 +16,12 @@ import {
   DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
 } from "./constants.js";
 
+const MEMORY_OVERFLOW_STRATEGIES: readonly MemoryOverflowStrategy[] = ["auto-consolidate", "reject", "fifo-evict"];
+
+function isMemoryOverflowStrategy(value: unknown): value is MemoryOverflowStrategy {
+  return typeof value === "string" && MEMORY_OVERFLOW_STRATEGIES.includes(value as MemoryOverflowStrategy);
+}
+
 const DEFAULT_CONFIG: MemoryConfig = {
   memoryMode: "policy-only",
   memoryPolicyStyle: "full",
@@ -29,6 +35,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   flushOnShutdown: true,
   flushMinTurns: DEFAULT_FLUSH_MIN_TURNS,
   flushRecentMessages: DEFAULT_FLUSH_RECENT_MESSAGES,
+  memoryOverflowStrategy: "auto-consolidate",
   autoConsolidate: true,
   correctionDetection: true,
   failureInjectionEnabled: true,
@@ -58,6 +65,8 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       const isStringArray = (value: unknown): value is string[] => (
         Array.isArray(value) && value.every((item) => typeof item === "string")
       );
+      let hasLegacyAutoConsolidate = false;
+      let hasMemoryOverflowStrategy = false;
       if (parsed.memoryMode === "policy-only" || parsed.memoryMode === "legacy-inject") config.memoryMode = parsed.memoryMode;
       if (
         parsed.memoryPolicyStyle === "full" ||
@@ -75,7 +84,14 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (typeof parsed.flushOnShutdown === "boolean") config.flushOnShutdown = parsed.flushOnShutdown;
       if (typeof parsed.flushMinTurns === "number") config.flushMinTurns = parsed.flushMinTurns;
       if (isNonNegativeNumber(parsed.flushRecentMessages)) config.flushRecentMessages = parsed.flushRecentMessages;
-      if (typeof parsed.autoConsolidate === "boolean") config.autoConsolidate = parsed.autoConsolidate;
+      if (typeof parsed.autoConsolidate === "boolean") {
+        config.autoConsolidate = parsed.autoConsolidate;
+        hasLegacyAutoConsolidate = true;
+      }
+      if (isMemoryOverflowStrategy(parsed.memoryOverflowStrategy)) {
+        config.memoryOverflowStrategy = parsed.memoryOverflowStrategy;
+        hasMemoryOverflowStrategy = true;
+      }
       if (typeof parsed.correctionDetection === "boolean") config.correctionDetection = parsed.correctionDetection;
       if (isStringArray(parsed.correctionStrongPatterns)) config.correctionStrongPatterns = parsed.correctionStrongPatterns;
       if (isStringArray(parsed.correctionWeakPatterns)) config.correctionWeakPatterns = parsed.correctionWeakPatterns;
@@ -88,6 +104,11 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (typeof parsed.projectCharLimit === "number") config.projectCharLimit = parsed.projectCharLimit;
       if (typeof parsed.memoryDir === "string") config.memoryDir = parsed.memoryDir;
       if (typeof parsed.projectsMemoryDir === "string") config.projectsMemoryDir = parsed.projectsMemoryDir;
+      if (hasMemoryOverflowStrategy) {
+        config.autoConsolidate = config.memoryOverflowStrategy === "auto-consolidate";
+      } else if (hasLegacyAutoConsolidate) {
+        config.memoryOverflowStrategy = config.autoConsolidate ? "auto-consolidate" : "reject";
+      }
       return config;
     }
   } catch {

@@ -24,7 +24,7 @@ import {
   MEMORY_FILE,
   USER_FILE,
 } from "../constants.js";
-import type { MemoryConfig, MemoryResult, MemorySnapshot, ConsolidationResult, MemoryCategory } from "../types.js";
+import type { MemoryConfig, MemoryResult, MemorySnapshot, ConsolidationResult, MemoryCategory, MemoryOverflowStrategy } from "../types.js";
 
 export class MemoryStore {
   private memoryEntries: string[] = [];
@@ -75,6 +75,10 @@ export class MemoryStore {
   private charCount(target: "memory" | "user" | "failure"): number {
     const entries = this.entriesFor(target);
     return entries.length ? entries.join(ENTRY_DELIMITER).length : 0;
+  }
+
+  private memoryOverflowStrategy(): MemoryOverflowStrategy {
+    return this.config.memoryOverflowStrategy ?? (this.config.autoConsolidate ? "auto-consolidate" : "reject");
   }
 
   // ─── Load from disk ───
@@ -176,8 +180,14 @@ export class MemoryStore {
 
     const newTotal = [...entries, encoded].join(ENTRY_DELIMITER).length;
     if (newTotal > limit) {
+      const strategy = this.memoryOverflowStrategy();
+
+      if (strategy === "fifo-evict") {
+        return this.fifoEvictAndAdd(target, entries, encoded, content.length, limit);
+      }
+
       // Auto-consolidate once if configured — limit retries to prevent infinite loops
-      if (this.config.autoConsolidate && this.consolidator && _retriesLeft > 0) {
+      if (strategy === "auto-consolidate" && this.consolidator && _retriesLeft > 0) {
         try {
           const result = await this.consolidator(target, signal);
           if (result.consolidated) {
@@ -190,11 +200,7 @@ export class MemoryStore {
           // Consolidation failed — fall through to error
         }
       }
-      const current = this.charCount(target);
-      return {
-        success: false,
-        error: `Memory at ${current}/${limit} chars. Adding this entry (${content.length} chars) would exceed the limit. Replace or remove existing entries first.`,
-      };
+      return this.memoryFullError(target, content.length);
     }
 
     entries.push(encoded);
@@ -202,6 +208,48 @@ export class MemoryStore {
     await this.saveToDisk(target);
 
     return this.successResponse(target, "Entry added.");
+  }
+
+  private async fifoEvictAndAdd(
+    target: "memory" | "user" | "failure",
+    entries: string[],
+    encoded: string,
+    contentLength: number,
+    limit: number,
+  ): Promise<MemoryResult> {
+    if (encoded.length > limit) {
+      return this.memoryFullError(target, contentLength);
+    }
+
+    const remaining = [...entries];
+    const evictedEntries: string[] = [];
+
+    while ([...remaining, encoded].join(ENTRY_DELIMITER).length > limit && remaining.length > 0) {
+      const evicted = remaining.shift()!;
+      evictedEntries.push(this.stripMetadata(evicted));
+    }
+
+    remaining.push(encoded);
+    this.setEntries(target, remaining);
+    await this.saveToDisk(target);
+
+    return {
+      ...this.successResponse(
+        target,
+        `Memory updated. Rotated ${evictedEntries.length} older ${evictedEntries.length === 1 ? "entry" : "entries"} to stay within the limit.`,
+      ),
+      evicted_entries: evictedEntries,
+      evicted_count: evictedEntries.length,
+    };
+  }
+
+  private memoryFullError(target: "memory" | "user" | "failure", contentLength: number): MemoryResult {
+    const current = this.charCount(target);
+    const limit = this.charLimit(target);
+    return {
+      success: false,
+      error: `Memory at ${current}/${limit} chars. Adding this entry (${contentLength} chars) would exceed the limit. Replace or remove existing entries first.`,
+    };
   }
 
   async replace(target: "memory" | "user" | "failure", oldText: string, newContent: string): Promise<MemoryResult> {
