@@ -111,9 +111,9 @@ export default function (pi: ExtensionAPI) {
 
   // ── 7. Setup auto-consolidation (inject consolidator into store) ──
   store.setConsolidator(async (target, signal) => {
-    return triggerConsolidation(pi, store, target, signal);
+    return triggerConsolidation(pi, store, target, signal, config.consolidationTimeoutMs);
   });
-  registerConsolidateCommand(pi, store);
+  registerConsolidateCommand(pi, store, config.consolidationTimeoutMs);
 
   // ── 8. Setup correction detection ──
   setupCorrectionDetector(pi, store, projectStore, config, dbManager, projectName);

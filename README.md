@@ -363,6 +363,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "failureInjectionEnabled": true,
   "failureInjectionMaxAgeDays": 7,
   "failureInjectionMaxEntries": 5,
+  "consolidationTimeoutMs": 60000,
   "flushOnCompact": true,
   "flushOnShutdown": true,
   "flushMinTurns": 6,
@@ -386,6 +387,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `reviewEnabled` | `true` | Enable/disable background learning loop |
 | `memoryOverflowStrategy` | `auto-consolidate` | Behavior when MEMORY.md, USER.md, or project-scoped memory reaches its character limit: `auto-consolidate` runs the existing consolidation flow; `reject` returns an error; `fifo-evict` rotates older entries in file order until the new entry fits |
 | `autoConsolidate` | `true` | Legacy alias for `memoryOverflowStrategy` when `memoryOverflowStrategy` is not set (`true` = `auto-consolidate`, `false` = `reject`) |
+| `consolidationTimeoutMs` | `60000` | Maximum time in milliseconds for auto-consolidation to complete |
 | `correctionDetection` | `true` | Detect user corrections and save immediately |
 | `correctionStrongPatterns` | unset | Optional case-insensitive regex sources replacing strong correction patterns; omitted preserves defaults, invalid entries are ignored |
 | `correctionWeakPatterns` | unset | Optional case-insensitive regex sources replacing weak correction patterns; omitted preserves defaults, invalid entries are ignored |

@@ -59,6 +59,8 @@ export interface MemoryConfig {
   failureInjectionMaxEntries: number;
   /** Tool calls before triggering background review (in addition to turn count). Default: 15 */
   nudgeToolCalls: number;
+  /** Maximum time in milliseconds for auto-consolidation to complete. Default: 60000 */
+  consolidationTimeoutMs: number;
   /** Enable session history search via SQLite FTS5. Default: true */
   sessionSearchEnabled?: boolean;
   /** Days to retain session history. Default: 90 */

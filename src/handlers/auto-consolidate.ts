@@ -17,6 +17,7 @@ export async function triggerConsolidation(
   store: MemoryStore,
   target: "memory" | "user" | "failure",
   signal?: AbortSignal,
+  timeoutMs: number = 60000,
 ): Promise<ConsolidationResult> {
   const entries =
     target === "memory" ? store.getMemoryEntries() : store.getUserEntries();
@@ -34,7 +35,7 @@ export async function triggerConsolidation(
   try {
     const result = await pi.exec("pi", ["-p", "--no-session", prompt], {
       signal,
-      timeout: 60000,
+      timeout: timeoutMs,
     });
 
     if (result.code === 0) {
@@ -58,6 +59,7 @@ export async function triggerConsolidation(
 export function registerConsolidateCommand(
   pi: ExtensionAPI,
   store: MemoryStore,
+  timeoutMs: number = 60000,
 ): void {
   pi.registerCommand("memory-consolidate", {
     description: "Manually trigger memory consolidation to free up space",
@@ -75,7 +77,7 @@ export function registerConsolidateCommand(
           continue;
         }
 
-        const result = await triggerConsolidation(pi, store, target, ctx.signal);
+        const result = await triggerConsolidation(pi, store, target, ctx.signal, timeoutMs);
 
         if (result.consolidated) {
           await store.loadFromDisk();

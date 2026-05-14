@@ -12,6 +12,7 @@ import {
   DEFAULT_NUDGE_TOOL_CALLS,
   DEFAULT_REVIEW_RECENT_MESSAGES,
   DEFAULT_FLUSH_RECENT_MESSAGES,
+  DEFAULT_CONSOLIDATION_TIMEOUT_MS,
   DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
   DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
 } from "./constants.js";
@@ -41,6 +42,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   failureInjectionEnabled: true,
   failureInjectionMaxAgeDays: DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
   failureInjectionMaxEntries: DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
+  consolidationTimeoutMs: DEFAULT_CONSOLIDATION_TIMEOUT_MS,
   nudgeToolCalls: DEFAULT_NUDGE_TOOL_CALLS,
   projectsMemoryDir: DEFAULT_PROJECTS_MEMORY_DIR,
 };
@@ -97,6 +99,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (isStringArray(parsed.correctionWeakPatterns)) config.correctionWeakPatterns = parsed.correctionWeakPatterns;
       if (isStringArray(parsed.correctionNegativePatterns)) config.correctionNegativePatterns = parsed.correctionNegativePatterns;
       if (isStringArray(parsed.correctionDirectiveWords)) config.correctionDirectiveWords = parsed.correctionDirectiveWords;
+      if (typeof parsed.consolidationTimeoutMs === "number") config.consolidationTimeoutMs = parsed.consolidationTimeoutMs;
       if (typeof parsed.failureInjectionEnabled === "boolean") config.failureInjectionEnabled = parsed.failureInjectionEnabled;
       if (typeof parsed.failureInjectionMaxAgeDays === "number") config.failureInjectionMaxAgeDays = parsed.failureInjectionMaxAgeDays;
       if (typeof parsed.failureInjectionMaxEntries === "number") config.failureInjectionMaxEntries = parsed.failureInjectionMaxEntries;
