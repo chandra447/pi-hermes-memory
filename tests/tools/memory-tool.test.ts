@@ -9,7 +9,7 @@ import path from "node:path";
 import { registerMemoryTool } from "../../src/tools/memory-tool.js";
 import { MemoryStore } from "../../src/store/memory-store.js";
 import { DatabaseManager } from "../../src/store/db.js";
-import { getMemories } from "../../src/store/sqlite-memory-store.js";
+import { getMemories, syncMemoryEntry } from "../../src/store/sqlite-memory-store.js";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 describe("registerMemoryTool", () => {
@@ -148,6 +148,87 @@ describe("registerMemoryTool", () => {
     const results = getMemories(dbManager, { target: 'memory', project: null });
     assert.strictEqual(results.length, 1);
     assert.strictEqual(results[0].content, 'Entry one');
+  });
+
+  it("removes FIFO-evicted entries from the SQLite mirror", async () => {
+    let capturedResult: any;
+    const mockPi = {
+      registerTool: (def: any) => {
+        capturedResult = def;
+      },
+    } as unknown as ExtensionAPI;
+
+    syncMemoryEntry(dbManager, {
+      content: "Older entry",
+      target: "memory",
+      project: null,
+    });
+    syncMemoryEntry(dbManager, {
+      content: "Older entry with extra detail",
+      target: "memory",
+      project: null,
+    });
+
+    const mockStore = {
+      add: () => ({
+        success: true,
+        target: "memory",
+        entries: ["New entry"],
+        usage: "90% — 4500/5000 chars",
+        entry_count: 1,
+        message: "Memory updated. Rotated 1 older entry to stay within the limit.",
+        evicted_entries: ["Older entry"],
+        evicted_count: 1,
+      }),
+    } as unknown as MemoryStore;
+
+    registerMemoryTool(mockPi, mockStore, null, dbManager);
+    const result = await capturedResult.execute("tc-1", { action: "add", target: "memory", content: "New entry" }, undefined as any, undefined as any, undefined as any);
+
+    assert.match(result.content[0].text, /Rotated active memory entries:/);
+    const rows = getMemories(dbManager, { target: "memory", project: null });
+    assert.deepStrictEqual(rows.map((row) => row.content).sort(), ["New entry", "Older entry with extra detail"].sort());
+  });
+
+  it("uses project scope when removing FIFO-evicted SQLite entries", async () => {
+    let capturedResult: any;
+    const mockPi = {
+      registerTool: (def: any) => {
+        capturedResult = def;
+      },
+    } as unknown as ExtensionAPI;
+
+    syncMemoryEntry(dbManager, {
+      content: "Shared wording",
+      target: "memory",
+      project: null,
+    });
+    syncMemoryEntry(dbManager, {
+      content: "Shared wording",
+      target: "memory",
+      project: "project-a",
+    });
+
+    const mockProjectStore = {
+      add: () => ({
+        success: true,
+        target: "memory",
+        entries: ["Project replacement"],
+        usage: "90% — 4500/5000 chars",
+        entry_count: 1,
+        message: "Memory updated. Rotated 1 older entry to stay within the limit.",
+        evicted_entries: ["Shared wording"],
+        evicted_count: 1,
+      }),
+    } as unknown as MemoryStore;
+
+    registerMemoryTool(mockPi, {} as MemoryStore, mockProjectStore, dbManager, "project-a");
+    await capturedResult.execute("tc-1", { action: "add", target: "project", content: "Project replacement" }, undefined as any, undefined as any, undefined as any);
+
+    const globalRows = getMemories(dbManager, { target: "memory", project: null });
+    const projectRows = getMemories(dbManager, { target: "memory", project: "project-a" });
+    assert.deepStrictEqual(globalRows.map((row) => row.content), ["Shared wording"]);
+    assert.deepStrictEqual(projectRows.map((row) => row.content), ["Project replacement"]);
   });
 
   it("maps project target to SQLite project scope", async () => {

@@ -67,6 +67,11 @@ export interface SqliteMemoryRemoveResult {
   removed: number;
 }
 
+export interface SqliteMemoryRemoveOptions {
+  target: 'memory' | 'user' | 'failure';
+  project?: string | null;
+}
+
 export interface ParsedMarkdownMemoryEntry extends SqliteMemorySyncInput {}
 
 function today(): string {
@@ -481,16 +486,49 @@ export function replaceSyncedMemories(
 export function removeSyncedMemories(
   dbManager: DatabaseManager,
   oldText: string,
-  options: {
-    target: 'memory' | 'user' | 'failure';
-    project?: string | null;
-  },
+  options: SqliteMemoryRemoveOptions,
 ): SqliteMemoryRemoveResult {
   const db = dbManager.getDb();
   const params: unknown[] = [];
   const conditions = buildScopeConditions(params, options.target, options.project ?? undefined);
   conditions.push(`content LIKE ? ESCAPE '\\'`);
   params.push(`%${escapeLikePattern(oldText)}%`);
+
+  const matchingIds = db.prepare(`
+    SELECT id
+    FROM memories
+    WHERE ${conditions.join(' AND ')}
+  `).all(...params) as Array<{ id: number }>;
+
+  if (matchingIds.length === 0) {
+    return { matched: 0, removed: 0 };
+  }
+
+  const deleteParams = matchingIds.map((row) => row.id);
+  const placeholders = deleteParams.map(() => '?').join(', ');
+  const result = db.prepare(`DELETE FROM memories WHERE id IN (${placeholders})`).run(...deleteParams);
+
+  return {
+    matched: matchingIds.length,
+    removed: result.changes,
+  };
+}
+
+/**
+ * Exact removal for Markdown entries whose full content is known.
+ * Used for FIFO eviction cleanup, where substring matching could remove
+ * unrelated SQLite mirror rows that merely contain the evicted text.
+ */
+export function removeExactSyncedMemories(
+  dbManager: DatabaseManager,
+  content: string,
+  options: SqliteMemoryRemoveOptions,
+): SqliteMemoryRemoveResult {
+  const db = dbManager.getDb();
+  const params: unknown[] = [];
+  const conditions = buildScopeConditions(params, options.target, options.project ?? undefined);
+  conditions.push('content = ?');
+  params.push(content.trim());
 
   const matchingIds = db.prepare(`
     SELECT id

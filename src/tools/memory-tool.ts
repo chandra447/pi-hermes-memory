@@ -11,6 +11,7 @@ import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import {
   formatFailureMemoryContent,
+  removeExactSyncedMemories,
   removeSyncedMemories,
   replaceSyncedMemories,
   syncMemoryEntry,
@@ -159,6 +160,31 @@ async function syncRemoveFromSqlite(
   }
 }
 
+async function syncEvictionsFromSqlite(
+  rawTarget: "memory" | "user" | "project" | "failure",
+  evictedEntries: string[] | undefined,
+  dbManager: DatabaseManager | null,
+  projectName?: string | null,
+): Promise<void> {
+  if (!dbManager) return;
+  if (!evictedEntries || evictedEntries.length === 0) return;
+
+  const sqliteTarget = sqliteTargetFor(rawTarget);
+  const sqliteProject = sqliteProjectFor(rawTarget, projectName);
+
+  for (const entry of evictedEntries) {
+    try {
+      removeExactSyncedMemories(dbManager, entry, {
+        target: sqliteTarget,
+        project: sqliteProject,
+      });
+    } catch {
+      // FIFO already updated the Markdown source of truth. SQLite is only a
+      // best-effort search mirror, so eviction cleanup must not fail the write.
+    }
+  }
+}
+
 export function registerMemoryTool(
   pi: ExtensionAPI,
   store: MemoryStore,
@@ -247,6 +273,7 @@ export function registerMemoryTool(
           } else {
             result = await store_.add(target, content);
             if (result.success) {
+              await syncEvictionsFromSqlite(rawTarget, result.evicted_entries, dbManager, projectName);
               syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, projectName);
             }
           }
