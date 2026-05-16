@@ -179,25 +179,13 @@ export default function (pi: ExtensionAPI) {
   registerIndexSessionsCommand(pi);
 
   // ── 12. Auto-index session on shutdown ──
-  pi.on("session_shutdown", async (_event, _ctx) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
     try {
-      const fs = require("node:fs");
-      const sessionsDir = path.join(os.homedir(), ".pi", "agent", "sessions");
-      const cwd = process.cwd();
-      const encodedCwd = cwd.replace(/\//g, "-");
-      const sessionDir = path.join(sessionsDir, encodedCwd);
-
-      if (fs.existsSync(sessionDir)) {
-        // Find the most recent JSONL file (the one we just finished)
-        const files = fs.readdirSync(sessionDir)
-          .filter((f: string) => f.endsWith(".jsonl"))
-          .sort()
-          .reverse();
-        if (files.length > 0) {
-          const sessionData = parseSessionFile(path.join(sessionDir, files[0]));
-          if (sessionData) {
-            indexSession(dbManager, sessionData);
-          }
+      const sessionFile = ctx.sessionManager.getSessionFile();
+      if (sessionFile && require("node:fs").existsSync(sessionFile)) {
+        const sessionData = parseSessionFile(sessionFile);
+        if (sessionData) {
+          indexSession(dbManager, sessionData);
         }
       }
     } catch {
