@@ -6,6 +6,13 @@ import type { TextContent } from "@earendil-works/pi-ai";
 
 export type MemoryOverflowStrategy = "auto-consolidate" | "reject" | "fifo-evict";
 
+export type SessionSearchVariant = "legacy" | "anchors";
+
+export interface SessionSearchConfig {
+  /** Session search implementation variant. Default: legacy */
+  variant: SessionSearchVariant;
+}
+
 export interface MemoryConfig {
   /** Prompt memory mode. Default: policy-only */
   memoryMode: "policy-only" | "legacy-inject";
@@ -37,6 +44,8 @@ export interface MemoryConfig {
   memoryDir?: string;
   /** Directory for project-scoped memory (relative to ~/.pi/agent). Default: "projects-memory" */
   projectsMemoryDir?: string;
+  /** Session search configuration. Default: { variant: "legacy" } */
+  sessionSearch?: SessionSearchConfig;
   /** Strategy when memory is full. Default: auto-consolidate */
   memoryOverflowStrategy?: MemoryOverflowStrategy;
   /** Legacy alias for memoryOverflowStrategy. Default: true */
@@ -61,10 +70,6 @@ export interface MemoryConfig {
   nudgeToolCalls: number;
   /** Maximum time in milliseconds for auto-consolidation to complete. Default: 60000 */
   consolidationTimeoutMs: number;
-  /** Enable session history search via SQLite FTS5. Default: true */
-  sessionSearchEnabled?: boolean;
-  /** Days to retain session history. Default: 90 */
-  sessionRetentionDays?: number;
 }
 
 export type MemoryCategory =
