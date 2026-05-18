@@ -247,7 +247,7 @@ This lets Pi discover project skills as native skills without copying them into 
 
 ### Session History Search
 
-The extension indexes your Pi session history into a SQLite database with FTS5 full-text search. The agent can search across all past conversations using the `session_search` tool:
+By default, the extension indexes your Pi session history into a SQLite database with FTS5 full-text search. The agent can search across all past conversations using the `session_search` tool:
 
 | Tool | What it does |
 |---|---|---|
@@ -259,6 +259,8 @@ Session history is indexed automatically on session shutdown. To bulk-import exi
 ```
 /memory-index-sessions
 ```
+
+For users who prefer source anchors over snippets, `sessionSearch.variant` can be set to `anchors`. In that opt-in mode, the same `session_search` tool reads session JSONL files directly and accepts a Markdown request with fields such as `from`, `to`, `cwd`, and `limit`, plus `all`, `any`, and `exclude` lists. It returns plain text with `count`, an optional `message`, and compact `path:startLine-endLine` style anchors with short reasons instead of summaries or previews.
 
 ### Extended Memory Store
 
@@ -392,6 +394,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "projectCharLimit": 5000,
   "memoryDir": "~/.pi/agent/memory",
   "projectsMemoryDir": "projects-memory",
+  "sessionSearch": { "variant": "legacy" },
   "nudgeInterval": 10,
   "nudgeToolCalls": 15,
   "reviewRecentMessages": 0,
@@ -420,6 +423,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `projectCharLimit` | `5000` | Max characters in project-scoped MEMORY.md |
 | `memoryDir` | `~/.pi/agent/memory` | Custom directory for memory files |
 | `projectsMemoryDir` | `projects-memory` | Subdirectory under `~/.pi/agent/` for project-scoped memory |
+| `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.pi/agent/sessions/` |
 | `nudgeInterval` | `10` | Turns between auto-reviews |
 | `nudgeToolCalls` | `15` | Tool calls between auto-reviews (OR with turns) |
 | `reviewRecentMessages` | `0` | Recent messages included in background review (`0` = all) |

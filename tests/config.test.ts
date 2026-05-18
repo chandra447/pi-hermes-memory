@@ -32,6 +32,7 @@ describe("loadConfig", () => {
     assert.strictEqual(config.failureInjectionMaxAgeDays, 7);
     assert.strictEqual(config.failureInjectionMaxEntries, 5);
     assert.strictEqual(config.projectsMemoryDir, "projects-memory");
+    assert.deepStrictEqual(config.sessionSearch, { variant: "legacy" });
   });
 
   it("overrides defaults when config file exists", () => {
@@ -203,6 +204,25 @@ describe("loadConfig", () => {
       assert.strictEqual(config.memoryOverflowStrategy, policy);
       assert.strictEqual(config.autoConsolidate, policy === "auto-consolidate");
     }
+  });
+
+  it("accepts valid sessionSearch variants", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+
+    for (const variant of ["legacy", "anchors"] as const) {
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ sessionSearch: { variant } }));
+      const config = loadConfig(TEST_CONFIG_PATH);
+      assert.deepStrictEqual(config.sessionSearch, { variant });
+    }
+  });
+
+  it("ignores invalid sessionSearch variants", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      sessionSearch: { variant: "invalid" },
+    }));
+    const config = loadConfig(TEST_CONFIG_PATH);
+    assert.deepStrictEqual(config.sessionSearch, { variant: "legacy" });
   });
 
   it("ignores invalid memoryOverflowStrategy values", () => {
