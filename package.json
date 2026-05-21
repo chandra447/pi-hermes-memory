@@ -8,7 +8,8 @@
     "src",
     "README.md",
     "LICENSE",
-    "docs"
+    "docs",
+    "skills"
   ],
   "pi": {
     "extensions": [
@@ -58,5 +59,12 @@
   "dependencies": {
     "@earendil-works/pi-tui": "^0.74.0",
     "better-sqlite3": "^12.9.0"
-  }
+  },
+  "pi.skills": [
+    "skills/adr-recorder/SKILL.md",
+    "skills/prd-writer/SKILL.md",
+    "skills/project-architect/SKILL.md",
+    "skills/release-prepper/SKILL.md",
+    "skills/roadmap-planner/SKILL.md"
+  ]
 }
