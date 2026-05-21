@@ -24,15 +24,24 @@ Use cases:
 - Find user preferences: "What are the user's testing preferences?"
 - Search for past failures: "memory_search('auth', category='failure')"
 
+Query syntax (FTS5):
+- Single word: auth
+- Exact phrase: "database migration" (quotes required for phrase matching)
+- Proximity: NEAR("deploy" "config", 10) (both terms within 10 words)
+- Boolean: auth AND token, deploy OR release, auth NOT oauth
+- Default (no operators): single terms only — use AND/NEAR for multi-word queries
+
 Returns matching memory entries with project context and dates.`,
     promptSnippet: 'Search extended memory store (unlimited capacity)',
     promptGuidelines: [
-      'Use memory_search when you need context beyond what is in the system prompt.',
+      'Use memory_search at the START of every session and when starting a new task to load relevant context.',
       'Use memory_search to find project-specific memories or user preferences.',
       'Use memory_search with category filter to find specific types of memories (failure, correction, insight, etc.).',
+      'IMPORTANT: memory_search uses FTS5 — multi-word queries MUST use AND: auth AND token, not "auth token" (which is an exact phrase match and will return no results).',
+      'For proximity matching use NEAR: NEAR("deploy" "config", 10). For exact phrases wrap in quotes: "database migration".',
     ],
     parameters: Type.Object({
-      query: Type.String({ description: 'Search query. Use natural language or specific terms.' }),
+      query: Type.String({ description: 'FTS5 search query. Single word: auth. Exact phrase: "database migration". Proximity: NEAR("deploy" "config", 10). Boolean: auth AND token. For multi-word natural language, use AND explicitly: auth AND token.' }),
       project: Type.Optional(Type.String({ description: 'Filter by project name. Pass null for global memories only.' })),
       target: Type.Optional(StringEnum(['memory', 'user', 'failure'] as const, { description: 'Filter by target type (memory, user, or failure).' })),
       category: Type.Optional(StringEnum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk'] as const, { description: 'Filter by memory category.' })),
