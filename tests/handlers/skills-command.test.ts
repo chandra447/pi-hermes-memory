@@ -23,6 +23,8 @@ const SAMPLE_SKILLS: SkillIndex[] = [
     name: "debug-typescript-errors",
     displayName: "Debug TypeScript Errors",
     description: "Trace compiler issues step by step",
+    created: "2026-05-19",
+    updated: "2026-05-21",
   },
   {
     skillId: "project:demo-project:deploy-checklist",
@@ -33,6 +35,34 @@ const SAMPLE_SKILLS: SkillIndex[] = [
     name: "deploy-checklist",
     displayName: "Deploy Checklist",
     description: "Project release checklist",
+    created: "2026-05-18",
+    updated: "2026-05-20",
+  },
+];
+
+const SORT_MODE_SKILLS: SkillIndex[] = [
+  {
+    skillId: "global:zebra-runbook",
+    scope: "global",
+    fileName: "SKILL.md",
+    path: "/tmp/global/zebra-runbook/SKILL.md",
+    name: "zebra-runbook",
+    displayName: "Zebra Runbook",
+    description: "Older creation date, newer update date",
+    created: "2026-05-18",
+    updated: "2026-05-21",
+  },
+  {
+    skillId: "project:demo-project:alpha-checklist",
+    scope: "project",
+    fileName: "SKILL.md",
+    path: "/tmp/project/alpha-checklist/SKILL.md",
+    projectName: "demo-project",
+    name: "alpha-checklist",
+    displayName: "Alpha Checklist",
+    description: "Newer creation date, older update date",
+    created: "2026-05-22",
+    updated: "2026-05-20",
   },
 ];
 
@@ -109,6 +139,29 @@ describe("skills command helpers", () => {
     assert.ok(external);
     assert.strictEqual(external?.mutable, false);
     assert.ok(external?.displayPath.includes(".agents"));
+  });
+
+  it("buildUnifiedSkillRows keeps managed skills sorted by updated recency", () => {
+    const loaded = collectLoadedSkillsFromCommands(LOADED_SKILL_COMMANDS as any);
+    const rows = buildUnifiedSkillRows(SAMPLE_SKILLS, loaded);
+
+    assert.strictEqual(rows[0]?.skillId, "global:debug-typescript-errors");
+    assert.strictEqual(rows[1]?.skillId, "project:demo-project:deploy-checklist");
+    assert.strictEqual(rows[2]?.category, "E");
+  });
+
+  it("buildUnifiedSkillRows can sort by created date or name", () => {
+    const loaded = collectLoadedSkillsFromCommands(LOADED_SKILL_COMMANDS as any);
+
+    const createdRows = buildUnifiedSkillRows(SORT_MODE_SKILLS, loaded, new Set<string>(), "created");
+    assert.strictEqual(createdRows[0]?.skillId, "project:demo-project:alpha-checklist");
+    assert.strictEqual(createdRows[1]?.skillId, "global:zebra-runbook");
+
+    const nameRows = buildUnifiedSkillRows(SORT_MODE_SKILLS, loaded, new Set<string>(), "name");
+    assert.strictEqual(nameRows[0]?.skillId, "project:demo-project:alpha-checklist");
+    assert.strictEqual(nameRows[1]?.displayName, "debug-typescript-errors");
+    assert.strictEqual(nameRows[2]?.displayName, "langgraph-fundamentals");
+    assert.strictEqual(nameRows[3]?.skillId, "global:zebra-runbook");
   });
 
   it("moveSelectedSkills blocks project moves without an active project", async () => {
@@ -464,6 +517,39 @@ describe("SkillsManagerModal", () => {
     const output = modal.render(120).join("\n");
     assert.ok(output.includes("langgraph-fundamentals"));
     assert.ok(!output.includes("Deploy Checklist"));
+  });
+
+  it("cycles sort mode with s and shows the active mode in the modal", () => {
+    const harness = createModalHarness();
+    const loaded = collectLoadedSkillsFromCommands(LOADED_SKILL_COMMANDS as any);
+    const rows = buildUnifiedSkillRows(SORT_MODE_SKILLS, loaded);
+
+    const modal = new SkillsManagerModal(
+      harness.tui as any,
+      harness.theme as any,
+      rows,
+      {
+        moveSelected: async () => ({ skills: SORT_MODE_SKILLS, summaryLines: ["done"] }),
+        deleteSelected: async () => ({ skills: SORT_MODE_SKILLS, summaryLines: ["done"] }),
+        close: () => undefined,
+        projectName: "demo-project",
+      },
+      { managedSkills: SORT_MODE_SKILLS, loadedSkills: loaded },
+    );
+
+    let output = modal.render(120).join("\n");
+    assert.ok(output.includes("sort: Updated"));
+    assert.ok(output.includes("Zebra Runbook"));
+
+    modal.handleInput("s");
+    output = modal.render(120).join("\n");
+    assert.ok(output.includes("sort: Created"));
+    assert.ok(output.includes("Sort mode: Created."));
+
+    modal.handleInput("s");
+    output = modal.render(120).join("\n");
+    assert.ok(output.includes("sort: Name"));
+    assert.ok(output.includes("Alpha Checklist"));
   });
 
   it("blocks external skill mutations as read-only", async () => {

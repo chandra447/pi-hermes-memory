@@ -253,6 +253,8 @@ export class SkillStore {
     }
 
     return skills.sort((a, b) => {
+      if (a.updated !== b.updated) return b.updated.localeCompare(a.updated);
+      if (a.created !== b.created) return b.created.localeCompare(a.created);
       if (a.scope !== b.scope) return a.scope.localeCompare(b.scope);
       return (a.displayName || a.name).localeCompare(b.displayName || b.name);
     });
@@ -790,6 +792,8 @@ export class SkillStore {
       name: doc.name,
       displayName: doc.displayName,
       description: doc.description,
+      created: doc.created,
+      updated: doc.updated,
     };
   }
 

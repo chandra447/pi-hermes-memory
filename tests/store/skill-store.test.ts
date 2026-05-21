@@ -264,6 +264,41 @@ describe("SkillStore", { concurrency: 1 }, () => {
       const index = await store.loadIndex();
       assert.deepStrictEqual(index, []);
     });
+
+    it("sorts skills by updated date descending, then created date descending", async () => {
+      const store = await makeStore();
+      const olderDir = path.join(GLOBAL_SKILLS_DIR, "older-skill");
+      const newerDir = path.join(GLOBAL_SKILLS_DIR, "newer-skill");
+      await fs.mkdir(olderDir, { recursive: true });
+      await fs.mkdir(newerDir, { recursive: true });
+      await fs.writeFile(path.join(olderDir, "SKILL.md"), [
+        "---",
+        'name: "older-skill"',
+        'description: "Older skill"',
+        "version: 2",
+        'created: "2026-05-18"',
+        'updated: "2026-05-20"',
+        "---",
+        "## Procedure",
+        "1. Old",
+      ].join("\n"), "utf-8");
+      await fs.writeFile(path.join(newerDir, "SKILL.md"), [
+        "---",
+        'name: "newer-skill"',
+        'description: "Newer skill"',
+        "version: 1",
+        'created: "2026-05-19"',
+        'updated: "2026-05-21"',
+        "---",
+        "## Procedure",
+        "1. New",
+      ].join("\n"), "utf-8");
+
+      const index = await store.loadIndex("global");
+      assert.strictEqual(index[0]?.skillId, "global:newer-skill");
+      assert.strictEqual(index[1]?.skillId, "global:older-skill");
+      assert.ok(index[0]!.updated >= index[1]!.updated);
+    });
   });
 
   describe("loadSkill()", () => {

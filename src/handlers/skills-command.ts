@@ -24,6 +24,7 @@ export const MEMORY_SKILLS_KEYMAP = {
   moveGlobal: "g",
   moveProject: "p",
   deleteSelected: "d",
+  cycleSort: "s",
   selectAllFiltered: "a",
   clearSelection: "n",
   focusSearch: "/",
@@ -34,6 +35,7 @@ export const MEMORY_SKILLS_KEYMAP = {
 } as const;
 
 export type SkillRowCategory = "G" | "P" | "E";
+export type SkillSortMode = "updated" | "created" | "name";
 
 export interface SkillModalRow {
   skillId: string;
@@ -45,6 +47,8 @@ export interface SkillModalRow {
   description: string;
   path: string;
   displayPath: string;
+  created?: string;
+  updated?: string;
   projectName?: string;
   selected: boolean;
   searchText: string;
@@ -162,6 +166,70 @@ function categoryOrder(category: SkillRowCategory): number {
   }
 }
 
+function recencyValue(row: Pick<SkillModalRow, "updated" | "created">): string {
+  return row.updated || row.created || "";
+}
+
+function sortModeLabel(sortMode: SkillSortMode): string {
+  switch (sortMode) {
+    case "updated":
+      return "Updated";
+    case "created":
+      return "Created";
+    case "name":
+      return "Name";
+  }
+}
+
+function nextSortMode(sortMode: SkillSortMode): SkillSortMode {
+  switch (sortMode) {
+    case "updated":
+      return "created";
+    case "created":
+      return "name";
+    case "name":
+      return "updated";
+  }
+}
+
+function compareSkillRows(a: SkillModalRow, b: SkillModalRow, sortMode: SkillSortMode): number {
+  if (sortMode === "name") {
+    const byName = a.displayName.localeCompare(b.displayName);
+    if (byName !== 0) return byName;
+    return categoryOrder(a.category) - categoryOrder(b.category);
+  }
+
+  const primaryA = sortMode === "updated" ? recencyValue(a) : (a.created || "");
+  const primaryB = sortMode === "updated" ? recencyValue(b) : (b.created || "");
+  if (primaryA || primaryB) {
+    if (!primaryA) return 1;
+    if (!primaryB) return -1;
+    if (primaryA !== primaryB) return primaryB.localeCompare(primaryA);
+  }
+
+  if (sortMode === "updated") {
+    const createdA = a.created || "";
+    const createdB = b.created || "";
+    if (createdA || createdB) {
+      if (!createdA) return 1;
+      if (!createdB) return -1;
+      if (createdA !== createdB) return createdB.localeCompare(createdA);
+    }
+  } else {
+    const updatedA = recencyValue(a);
+    const updatedB = recencyValue(b);
+    if (updatedA || updatedB) {
+      if (!updatedA) return 1;
+      if (!updatedB) return -1;
+      if (updatedA !== updatedB) return updatedB.localeCompare(updatedA);
+    }
+  }
+
+  const byCategory = categoryOrder(a.category) - categoryOrder(b.category);
+  if (byCategory !== 0) return byCategory;
+  return a.displayName.localeCompare(b.displayName);
+}
+
 export function collectLoadedSkillsFromCommands(commands: SkillCommandInfo[]): LoadedSkillRow[] {
   const loaded: LoadedSkillRow[] = [];
 
@@ -269,6 +337,8 @@ export function buildSkillRows(skills: SkillIndex[], selectedSkillIds = new Set<
       description: skill.description,
       path: skill.path,
       displayPath,
+      created: skill.created,
+      updated: skill.updated,
       projectName: skill.projectName,
       selected: selectedSkillIds.has(skill.skillId),
       searchText: `${displayName} ${skill.name} ${skill.description || ""} ${skill.path} ${displayPath}`.trim(),
@@ -280,6 +350,7 @@ export function buildUnifiedSkillRows(
   managedSkills: SkillIndex[],
   loadedSkills: LoadedSkillRow[],
   selectedSkillIds = new Set<string>(),
+  sortMode: SkillSortMode = "updated",
 ): SkillModalRow[] {
   const managedRows = buildSkillRows(managedSkills, selectedSkillIds);
   const managedPathKeys = new Set(managedRows.map((row) => normalizePathForKey(row.path)));
@@ -308,12 +379,7 @@ export function buildUnifiedSkillRows(
     });
   }
 
-  return [...managedRows, ...externalRows]
-    .sort((a, b) => {
-      const byCategory = categoryOrder(a.category) - categoryOrder(b.category);
-      if (byCategory !== 0) return byCategory;
-      return a.displayName.localeCompare(b.displayName);
-    });
+  return [...managedRows, ...externalRows].sort((a, b) => compareSkillRows(a, b, sortMode));
 }
 
 export function filterSkillRows(rows: SkillModalRow[], query: string): SkillModalRow[] {
@@ -534,8 +600,9 @@ export class SkillsManagerModal implements Focusable {
   private activeFilters: SkillCategoryFilters = { ...DEFAULT_SKILL_FILTERS };
   private pendingFilters: SkillCategoryFilters | null = null;
   private filterCursor = 0;
+  private sortMode: SkillSortMode = "updated";
   private summaryLines: string[] = [
-    "Select skills with space, then move with g/p or delete with d. Press f for filters.",
+    "Select skills with space, then move with g/p or delete with d. Press s to change sort and f for filters.",
   ];
 
   constructor(
@@ -573,9 +640,11 @@ export class SkillsManagerModal implements Focusable {
           name: row.name,
           displayName: row.displayName,
           description: row.description,
+          created: row.created ?? "",
+          updated: row.updated ?? "",
         }));
 
-    this.rows = buildUnifiedSkillRows(this.managedSkills, this.loadedSkills, selectedSkillIds);
+    this.rows = buildUnifiedSkillRows(this.managedSkills, this.loadedSkills, selectedSkillIds, this.sortMode);
     this.syncSearchFocus();
   }
 
@@ -632,7 +701,7 @@ export class SkillsManagerModal implements Focusable {
 
   private setRows(managedSkills: SkillIndex[], retainSelectedSkillIds: string[] = [], focusSkillId?: string): void {
     this.managedSkills = managedSkills;
-    this.rows = buildUnifiedSkillRows(this.managedSkills, this.loadedSkills, new Set(retainSelectedSkillIds));
+    this.rows = buildUnifiedSkillRows(this.managedSkills, this.loadedSkills, new Set(retainSelectedSkillIds), this.sortMode);
     this.syncQueryFromInput();
 
     const rows = this.filteredRows;
@@ -684,6 +753,34 @@ export class SkillsManagerModal implements Focusable {
       row.selected = false;
     }
     this.summaryLines = ["Cleared all selections."];
+    this.tui.requestRender();
+  }
+
+  private cycleSortMode(): void {
+    this.sortMode = nextSortMode(this.sortMode);
+    const selectedIds = this.getSelectedIds();
+    const currentRow = this.getCurrentRow();
+    this.rows = buildUnifiedSkillRows(
+      this.managedSkills,
+      this.loadedSkills,
+      new Set(selectedIds),
+      this.sortMode,
+    );
+    this.syncQueryFromInput();
+
+    const rows = this.filteredRows;
+    if (rows.length === 0) {
+      this.selectedIndex = 0;
+    } else if (currentRow) {
+      const focusIndex = rows.findIndex((row) => row.skillId === currentRow.skillId);
+      this.selectedIndex = focusIndex >= 0
+        ? focusIndex
+        : Math.min(this.selectedIndex, rows.length - 1);
+    } else {
+      this.selectedIndex = Math.min(this.selectedIndex, rows.length - 1);
+    }
+
+    this.summaryLines = [`Sort mode: ${sortModeLabel(this.sortMode)}.`];
     this.tui.requestRender();
   }
 
@@ -943,6 +1040,10 @@ export class SkillsManagerModal implements Focusable {
       this.openFilterPanel();
       return;
     }
+    if (data === MEMORY_SKILLS_KEYMAP.cycleSort) {
+      this.cycleSortMode();
+      return;
+    }
 
     if (matchesKey(data, Key.tab) || matchesKey(data, Key.slash)) {
       this.focusSearchWithOptionalInput();
@@ -998,7 +1099,7 @@ export class SkillsManagerModal implements Focusable {
       this.promptDelete();
       return;
     }
-    if (this.isPrintableInput(data) && !["g", "p", "d", "a", "n", "f"].includes(data)) {
+    if (this.isPrintableInput(data) && !["g", "p", "d", "a", "n", "f", "s"].includes(data)) {
       this.focusSearchWithOptionalInput(data);
     }
   }
@@ -1076,7 +1177,7 @@ export class SkillsManagerModal implements Focusable {
     lines.push(this.renderFramedLine(
       this.theme.fg(
         "dim",
-        `${filteredRows.length} visible · ${this.rows.length} total · ${selectedCount} selected${this.busy ? " · working…" : ""}`,
+        `${filteredRows.length} visible · ${this.rows.length} total · ${selectedCount} selected · sort: ${sortModeLabel(this.sortMode)}${this.busy ? " · working…" : ""}`,
       ),
       safeWidth,
     ));
@@ -1141,8 +1242,8 @@ export class SkillsManagerModal implements Focusable {
     const help = this.pendingDeleteConfirm
       ? "Confirm delete: y yes · n no · esc cancel"
       : this.callbacks.projectName
-        ? "↑↓ move · space select · / search · f filters · tab switch · g global · p project · d delete · a all · n none · esc close"
-        : "↑↓ move · space select · / search · f filters · tab switch · g global · p project (disabled) · d delete · a all · n none · esc close";
+        ? "↑↓ move · space select · / search · s sort · f filters · tab switch · g global · p project · d delete · a all · n none · esc close"
+        : "↑↓ move · space select · / search · s sort · f filters · tab switch · g global · p project (disabled) · d delete · a all · n none · esc close";
     lines.push(this.renderFramedLine(this.theme.fg("dim", help), safeWidth));
 
     if (this.focusArea === "filters") {

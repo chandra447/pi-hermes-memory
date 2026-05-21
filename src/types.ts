@@ -126,6 +126,10 @@ export interface SkillIndex {
   displayName?: string;
   /** Short description shown in skill listings */
   description: string;
+  /** ISO date created */
+  created: string;
+  /** ISO date last updated */
+  updated: string;
 }
 
 export interface SkillDocument extends SkillIndex {
@@ -133,10 +137,6 @@ export interface SkillDocument extends SkillIndex {
   body: string;
   /** Version number */
   version: number;
-  /** ISO date created */
-  created: string;
-  /** ISO date last updated */
-  updated: string;
 }
 
 export interface SkillResult {
