@@ -12,24 +12,38 @@ import { MemoryStore } from "../store/memory-store.js";
 import { CONSOLIDATION_PROMPT, ENTRY_DELIMITER } from "../constants.js";
 import type { ConsolidationResult } from "../types.js";
 
+type MemoryTarget = "memory" | "user" | "failure";
+type ToolMemoryTarget = MemoryTarget | "project";
+
+function entriesForTarget(store: MemoryStore, target: MemoryTarget): string[] {
+  return target === "user" ? store.getUserEntries() : store.getMemoryEntries();
+}
+
+function labelForTarget(target: MemoryTarget, toolTarget: ToolMemoryTarget): string {
+  if (toolTarget === "project") return "Project Memory";
+  if (target === "user") return "User Profile";
+  if (target === "failure") return "Failure Memory";
+  return "Memory";
+}
+
 export async function triggerConsolidation(
   pi: ExtensionAPI,
   store: MemoryStore,
-  target: "memory" | "user" | "failure",
+  target: MemoryTarget,
   signal?: AbortSignal,
   timeoutMs: number = 60000,
+  toolTarget: ToolMemoryTarget = target,
 ): Promise<ConsolidationResult> {
-  const entries =
-    target === "memory" ? store.getMemoryEntries() : store.getUserEntries();
+  const entries = entriesForTarget(store, target);
   const currentContent = entries.join(ENTRY_DELIMITER);
 
   const prompt = [
     CONSOLIDATION_PROMPT,
     "",
-    `--- Current ${target === "user" ? "User Profile" : "Memory"} Entries ---`,
+    `--- Current ${labelForTarget(target, toolTarget)} Entries ---`,
     currentContent || "(empty)",
     "",
-    `Use the memory tool to consolidate. Target: '${target}'`,
+    `Use the memory tool to consolidate. Target: '${toolTarget}'`,
   ].join("\n");
 
   try {
@@ -60,30 +74,47 @@ export function registerConsolidateCommand(
   pi: ExtensionAPI,
   store: MemoryStore,
   timeoutMs: number = 60000,
+  projectStore: MemoryStore | null = null,
+  projectName?: string | null,
 ): void {
   pi.registerCommand("memory-consolidate", {
     description: "Manually trigger memory consolidation to free up space",
     handler: async (_args, ctx) => {
       const results: string[] = [];
+      const targets: Array<{
+        label: string;
+        store: MemoryStore;
+        target: MemoryTarget;
+        toolTarget: ToolMemoryTarget;
+      }> = [
+        { label: "memory", store, target: "memory", toolTarget: "memory" },
+        { label: "user", store, target: "user", toolTarget: "user" },
+      ];
 
-      for (const target of ["memory", "user"] as const) {
-        const entries =
-          target === "memory"
-            ? store.getMemoryEntries()
-            : store.getUserEntries();
+      if (projectStore) {
+        targets.push({
+          label: projectName ? `project:${projectName}` : "project",
+          store: projectStore,
+          target: "memory",
+          toolTarget: "project",
+        });
+      }
+
+      for (const item of targets) {
+        const entries = entriesForTarget(item.store, item.target);
 
         if (entries.length === 0) {
-          results.push(`${target}: (empty, nothing to consolidate)`);
+          results.push(`${item.label}: (empty, nothing to consolidate)`);
           continue;
         }
 
-        const result = await triggerConsolidation(pi, store, target, ctx.signal, timeoutMs);
+        const result = await triggerConsolidation(pi, item.store, item.target, ctx.signal, timeoutMs, item.toolTarget);
 
         if (result.consolidated) {
-          await store.loadFromDisk();
-          results.push(`${target}: ✅ consolidated`);
+          await item.store.loadFromDisk();
+          results.push(`${item.label}: ✅ consolidated`);
         } else {
-          results.push(`${target}: ❌ ${result.error}`);
+          results.push(`${item.label}: ❌ ${result.error}`);
         }
       }
 

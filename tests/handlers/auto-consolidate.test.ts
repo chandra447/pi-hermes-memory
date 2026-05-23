@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { triggerConsolidation } from "../../src/handlers/auto-consolidate.js";
+import { registerConsolidateCommand, triggerConsolidation } from "../../src/handlers/auto-consolidate.js";
 import { ENTRY_DELIMITER } from "../../src/constants.js";
 
 // ─── Mock infrastructure ───
@@ -100,6 +100,16 @@ describe("triggerConsolidation", () => {
     assert.ok(prompt.includes("User Profile"), "prompt should reference user profile");
   });
 
+  it("can consolidate project memory using the project tool target", async () => {
+    const pi = createMockPi();
+    await triggerConsolidation(pi, mockStore, "memory", undefined, 60000, "project");
+
+    const prompt = execCalls[0][1][execCalls[0][1].length - 1];
+    assert.ok(prompt.includes("old entry 1"), "prompt should include project memory entries");
+    assert.ok(prompt.includes("Project Memory"), "prompt should label project memory");
+    assert.ok(prompt.includes("Target: 'project'"), "prompt should tell the child agent to use target='project'");
+  });
+
   it("handles empty entries gracefully", async () => {
     const emptyStore = {
       getMemoryEntries: () => [],
@@ -112,6 +122,50 @@ describe("triggerConsolidation", () => {
 
     const prompt = execCalls[0][1][execCalls[0][1].length - 1];
     assert.ok(prompt.includes("(empty)"), "prompt should show (empty) for empty entries");
+  });
+});
+
+describe("registerConsolidateCommand", () => {
+  beforeEach(() => {
+    execCalls = [];
+  });
+
+  it("includes project memory when a project store is available", async () => {
+    let handler: any;
+    let notification = "";
+    let projectReloaded = false;
+
+    const pi = {
+      on: () => {},
+      exec: async (...args: any[]) => {
+        execCalls.push(args);
+        return { code: 0, stdout: "Done", stderr: "" };
+      },
+      registerTool: () => {},
+      registerCommand: (_name: string, command: any) => {
+        handler = command.handler;
+      },
+    } as any;
+
+    const projectStore = {
+      getMemoryEntries: () => ["project fact"],
+      getUserEntries: () => [],
+      loadFromDisk: async () => { projectReloaded = true; },
+    } as any;
+
+    registerConsolidateCommand(pi, mockStore, 60000, projectStore, "demo-project");
+    await handler({}, {
+      signal: undefined,
+      ui: { notify: (message: string) => { notification = message; } },
+    });
+
+    assert.strictEqual(execCalls.length, 3, "should consolidate memory, user, and project stores");
+    const projectPrompt = execCalls[2][1][execCalls[2][1].length - 1];
+    assert.ok(projectPrompt.includes("Project Memory"), "project prompt should be labeled");
+    assert.ok(projectPrompt.includes("project fact"), "project prompt should include project entries");
+    assert.ok(projectPrompt.includes("Target: 'project'"), "project prompt should use target='project'");
+    assert.ok(projectReloaded, "project store should reload after consolidation");
+    assert.ok(notification.includes("project:demo-project: ✅ consolidated"), "notification should include project result");
   });
 });
 
