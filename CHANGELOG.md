@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.12] - 2026-05-27
+
+### Fixed
+
+- **FTS query normalization for `memory_search` and `session_search`** ([#58](https://github.com/chandra447/pi-hermes-memory/pull/58)): multi-word natural-language queries now behave like term-wise searches instead of accidental exact-phrase matches, while explicit quoted phrases and valid FTS operators still work.
+- **Project memory auto-consolidation** ([#51](https://github.com/chandra447/pi-hermes-memory/pull/51)): project-scoped memory writes now follow the same auto-consolidation retry flow as the global store when limits are hit.
+- **WAL growth controls on SQLite connections** ([#56](https://github.com/chandra447/pi-hermes-memory/pull/56)): SQLite setup now bounds WAL growth with `wal_autocheckpoint`, `journal_size_limit`, and a best-effort checkpoint on close.
+
+### Changed
+
+- Main now includes the merged WAL follow-up from [#56](https://github.com/chandra447/pi-hermes-memory/pull/56) together with its underlying runtime change commit (`761400d`) and the later search-fix merge from [#58](https://github.com/chandra447/pi-hermes-memory/pull/58).
+
 ## [0.7.4] - 2026-05-13
 
 ### Added
