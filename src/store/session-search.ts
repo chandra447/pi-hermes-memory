@@ -2,15 +2,19 @@ import { DatabaseManager } from './db.js';
 
 /**
  * Escape a string for FTS5 query syntax.
- * Wraps the query in double quotes to treat it as a literal phrase.
+ * Quotes individual terms so FTS5 uses implicit AND (all terms must appear, any order).
+ * Preserves explicit FTS5 operators (OR, AND, NOT, NEAR) and quoted phrases.
  */
 function escapeFts5Query(query: string): string {
-  // If the query already contains FTS5 operators (OR, AND, NOT, NEAR), leave it as-is
-  if (/\b(OR|AND|NOT|NEAR)\b/.test(query)) {
+  // If the query already contains FTS5 operators (OR, AND, NOT, NEAR) or explicit
+  // double-quoted phrases, pass through as-is so callers retain full control.
+  if (/\b(OR|AND|NOT|NEAR)\b/.test(query) || query.includes('"')) {
     return query;
   }
-  // Otherwise, wrap in double quotes to treat as literal phrase
-  return `"${query.replace(/"/g, '""')}"`;
+  // Quote individual terms so FTS5 matches all of them with implicit AND.
+  const terms = query.trim().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return '""';
+  return terms.map(t => `"${t.replace(/"/g, '""')}"`).join(' ');
 }
 
 /**
