@@ -278,6 +278,11 @@ By default, the extension indexes your Pi session history into a SQLite database
 | `session_search` | Search past conversations — "what did we discuss about auth?" |
 | `memory_search` | Search extended memory store — unlimited capacity, keyword-based |
 
+Search behavior notes:
+- Multi-word natural-language queries are supported for both `memory_search` and `session_search`.
+- Exact phrases can be requested with quotes, for example `"memory search"`.
+- Advanced FTS queries with operators like `OR` still work when you need them.
+
 Session history is indexed automatically on session shutdown. To bulk-import existing sessions:
 
 ```
