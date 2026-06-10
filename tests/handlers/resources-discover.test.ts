@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveProjectSkillDiscovery, registerProjectSkillDiscoveryHandler } from "../../src/index.js";
+import { AGENT_ROOT } from "../../src/paths.js";
 import { SkillStore } from "../../src/store/skill-store.js";
 
 describe("resources_discover skill path resolution", () => {
@@ -27,7 +28,7 @@ describe("resources_discover skill path resolution", () => {
 
     const result = await handlers.resources_discover({ cwd: "/tmp/demo-repo" }, {});
     const expectedGlobal = "/tmp/global-skills";
-    const expectedPath = path.join(os.homedir(), ".pi", "agent", "projects-memory", "demo-repo", "skills");
+    const expectedPath = path.join(AGENT_ROOT, "projects-memory", "demo-repo", "skills");
 
     assert.deepStrictEqual(result, { skillPaths: [expectedGlobal, expectedPath] });
   });
@@ -43,7 +44,7 @@ describe("resources_discover skill path resolution", () => {
 
     const cwd = "/tmp/demo-repo";
     const resource = resolveProjectSkillDiscovery(store, "projects-memory", cwd);
-    const expectedPath = path.join(os.homedir(), ".pi", "agent", "projects-memory", "demo-repo", "skills");
+    const expectedPath = path.join(AGENT_ROOT, "projects-memory", "demo-repo", "skills");
 
     assert.deepStrictEqual(resource, { skillPaths: ["/tmp/global-skills", expectedPath] });
     assert.strictEqual(store.getProjectName(), "demo-repo");

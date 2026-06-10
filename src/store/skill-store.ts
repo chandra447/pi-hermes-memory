@@ -7,7 +7,6 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import * as os from "node:os";
 import { scanContent } from "./content-scanner.js";
 import {
   buildSkillId,
@@ -21,6 +20,7 @@ import {
   tokenizeForSimilarity,
 } from "./skill-utils.js";
 import type { SkillDocument, SkillIndex, SkillResult, SkillScope } from "../types.js";
+import { AGENT_ROOT } from "../paths.js";
 
 interface SkillStoreOptions {
   globalSkillsDir?: string;
@@ -55,7 +55,7 @@ export class SkillStore {
   private migrationSentinelPath: string;
 
   constructor(options: SkillStoreOptions = {}) {
-    const agentRoot = path.join(os.homedir(), ".pi", "agent");
+    const agentRoot = AGENT_ROOT;
     this.globalSkillsDir = options.globalSkillsDir ?? path.join(agentRoot, "skills");
     this.projectSkillsDir = options.projectSkillsDir ?? null;
     this.projectName = options.projectName ?? null;

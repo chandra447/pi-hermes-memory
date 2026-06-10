@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { loadConfig } from "../src/config.js";
+import { AGENT_ROOT } from "../src/paths.js";
 
 const TEST_CONFIG_PATH = path.join(os.tmpdir(), `hermes-memory-config-test-${process.pid}.json`);
 
@@ -102,21 +103,21 @@ describe("loadConfig", () => {
     assert.strictEqual(config.memoryDir, path.join(os.homedir(), ".pi", "agent", "pi-hermes-memory"));
   });
 
-  it("resolves relative memoryDir values against ~/.pi/agent instead of cwd", () => {
+  it("resolves relative memoryDir values against the agent root instead of cwd", () => {
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
       memoryDir: "custom-memory-root",
     }));
 
     const config = loadConfig(TEST_CONFIG_PATH);
-    assert.strictEqual(config.memoryDir, path.join(os.homedir(), ".pi", "agent", "custom-memory-root"));
+    assert.strictEqual(config.memoryDir, path.join(AGENT_ROOT, "custom-memory-root"));
   });
 
-  it("normalizes projectsMemoryDir inside ~/.pi/agent and ignores unsafe values", () => {
+  it("normalizes projectsMemoryDir inside the agent root and ignores unsafe values", () => {
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
 
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      projectsMemoryDir: " ~/.pi/agent/team-projects/ ",
+      projectsMemoryDir: ` ${path.join(AGENT_ROOT, "team-projects")}/ `,
     }));
     let config = loadConfig(TEST_CONFIG_PATH);
     assert.strictEqual(config.projectsMemoryDir, "team-projects");

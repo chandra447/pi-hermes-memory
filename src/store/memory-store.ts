@@ -13,7 +13,6 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import * as os from "node:os";
 import { scanContent } from "./content-scanner.js";
 import { normalizeMemoryLookupText } from "./memory-lookup.js";
 import {
@@ -26,6 +25,7 @@ import {
   USER_FILE,
 } from "../constants.js";
 import type { MemoryConfig, MemoryResult, MemorySnapshot, ConsolidationResult, MemoryCategory, MemoryOverflowStrategy } from "../types.js";
+import { AGENT_ROOT } from "../paths.js";
 
 export class MemoryStore {
   private memoryEntries: string[] = [];
@@ -47,7 +47,7 @@ export class MemoryStore {
   // ─── Path helpers ───
 
   private get memoryDir(): string {
-    return this.config.memoryDir ?? path.join(os.homedir(), ".pi", "agent", "pi-hermes-memory");
+    return this.config.memoryDir ?? path.join(AGENT_ROOT, "pi-hermes-memory");
   }
 
   private pathFor(target: "memory" | "user" | "failure"): string {
