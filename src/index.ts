@@ -50,7 +50,8 @@ import { detectProject, detectProjectSkills } from "./project.js";
 import { buildPromptContext } from "./prompt-context.js";
 import { migrateLegacyProjectMemoryDirs } from "./project-memory-migration.js";
 import { migrateExtensionRoot } from "./extension-root-migration.js";
-import { AGENT_ROOT } from "./paths.js";
+import { AGENT_ROOT, detectMemoryRoot } from "./paths.js";
+import { fileURLToPath } from "node:url";
 
 export function resolveProjectSkillDiscovery(
   skillStore: SkillStore,
@@ -79,34 +80,23 @@ export function registerProjectSkillDiscoveryHandler(
 export default function (pi: ExtensionAPI) {
   const config = loadConfig();
 
-  const agentRoot = AGENT_ROOT;
-  const legacyGlobalDir = path.join(agentRoot, "memory");
-  const defaultGlobalDir = path.join(agentRoot, "pi-hermes-memory");
-
-  const configuredMemoryDir = config.memoryDir?.trim();
-  const pointsToLegacyMemoryDir = configuredMemoryDir
-    ? path.resolve(configuredMemoryDir) === path.resolve(legacyGlobalDir)
-    : false;
-
-  const globalDir = !configuredMemoryDir || pointsToLegacyMemoryDir
-    ? defaultGlobalDir
-    : configuredMemoryDir;
-
-  const shouldMigrateExtensionRoot = !configuredMemoryDir || pointsToLegacyMemoryDir;
+  const baseDir = detectMemoryRoot(fileURLToPath(import.meta.url));
+  const legacyGlobalDir = path.join(AGENT_ROOT, "memory");
+  const shouldMigrateExtensionRoot = true;
   let extensionRootMigrated = false;
 
-  const store = new MemoryStore({ ...config, memoryDir: globalDir });
+  const store = new MemoryStore({ ...config, memoryDir: baseDir });
   const project = detectProject(config.projectsMemoryDir);
   const projectName = project.name ?? "";
   const skillStore = new SkillStore({
-    globalSkillsDir: path.join(globalDir, "skills"),
+    globalSkillsDir: path.join(baseDir, "skills"),
     projectSkillsDir: project.memoryDir ? path.join(project.memoryDir, "skills") : null,
     projectName: project.name,
     legacySkillsDir: path.join(legacyGlobalDir, "skills"),
-    legacyPiGlobalSkillsDir: path.join(agentRoot, "skills"),
-    migrationSentinelPath: path.join(globalDir, ".skills-migrated-to-extension-storage"),
+    legacyPiGlobalSkillsDir: path.join(AGENT_ROOT, "skills"),
+    migrationSentinelPath: path.join(baseDir, ".skills-migrated-to-extension-storage"),
   });
-  const dbManager = new DatabaseManager(globalDir);
+  const dbManager = new DatabaseManager(baseDir);
 
   const refreshSkillProjectContext = (cwd?: string) => {
     const resource = resolveProjectSkillDiscovery(skillStore, config.projectsMemoryDir, cwd);
@@ -120,9 +110,9 @@ export default function (pi: ExtensionAPI) {
   // Keep project memory available for users upgrading from the old
   // ~/.pi/agent/<project>/ layout. This is non-destructive: legacy folders
   // remain in place while entries are copied/merged into projects-memory/.
-  migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
+  migrateLegacyProjectMemoryDirs(AGENT_ROOT, config.projectsMemoryDir);
   try {
-    syncMarkdownMemoriesToSqlite(dbManager, globalDir, config.projectsMemoryDir, agentRoot);
+    syncMarkdownMemoriesToSqlite(dbManager, baseDir, config.projectsMemoryDir, AGENT_ROOT);
   } catch {
     // Best-effort only: failed SQLite backfill should not block extension startup.
   }
@@ -138,7 +128,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     if (shouldMigrateExtensionRoot && !extensionRootMigrated) {
       try {
-        await migrateExtensionRoot(legacyGlobalDir, globalDir);
+        await migrateExtensionRoot(legacyGlobalDir, baseDir);
       } catch {
         // best effort migration only
       }
@@ -198,7 +188,7 @@ export default function (pi: ExtensionAPI) {
   registerInterviewCommand(pi, store);
   registerSwitchProjectCommand(pi, config);
   registerLearnMemoryCommand(pi);
-  registerSyncMarkdownMemoriesCommand(pi, dbManager, globalDir, config.projectsMemoryDir, agentRoot);
+  registerSyncMarkdownMemoriesCommand(pi, dbManager, baseDir, config.projectsMemoryDir, AGENT_ROOT);
   registerPreviewContextCommand(pi, store, projectStore, projectName, config);
 
   // ── 10. SQLite session search + extended memory ──

@@ -24,8 +24,11 @@ Your Pi agent normally forgets everything when you close a session. **This exten
 ## Quick Start
 
 ```bash
-# Install
+# Global install (all projects share memory)
 pi install npm:pi-hermes-memory
+
+# Project-local install (memory stays in project .pi/hermes-memory/, no ~/.pi pollution)
+pi install -l npm:pi-hermes-memory
 
 # Index your past sessions (one-time)
 /memory-index-sessions
