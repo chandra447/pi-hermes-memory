@@ -189,6 +189,28 @@ describe('DatabaseManager', () => {
         dbManager.close();
       });
     });
+
+    it('should truncate the WAL file on close so it is not retained across sessions', () => {
+      const db = dbManager.getDb();
+      const walPath = path.join(tmpDir, 'sessions.db-wal');
+
+      // Generate enough WAL traffic to materialize a non-trivial WAL file.
+      const insert = db.prepare(`
+        INSERT INTO memories (project, target, content, created, last_referenced)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      for (let i = 0; i < 500; i++) {
+        insert.run(null, 'memory', `entry ${i} ${'x'.repeat(200)}`, '2026-05-03', '2026-05-03');
+      }
+      assert.ok(fs.existsSync(walPath), 'WAL file should exist after writes');
+      assert.ok(fs.statSync(walPath).size > 0, 'WAL should be non-empty before close');
+
+      // close() runs PRAGMA wal_checkpoint(TRUNCATE), which shrinks the WAL to 0.
+      dbManager.close();
+
+      const walSizeAfter = fs.existsSync(walPath) ? fs.statSync(walPath).size : 0;
+      assert.strictEqual(walSizeAfter, 0, 'WAL should be truncated to 0 bytes after close');
+    });
   });
 
   describe('getStats', () => {

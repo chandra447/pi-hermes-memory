@@ -207,6 +207,10 @@ export default function (pi: ExtensionAPI) {
   registerIndexSessionsCommand(pi);
 
   // ── 11. Auto-index session on shutdown ──
+  // Registered last, so this runs after the session-flush shutdown handler and
+  // is the final DB activity. Closing here truncates the WAL via
+  // PRAGMA wal_checkpoint(TRUNCATE); without it the WAL only grows to its
+  // high-water mark and is never reclaimed across sessions.
   pi.on("session_shutdown", async (_event, ctx) => {
     try {
       const sessionFile = ctx.sessionManager.getSessionFile();
@@ -218,6 +222,8 @@ export default function (pi: ExtensionAPI) {
       }
     } catch {
       // Silent fail — don't block shutdown
+    } finally {
+      try { dbManager.close(); } catch { /* best effort — never block shutdown */ }
     }
   });
 }
