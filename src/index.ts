@@ -211,6 +211,12 @@ export default function (pi: ExtensionAPI) {
   // is the final DB activity. Closing here truncates the WAL via
   // PRAGMA wal_checkpoint(TRUNCATE); without it the WAL only grows to its
   // high-water mark and is never reclaimed across sessions.
+  //
+  // Ordering is safe: Pi's ExtensionRunner.emit() runs same-extension handlers
+  // sequentially in registration order and awaits each one, so the flush above
+  // fully completes before close() runs. WARNING: do not register another
+  // DB-writing session_shutdown handler after this block — it would run after
+  // close() and silently no-op.
   pi.on("session_shutdown", async (_event, ctx) => {
     try {
       const sessionFile = ctx.sessionManager.getSessionFile();

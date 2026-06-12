@@ -192,7 +192,7 @@ describe('DatabaseManager', () => {
 
     it('should truncate the WAL file on close so it is not retained across sessions', () => {
       const db = dbManager.getDb();
-      const walPath = path.join(tmpDir, 'sessions.db-wal');
+      const walPath = `${dbManager.getPath()}-wal`;
 
       // Generate enough WAL traffic to materialize a non-trivial WAL file.
       const insert = db.prepare(`
