@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Failure-memory consolidation** ([#68](https://github.com/chandra447/pi-hermes-memory/issues/68)): `failures.md` now participates in both automatic and manual consolidation flows, so full failure memory no longer gets stuck in a persistent overflow state while other core memory targets can recover.
+
+### Changed
+
+- **Skill tool naming** ([#66](https://github.com/chandra447/pi-hermes-memory/issues/66)): the procedural-skill management tool is now exposed as `skill_manage` to make its purpose explicit and reduce accidental use as a generic skill-discovery tool.
+
 ## [0.7.13] - 2026-05-27
 
 ### Fixed

@@ -17,7 +17,9 @@ type MemoryTarget = "memory" | "user" | "failure";
 type ToolMemoryTarget = MemoryTarget | "project";
 
 function entriesForTarget(store: MemoryStore, target: MemoryTarget): string[] {
-  return target === "user" ? store.getUserEntries() : store.getMemoryEntries();
+  if (target === "user") return store.getUserEntries();
+  if (target === "failure") return store.getAllFailureEntries();
+  return store.getMemoryEntries();
 }
 
 function labelForTarget(target: MemoryTarget, toolTarget: ToolMemoryTarget): string {
@@ -108,6 +110,7 @@ export function registerConsolidateCommand(
       }> = [
         { label: "memory", store, target: "memory", toolTarget: "memory" },
         { label: "user", store, target: "user", toolTarget: "user" },
+        { label: "failure", store, target: "failure", toolTarget: "failure" },
       ];
 
       if (projectStore) {

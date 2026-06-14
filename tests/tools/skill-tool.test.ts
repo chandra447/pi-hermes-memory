@@ -4,7 +4,7 @@
 
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
-import { registerSkillTool } from "../../src/tools/skill-tool.js";
+import { registerSkillTool, SKILL_MANAGE_TOOL_NAME } from "../../src/tools/skill-tool.js";
 import { SkillStore } from "../../src/store/skill-store.js";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -39,7 +39,7 @@ async function cleanup(): Promise<void> {
 }
 
 describe("registerSkillTool", () => {
-  it("registers tool with name 'skill'", async () => {
+  it("registers tool with name 'skill_manage'", async () => {
     let captured: any;
     const mockPi = {
       registerTool: (def: any) => { captured = def; },
@@ -49,8 +49,8 @@ describe("registerSkillTool", () => {
     registerSkillTool(mockPi, store);
     await cleanup();
 
-    assert.strictEqual(captured.name, "skill");
-    assert.strictEqual(captured.label, "Skill");
+    assert.strictEqual(captured.name, SKILL_MANAGE_TOOL_NAME);
+    assert.strictEqual(captured.label, "Skill Manager");
     assert.ok(captured.description.length > 0);
     assert.ok(captured.promptSnippet.length > 0);
     assert.ok(Array.isArray(captured.promptGuidelines));

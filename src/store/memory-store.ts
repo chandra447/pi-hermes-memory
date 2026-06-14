@@ -338,6 +338,15 @@ export class MemoryStore {
     return block ? this.fenceBlock(block) : "";
   }
 
+  /**
+   * All failure entries (no age filter), metadata stripped.
+   * Used by consolidation, which must consider the full file size —
+   * unlike getFailureEntries(), which filters by age for injection.
+   */
+  getAllFailureEntries(): string[] {
+    return this.failureEntries.map((e) => this.stripMetadata(e));
+  }
+
   getMemoryEntries(): string[] {
     return this.memoryEntries.map((e) => this.stripMetadata(e));
   }

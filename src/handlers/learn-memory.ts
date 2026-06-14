@@ -63,7 +63,7 @@ export function registerLearnMemoryCommand(pi: ExtensionAPI): void {
         lines.push("    Save, update, or delete memories");
         lines.push("    Targets: memory, user, failure, project");
         lines.push("");
-        lines.push("  skill (create/view/patch/update/delete)");
+        lines.push("  skill_manage (create/view/patch/update/delete)");
         lines.push("    Save reusable procedures");
         lines.push("");
         lines.push("  session_search");

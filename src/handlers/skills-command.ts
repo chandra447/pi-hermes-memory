@@ -283,7 +283,7 @@ export function formatSkillsList(rows: SkillModalRow[], projectName: string | nu
     lines.push("  (no skills found in this session)");
     lines.push("");
     lines.push("  Ask the agent to save a reusable procedure");
-    lines.push("  with the skill tool when it is worth keeping.");
+    lines.push("  with the skill_manage tool when it is worth keeping.");
     return lines.join("\n");
   }
 

@@ -82,7 +82,7 @@ The extension manages three types of knowledge:
 |---|---|---|---|
 | **Memory** (MEMORY.md) | Facts — env details, project conventions, tool quirks | 5,000 chars max | Searchable by default |
 | **User Profile** (USER.md) | Who you are — name, preferences, communication style | 5,000 chars max | Searchable by default |
-| **Skills** (Pi-native `SKILL.md`) | Procedures — *how* to do something, reusable across sessions | Unlimited | Discoverable by Pi + manageable via the skill tool |
+| **Skills** (Pi-native `SKILL.md`) | Procedures — *how* to do something, reusable across sessions | Unlimited | Discoverable by Pi + manageable via the `skill_manage` tool |
 
 ![Memory + Skills Architecture](docs/images/memory-architecture.svg)
 
@@ -172,7 +172,7 @@ Memory blocks are wrapped in `<memory-context>` XML tags with a guard note ("NOT
 
 ## Usage
 
-Once installed, the extension works automatically for durable memory. Skills are available through the `skill` tool during normal work when the agent decides a reusable procedure is worth saving.
+Once installed, the extension works automatically for durable memory. Skills are available through the `skill_manage` tool during normal work when the agent decides a reusable procedure is worth saving.
 
 ### The `memory` Tool
 
@@ -184,9 +184,9 @@ The agent gets a `memory` tool it can call proactively:
 | `replace` | `memory` or `user` | Update an existing entry (matched by substring) |
 | `remove` | `memory` or `user` | Delete an entry (matched by substring) |
 
-### The `skill` Tool
+### The `skill_manage` Tool
 
-The agent also gets a `skill` tool for saving reusable procedures:
+The agent also gets a `skill_manage` tool for saving reusable procedures. The explicit name is intentional: it manages saved procedures and avoids being mistaken for generic skill discovery.
 
 | Action | What it does |
 |---|---|
@@ -206,7 +206,7 @@ New skills must choose scope explicitly:
 - `global` for transferable procedures
 - `project` for repo-specific workflows tied to local paths, scripts, architecture, deploy steps, or conventions
 
-The agent should use the skill tool inline during normal work, not via a background auto-extraction pass. That keeps skill creation deliberate and lets the active model choose whether to create, patch, update, or skip.
+The agent should use the `skill_manage` tool inline during normal work, not via a background auto-extraction pass. That keeps skill creation deliberate and lets the active model choose whether to create, patch, update, or skip.
 
 For `create` and `update`, the preferred shape is structured input instead of hand-written markdown:
 
@@ -321,7 +321,7 @@ When you correct the agent, it saves immediately — no waiting for the backgrou
 
 ### Auto-Consolidation
 
-When memory or user profile hits its character limit, the extension automatically consolidates instead of returning an error:
+When memory, user profile, or failure memory hits its character limit, the extension automatically consolidates instead of returning an error:
 
 1. Spawns a one-shot `pi.exec()` process with a consolidation prompt
 2. The child agent merges related entries, removes outdated ones, keeps the most important facts
@@ -461,7 +461,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `nudgeToolCalls` | `15` | Tool calls between auto-reviews (OR with turns) |
 | `reviewRecentMessages` | `0` | Recent messages included in background review (`0` = all) |
 | `reviewEnabled` | `true` | Enable/disable background learning loop |
-| `memoryOverflowStrategy` | `auto-consolidate` | Behavior when MEMORY.md, USER.md, or project-scoped memory reaches its character limit: `auto-consolidate` runs the existing consolidation flow; `reject` returns an error; `fifo-evict` rotates older entries in file order until the new entry fits |
+| `memoryOverflowStrategy` | `auto-consolidate` | Behavior when MEMORY.md, USER.md, failures.md, or project-scoped memory reaches its character limit: `auto-consolidate` runs the existing consolidation flow; `reject` returns an error; `fifo-evict` rotates older entries in file order until the new entry fits |
 | `autoConsolidate` | `true` | Legacy alias for `memoryOverflowStrategy` when `memoryOverflowStrategy` is not set (`true` = `auto-consolidate`, `false` = `reject`) |
 | `consolidationTimeoutMs` | `60000` | Maximum time in milliseconds for auto-consolidation to complete |
 | `correctionDetection` | `true` | Detect user corrections and save immediately |
@@ -519,7 +519,7 @@ The `sessions.db` SQLite database stores session history and extended memory ent
 - **System prompts are invisible**: Pi's TUI does not display the system prompt. Use `/memory-preview-context` to inspect whether policy-only or legacy memory injection is active.
 - **Project skill visibility depends on Pi discovery cycles**: project skills are exposed through `resources_discover` using the active project's `skills/` path. If a moved or newly created project skill doesn't show up immediately in a running session, trigger a reload/new session so Pi refreshes discovered resources.
 - **Project move requires active project context**: in `/memory-skills`, the `p` hotkey is disabled when Pi is not currently in a detected project directory.
-- **Skills still need curation**: Skills are saved by the agent through the `skill` tool when it decides a reusable procedure is worth keeping. They may still need review. You can move, delete, or edit them directly in `~/.pi/agent/pi-hermes-memory/skills/` or the active project's `skills/` folder.
+- **Skills still need curation**: Skills are saved by the agent through the `skill_manage` tool when it decides a reusable procedure is worth keeping. They may still need review. You can move, delete, or edit them directly in `~/.pi/agent/pi-hermes-memory/skills/` or the active project's `skills/` folder.
 
 ## Architecture
 

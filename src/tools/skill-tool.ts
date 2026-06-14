@@ -1,5 +1,5 @@
 /**
- * Skill tool — registers the LLM-callable `skill` tool for procedural memory.
+ * Skill manager tool — registers the LLM-callable `skill_manage` tool for procedural memory.
  * Complements the `memory` tool (declarative knowledge) with procedural knowledge.
  */
 
@@ -85,14 +85,16 @@ const SKILL_TOOL_PARAMETERS = Type.Object({
   })),
 }, { additionalProperties: false });
 
+export const SKILL_MANAGE_TOOL_NAME = "skill_manage";
+
 export function registerSkillTool(pi: ExtensionAPI, store: SkillStore): void {
   pi.registerTool({
-    name: "skill",
-    label: "Skill",
+    name: SKILL_MANAGE_TOOL_NAME,
+    label: "Skill Manager",
     description: SKILL_TOOL_DESCRIPTION,
-    promptSnippet: "Save or manage reusable procedures and patterns",
+    promptSnippet: "Create, inspect, and update reusable procedures and patterns",
     promptGuidelines: [
-      "Use the skill tool after completing complex tasks that required trial and error or multiple tool calls.",
+      "Use the skill_manage tool after completing complex tasks that required trial and error or multiple tool calls.",
       "Use 'create' to save a new reusable procedure, 'patch' to update a section of an existing skill by skill_id, and 'update' for a full rewrite.",
       "Scope is required on create: choose scope='global' for transferable procedures and scope='project' when the workflow depends on this repo's paths, scripts, conventions, or deploy steps.",
       "Prefer structured fields for create/update: when_to_use, procedure_steps, pitfalls, and verification_steps. The tool will render valid SKILL.md sections for you.",
