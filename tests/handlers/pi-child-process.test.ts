@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+import * as path from "node:path";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { buildChildPiPromptArgs, execChildPrompt, inheritedExtensionArgs, resolveChildPiInvocation } from "../../src/handlers/pi-child-process.js";
@@ -8,6 +10,14 @@ function logicalChildArgs(call: { cmd: string; args: string[] }): string[] {
   assert.deepStrictEqual(call.args, expected.args);
   return call.cmd === "pi" ? call.args : call.args.slice(1);
 }
+
+// Compute the expected OWN_EXTENSION_PATH same logic as pi-child-process.ts
+const OWN_EXTENSION_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../src/index.ts",
+);
+
+const EXT_ARGS = ["--no-extensions", "-e", OWN_EXTENSION_PATH];
 
 describe("inheritedExtensionArgs", () => {
   it("captures explicit -e and --extension parent args", () => {
@@ -26,31 +36,33 @@ describe("inheritedExtensionArgs", () => {
 });
 
 describe("buildChildPiPromptArgs", () => {
-  it("keeps the current child pi behavior when no overrides are configured", () => {
+  it("uses --no-extensions and only passes hermes-memory extension", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", {}, []),
-      ["-p", "--no-session", "hello"],
+      ["-p", "--no-session", ...EXT_ARGS, "hello"],
     );
   });
 
   it("adds a model override and defaults thinking to off", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", { llmModelOverride: "openrouter/deepseek/deepseek-v4-flash" }, []),
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", "hello"],
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
     );
   });
 
   it("allows thinking overrides without a model override", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", { llmThinkingOverride: "low" }, []),
-      ["-p", "--no-session", "--thinking", "low", "hello"],
+      ["-p", "--no-session", "--thinking", "low", ...EXT_ARGS, "hello"],
     );
   });
 
-  it("inherits explicit extension args from the parent pi process", () => {
+  it("ignores inherited extension args and always uses own path", () => {
+    // The function no longer inherits parent -e flags; it always passes
+    // --no-extensions and its own resolved path.
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", {}, ["-e", "src/index.ts"]),
-      ["-p", "--no-session", "-e", "src/index.ts", "hello"],
+      ["-p", "--no-session", ...EXT_ARGS, "hello"],
     );
   });
 });
@@ -116,8 +128,8 @@ describe("execChildPrompt", () => {
 
     assert.strictEqual(result.code, 0);
     assert.deepStrictEqual(calls.map(logicalChildArgs), [
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", "hello"],
-      ["-p", "--no-session", "hello"],
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", ...EXT_ARGS, "hello"],
     ]);
   });
 
@@ -150,8 +162,8 @@ describe("execChildPrompt", () => {
       assert.match(calls[0].args[0].replace(/\\/g, "/"), /\/cli\.js$/);
       assert.match(calls[1].args[0].replace(/\\/g, "/"), /\/cli\.js$/);
       assert.deepStrictEqual(calls.map((call) => call.args.slice(1)), [
-        ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", "hello"],
-        ["-p", "--no-session", "hello"],
+        ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
+        ["-p", "--no-session", ...EXT_ARGS, "hello"],
       ]);
     } finally {
       if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
