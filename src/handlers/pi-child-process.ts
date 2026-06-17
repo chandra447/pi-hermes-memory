@@ -57,7 +57,7 @@ export function hasChildLlmOverrides(config: ChildLlmConfig): boolean {
   return normalizedModelOverride(config) !== undefined || effectiveThinkingOverride(config) !== undefined;
 }
 
-/** @deprecated Child subprocesses now load only this extension instead of inheriting parent extension args. */
+/** @deprecated No longer called after PR #78 — kept for API backward compat. */
 export function inheritedExtensionArgs(argv: string[] = process.argv.slice(2)): string[] {
   const args: string[] = [];
 
@@ -104,6 +104,8 @@ export function buildChildPiPromptArgs(prompt: string, config: ChildLlmConfig, _
 }
 
 function basePromptArgs(prompt: string): string[] {
+  // Always use --no-extensions + own path so the retry also avoids loading
+  // all settings.json packages — matching the primary code path.
   const args = ["-p", "--no-session"];
   appendOwnExtensionArgs(args);
   args.push(prompt);

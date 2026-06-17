@@ -129,6 +129,7 @@ describe("execChildPrompt", () => {
     assert.strictEqual(result.code, 0);
     assert.deepStrictEqual(calls.map(logicalChildArgs), [
       ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
+      // Retry path (basePromptArgs) also passes --no-extensions + own path.
       ["-p", "--no-session", ...EXT_ARGS, "hello"],
     ]);
   });
