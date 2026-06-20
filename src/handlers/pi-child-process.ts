@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { MemoryConfig, ThinkingLevel } from "../types.js";
@@ -33,6 +33,17 @@ interface ResolveChildPiInvocationOptions {
 const OVERRIDE_FAILURE_SUBJECT = /\b(model|provider|thinking)\b/i;
 const OVERRIDE_FAILURE_REASON = /\b(not found|unknown|invalid|unsupported|unavailable|unrecognized|no match|no matches|cannot resolve|failed to resolve)\b/i;
 
+// Resolve the path to pi-hermes-memory's own extension entry point.
+// Used to pass -e <path> to child subprocesses so they only load this
+// extension instead of all plugins from settings.json.
+const OWN_EXTENSION_PATH: string = (() => {
+  try {
+    return resolve(dirname(fileURLToPath(import.meta.url)), "../index.ts");
+  } catch {
+    return "";
+  }
+})();
+
 function normalizedModelOverride(config: ChildLlmConfig): string | undefined {
   const trimmed = config.llmModelOverride?.trim();
   return trimmed ? trimmed : undefined;
@@ -46,6 +57,7 @@ export function hasChildLlmOverrides(config: ChildLlmConfig): boolean {
   return normalizedModelOverride(config) !== undefined || effectiveThinkingOverride(config) !== undefined;
 }
 
+/** @deprecated No longer called after PR #78 — kept for API backward compat. */
 export function inheritedExtensionArgs(argv: string[] = process.argv.slice(2)): string[] {
   const args: string[] = [];
 
@@ -68,22 +80,36 @@ export function inheritedExtensionArgs(argv: string[] = process.argv.slice(2)): 
   return args;
 }
 
-export function buildChildPiPromptArgs(prompt: string, config: ChildLlmConfig, argv: string[] = process.argv.slice(2)): string[] {
+function appendOwnExtensionArgs(args: string[]): void {
+  // Skip all packages from settings.json (--no-extensions) — the subprocess
+  // only needs pi-hermes-memory to access the memory tool. Loading every
+  // plugin (context-mode, pi-lens, pi-web-access, pi-review, …) wastes
+  // prompt tokens and startup CPU for simple one-shot memory tasks.
+  if (OWN_EXTENSION_PATH) {
+    args.push("--no-extensions", "-e", OWN_EXTENSION_PATH);
+  }
+}
+
+export function buildChildPiPromptArgs(prompt: string, config: ChildLlmConfig, _argv?: string[]): string[] {
   const args = ["-p", "--no-session"];
   const model = normalizedModelOverride(config);
   const thinking = effectiveThinkingOverride(config);
-  const inheritedExtensions = inheritedExtensionArgs(argv);
 
   if (model) args.push("--model", model);
   if (thinking) args.push("--thinking", thinking);
-  args.push(...inheritedExtensions);
+  appendOwnExtensionArgs(args);
   args.push(prompt);
 
   return args;
 }
 
 function basePromptArgs(prompt: string): string[] {
-  return ["-p", "--no-session", prompt];
+  // Always use --no-extensions + own path so the retry also avoids loading
+  // all settings.json packages — matching the primary code path.
+  const args = ["-p", "--no-session"];
+  appendOwnExtensionArgs(args);
+  args.push(prompt);
+  return args;
 }
 
 function isCliJsPath(value: string | undefined): value is string {

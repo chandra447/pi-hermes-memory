@@ -180,7 +180,9 @@ describe("triggerConsolidation", () => {
     ]);
     const retryArgs = logicalChildArgs(execCalls[1]);
     assert.deepStrictEqual(retryArgs.slice(0, 2), ["-p", "--no-session"]);
-    assert.strictEqual(retryArgs.length, 3, "fallback retry should drop model/thinking overrides");
+    assert.ok(!retryArgs.includes("--model"), "fallback retry should drop model override");
+    assert.ok(!retryArgs.includes("--thinking"), "fallback retry should drop thinking override");
+    assert.strictEqual(typeof retryArgs[retryArgs.length - 1], "string", "fallback retry should keep prompt as final arg");
   });
 
   it("does not retry generic consolidation failures that are unrelated to override resolution", async () => {
