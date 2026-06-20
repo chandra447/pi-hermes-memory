@@ -145,6 +145,82 @@ describe('session-search', () => {
       assert.ok(results.some((r) => r.content.includes('gpu timeout issue')));
     });
 
+    it('should fall back to broader natural-language FTS matching when strict term matching misses', () => {
+      indexSession(dbManager, createTestSession({ id: 'fallback-session', messages: [
+        { id: 'fallback-session-msg-1', role: 'assistant', content: "The user's name is Naruto", timestamp: '2026-05-03T00:01:00Z' },
+      ] }));
+
+      const results = searchSessions(dbManager, 'name identity Naruto');
+
+      assert.ok(results.length > 0);
+      assert.ok(results.some((r) => r.content.includes('Naruto')));
+    });
+
+    it('should find mixed Chinese/English queries via fallback', () => {
+      indexSession(dbManager, createTestSession({ id: 'mixed-cjk-session', messages: [
+        { id: 'mixed-cjk-session-msg-1', role: 'assistant', content: 'codex 已经开始执行探索任务了', timestamp: '2026-05-03T00:01:00Z' },
+      ] }));
+
+      const results = searchSessions(dbManager, 'codex 执行 任务');
+
+      assert.ok(results.length > 0);
+      assert.ok(results.some((r) => r.content.includes('codex 已经开始执行探索任务了')));
+    });
+
+    it('should find Chinese-only substrings via LIKE fallback', () => {
+      indexSession(dbManager, createTestSession({ id: 'cjk-only-session', messages: [
+        { id: 'cjk-only-session-msg-1', role: 'assistant', content: '已经开始执行探索任务了', timestamp: '2026-05-03T00:01:00Z' },
+      ] }));
+
+      const results = searchSessions(dbManager, '执行');
+
+      assert.ok(results.length > 0);
+      assert.ok(results.some((r) => r.content.includes('已经开始执行探索任务了')));
+    });
+
+    it('should preserve filters, ordering, and limit during LIKE fallback', () => {
+      indexSession(dbManager, createTestSession({ id: 'cjk-filter-a', project: 'project-a', messages: [
+        { id: 'cjk-filter-a-msg-1', role: 'user', content: '早期已经开始执行探索任务了', timestamp: '2026-05-03T00:01:00Z' },
+        { id: 'cjk-filter-a-msg-2', role: 'user', content: '后续继续执行更多任务', timestamp: '2026-05-03T00:03:00Z' },
+      ] }));
+      indexSession(dbManager, createTestSession({ id: 'cjk-filter-b', project: 'project-b', messages: [
+        { id: 'cjk-filter-b-msg-1', role: 'assistant', content: '另一个项目也执行任务', timestamp: '2026-05-03T00:04:00Z' },
+      ] }));
+
+      const results = searchSessions(dbManager, '执行', {
+        project: 'project-a',
+        role: 'user',
+        since: '2026-05-03T00:02:00Z',
+        limit: 1,
+      });
+
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].project, 'project-a');
+      assert.strictEqual(results[0].role, 'user');
+      assert.strictEqual(results[0].timestamp, '2026-05-03T00:03:00Z');
+      assert.ok(results[0].content.includes('后续继续执行更多任务'));
+    });
+
+    it('should escape LIKE wildcard characters during fallback', () => {
+      indexSession(dbManager, createTestSession({ id: 'like-escape-session', messages: [
+        { id: 'like-escape-session-msg-1', role: 'user', content: 'Progress reached 100% today', timestamp: '2026-05-03T00:01:00Z' },
+        { id: 'like-escape-session-msg-2', role: 'user', content: 'A plain message without the wildcard character', timestamp: '2026-05-03T00:02:00Z' },
+      ] }));
+
+      const results = searchSessions(dbManager, '%');
+
+      assert.ok(results.length > 0);
+      assert.ok(results.every((r) => r.content.includes('%')));
+    });
+
+    it('should not broaden explicit operator queries', () => {
+      indexSession(dbManager, createTestSession());
+
+      const results = searchSessions(dbManager, 'Prisma AND nonexistent');
+
+      assert.strictEqual(results.length, 0);
+    });
+
     it('should handle malformed FTS5 queries gracefully', () => {
       indexSession(dbManager, createTestSession());
 

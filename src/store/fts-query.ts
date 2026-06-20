@@ -2,6 +2,10 @@ const FTS5_OPERATOR_PATTERN = /\b(OR|AND|NOT|NEAR)\b/;
 const FTS5_TOKEN_PATTERN = /"([^"]*)"|(\S+)/g;
 const NATURAL_LANGUAGE_CONNECTORS = new Set(['and', 'or', 'not', 'near']);
 
+export function hasExplicitFts5Operator(query: string): boolean {
+  return FTS5_OPERATOR_PATTERN.test(query.trim());
+}
+
 function collectNaturalLanguageTerms(query: string): string[] {
   const terms: string[] = [];
 
@@ -29,7 +33,7 @@ export function normalizeFts5Query(query: string): string {
   const trimmed = query.trim();
   if (trimmed.length === 0) return '';
 
-  if (FTS5_OPERATOR_PATTERN.test(trimmed)) {
+  if (hasExplicitFts5Operator(trimmed)) {
     return trimmed;
   }
 
@@ -45,7 +49,7 @@ export function normalizeFts5Query(query: string): string {
  */
 export function buildFallbackFts5Query(query: string): string | null {
   const trimmed = query.trim();
-  if (trimmed.length === 0 || FTS5_OPERATOR_PATTERN.test(trimmed)) {
+  if (trimmed.length === 0 || hasExplicitFts5Operator(trimmed)) {
     return null;
   }
 
