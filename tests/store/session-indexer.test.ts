@@ -4,7 +4,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { DatabaseManager } from '../../src/store/db.js';
-import { indexSession, indexAllSessions, getSessionStats } from '../../src/store/session-indexer.js';
+import {
+  indexSession,
+  indexAllSessions,
+  getSessionStats,
+  countSessionFiles,
+  needsBackfill,
+  touchBackfillTimestamp,
+  LAST_SESSION_BACKFILL_KEY,
+  indexCurrentSession,
+  indexLiveSession,
+  parseSessionManagerSnapshot,
+} from '../../src/store/session-indexer.js';
 import type { ParsedSession } from '../../src/store/session-parser.js';
 
 describe('session-indexer', () => {
@@ -68,7 +79,7 @@ describe('session-indexer', () => {
       assert.deepStrictEqual(JSON.parse(msg.tool_calls), ['read']);
     });
 
-    it('should skip already-indexed sessions', () => {
+    it('should skip already-indexed sessions with no new messages', () => {
       const session = createTestSession();
 
       const result1 = indexSession(dbManager, session);
@@ -77,6 +88,27 @@ describe('session-indexer', () => {
       const result2 = indexSession(dbManager, session);
       assert.strictEqual(result2.skipped, true);
       assert.strictEqual(result2.messagesIndexed, 0);
+    });
+
+    it('should append missing messages for an already-indexed resumed session', () => {
+      const session = createTestSession();
+      indexSession(dbManager, session);
+
+      const resumed = createTestSession({
+        messages: [
+          ...session.messages,
+          { id: 'session-1-msg-3', role: 'user', content: 'Resumed later', timestamp: '2026-05-03T00:02:00Z' },
+        ],
+      });
+      const result = indexSession(dbManager, resumed);
+
+      assert.strictEqual(result.skipped, false);
+      assert.strictEqual(result.messagesIndexed, 1);
+      assert.strictEqual(dbManager.getStats().sessions, 1);
+      assert.strictEqual(dbManager.getStats().messages, 3);
+
+      const dbSession = dbManager.getDb().prepare('SELECT message_count FROM sessions WHERE id = ?').get('session-1') as { message_count: number };
+      assert.strictEqual(dbSession.message_count, 3);
     });
 
     it('should handle sessions with no messages', () => {
@@ -167,6 +199,176 @@ describe('session-indexer', () => {
     it('should handle non-existent sessions directory', () => {
       const result = indexAllSessions(dbManager, '/nonexistent/path');
       assert.strictEqual(result.sessionsProcessed, 0);
+    });
+  });
+
+  describe('current session indexing helpers', () => {
+    function writeSessionFile(filePath: string): void {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      const lines = [
+        JSON.stringify({ type: 'session', id: 'file-session-1', timestamp: '2026-05-03T00:00:00Z', cwd: '/work/file-project' }),
+        JSON.stringify({
+          type: 'message',
+          id: 'file-entry-1',
+          parentId: null,
+          timestamp: '2026-05-03T00:01:00Z',
+          message: { role: 'user', content: [{ type: 'text', text: 'from persisted file' }], timestamp: Date.now() },
+        }),
+      ];
+      fs.writeFileSync(filePath, lines.join('\n'));
+    }
+
+    function createSessionManagerSnapshot(entries: unknown[] = []) {
+      return {
+        getHeader: () => ({ id: 'live-session-1', timestamp: '2026-05-03T00:00:00Z', cwd: '/work/live-project' }),
+        getEntries: () => entries,
+      };
+    }
+
+    it('parseSessionManagerSnapshot converts current session entries into ParsedSession', () => {
+      const snapshot = createSessionManagerSnapshot([
+        {
+          type: 'message',
+          id: 'entry-1',
+          timestamp: '2026-05-03T00:01:00Z',
+          message: { role: 'user', content: 'Hello live session' },
+        },
+        {
+          type: 'message',
+          id: 'entry-2',
+          timestamp: '2026-05-03T00:02:00Z',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'Hi' }, { type: 'toolCall', name: 'read' }] },
+        },
+        {
+          type: 'message',
+          id: 'entry-3',
+          timestamp: '2026-05-03T00:03:00Z',
+          message: { role: 'toolResult', content: [{ type: 'text', text: 'tool output is not indexed by current schema' }] },
+        },
+      ]);
+
+      const parsed = parseSessionManagerSnapshot(snapshot);
+
+      assert.ok(parsed);
+      assert.strictEqual(parsed.id, 'live-session-1');
+      assert.strictEqual(parsed.project, 'live-project');
+      assert.strictEqual(parsed.messages.length, 2);
+      assert.deepStrictEqual(parsed.messages[1].toolCalls, ['read']);
+    });
+
+    it('indexLiveSession prefers the persisted JSONL file when available', () => {
+      const filePath = path.join(tmpDir, 'sessions', 'project', 'file-session.jsonl');
+      writeSessionFile(filePath);
+      const snapshot = {
+        getHeader: () => ({ id: 'stale-memory-session', timestamp: '2026-05-03T00:00:00Z', cwd: '/work/stale' }),
+        getEntries: () => [],
+        getSessionFile: () => filePath,
+      };
+
+      const result = indexLiveSession(dbManager, snapshot);
+
+      assert.ok(result);
+      assert.strictEqual(result.sessionId, 'file-session-1');
+      assert.strictEqual(result.messagesIndexed, 1);
+      const indexed = dbManager.getDb().prepare('SELECT id, cwd FROM sessions WHERE id = ?').get('file-session-1') as { id: string; cwd: string };
+      assert.strictEqual(indexed.cwd, '/work/file-project');
+    });
+
+    it('indexCurrentSession indexes missing live messages idempotently', () => {
+      const entries = [
+        {
+          type: 'message',
+          id: 'entry-1',
+          timestamp: '2026-05-03T00:01:00Z',
+          message: { role: 'user', content: 'Hello live session' },
+        },
+      ];
+      const snapshot = createSessionManagerSnapshot(entries);
+
+      const result1 = indexCurrentSession(dbManager, snapshot);
+      assert.ok(result1);
+      assert.strictEqual(result1.messagesIndexed, 1);
+      assert.strictEqual(dbManager.getStats().sessions, 1);
+      assert.strictEqual(dbManager.getStats().messages, 1);
+
+      entries.push({
+        type: 'message',
+        id: 'entry-2',
+        timestamp: '2026-05-03T00:02:00Z',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Hi again' }] },
+      });
+      const result2 = indexCurrentSession(dbManager, snapshot);
+      assert.ok(result2);
+      assert.strictEqual(result2.messagesIndexed, 1);
+      assert.strictEqual(dbManager.getStats().sessions, 1);
+      assert.strictEqual(dbManager.getStats().messages, 2);
+
+      const result3 = indexCurrentSession(dbManager, snapshot);
+      assert.ok(result3);
+      assert.strictEqual(result3.skipped, true);
+      assert.strictEqual(result3.messagesIndexed, 0);
+    });
+  });
+
+  describe('backfill metadata helpers', () => {
+    function writeJsonlSession(sessionsDir: string, projectDir: string, sessionId: string): void {
+      const projDir = path.join(sessionsDir, projectDir);
+      fs.mkdirSync(projDir, { recursive: true });
+      const lines = [
+        JSON.stringify({ type: 'session', id: sessionId, timestamp: '2026-05-03T00:00:00Z', cwd: `/test/${projectDir}` }),
+        JSON.stringify({
+          type: 'message',
+          id: `${sessionId}-m1`,
+          parentId: null,
+          timestamp: '2026-05-03T00:01:00Z',
+          message: { role: 'user', content: [{ type: 'text', text: 'Hello' }], timestamp: Date.now() },
+        }),
+      ];
+      fs.writeFileSync(path.join(projDir, `${sessionId}.jsonl`), lines.join('\n'));
+    }
+
+    it('countSessionFiles counts JSONL files in session project directories', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'project-a', 's1');
+      writeJsonlSession(sessionsDir, 'project-b', 's2');
+      fs.writeFileSync(path.join(sessionsDir, 'project-b', 'notes.txt'), 'not a session');
+
+      assert.strictEqual(countSessionFiles(sessionsDir), 2);
+    });
+
+    it('needsBackfill is true when session file count exceeds indexed sessions', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'project-a', 's1');
+
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), true);
+    });
+
+    it('needsBackfill is false when counts match and timestamp is recent', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'project-a', 's1');
+      indexAllSessions(dbManager, sessionsDir);
+      touchBackfillTimestamp(dbManager, new Date('2026-05-03T00:30:00Z'));
+
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), false);
+    });
+
+    it('needsBackfill is true when timestamp is missing or older than 24 hours', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'project-a', 's1');
+      indexAllSessions(dbManager, sessionsDir);
+
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), true);
+
+      touchBackfillTimestamp(dbManager, new Date('2026-05-01T00:00:00Z'));
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), true);
+    });
+
+    it('touchBackfillTimestamp upserts the metadata row', () => {
+      touchBackfillTimestamp(dbManager, new Date('2026-05-03T00:00:00Z'));
+      touchBackfillTimestamp(dbManager, new Date('2026-05-03T01:00:00Z'));
+
+      const row = dbManager.getDb().prepare('SELECT value FROM extension_metadata WHERE key = ?').get(LAST_SESSION_BACKFILL_KEY) as { value: string };
+      assert.strictEqual(row.value, '2026-05-03T01:00:00.000Z');
     });
   });
 

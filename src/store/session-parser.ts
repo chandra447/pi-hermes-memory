@@ -90,7 +90,7 @@ function extractToolCalls(content: unknown): string[] | undefined {
   for (const block of content) {
     if (!block || typeof block !== 'object') continue;
     const b = block as Record<string, unknown>;
-    if (b.type === 'tool_use' && typeof b.name === 'string') {
+    if ((b.type === 'tool_use' || b.type === 'toolCall') && typeof b.name === 'string') {
       toolNames.push(b.name);
     }
   }

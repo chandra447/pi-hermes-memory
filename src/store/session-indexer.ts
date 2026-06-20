@@ -1,5 +1,9 @@
+import fs from 'node:fs';
 import { DatabaseManager } from './db.js';
 import { parseSessionFile, getSessionFiles, type ParsedSession } from './session-parser.js';
+
+export const LAST_SESSION_BACKFILL_KEY = 'last_session_backfill';
+export const SESSION_BACKFILL_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Index result for a single session.
@@ -7,7 +11,7 @@ import { parseSessionFile, getSessionFiles, type ParsedSession } from './session
 export interface IndexResult {
   sessionId: string;
   messagesIndexed: number;
-  skipped: boolean; // true if already indexed
+  skipped: boolean; // true if the session already existed and no new messages were indexed
 }
 
 /**
@@ -29,33 +33,39 @@ export interface BulkIndexResult {
 export function indexSession(dbManager: DatabaseManager, session: ParsedSession): IndexResult {
   const db = dbManager.getDb();
 
-  // Check if already indexed
-  const existing = db.prepare('SELECT id FROM sessions WHERE id = ?').get(session.id) as { id: string } | undefined;
-  if (existing) {
-    return { sessionId: session.id, messagesIndexed: 0, skipped: true };
-  }
+  const existingSession = db.prepare('SELECT id FROM sessions WHERE id = ?').get(session.id) as { id: string } | undefined;
+  const before = db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?').get(session.id) as { count: number };
 
-  // Insert session
-  db.prepare(`
-    INSERT INTO sessions (id, project, cwd, started_at, ended_at, message_count)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(
-    session.id,
-    session.project,
-    session.cwd,
-    session.startedAt,
-    session.endedAt,
-    session.messages.length
-  );
-
-  // Insert messages in a transaction for performance
-  const insertMsg = db.prepare(`
-    INSERT INTO messages (id, session_id, role, content, timestamp, tool_calls)
+  const insertSession = db.prepare(`
+    INSERT OR IGNORE INTO sessions (id, project, cwd, started_at, ended_at, message_count)
     VALUES (?, ?, ?, ?, ?, ?)
   `);
 
-  const writeMessages = (messages: ParsedSession['messages']) => {
-    for (const msg of messages) {
+  const insertMsg = db.prepare(`
+    INSERT OR IGNORE INTO messages (id, session_id, role, content, timestamp, tool_calls)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
+  const updateSession = db.prepare(`
+    UPDATE sessions
+    SET project = ?,
+        cwd = ?,
+        ended_at = COALESCE(?, ended_at),
+        message_count = (SELECT COUNT(*) FROM messages WHERE session_id = ?)
+    WHERE id = ?
+  `);
+
+  const writeSession = () => {
+    insertSession.run(
+      session.id,
+      session.project,
+      session.cwd,
+      session.startedAt,
+      session.endedAt,
+      session.messages.length
+    );
+
+    for (const msg of session.messages) {
       insertMsg.run(
         msg.id,
         session.id,
@@ -65,16 +75,136 @@ export function indexSession(dbManager: DatabaseManager, session: ParsedSession)
         msg.toolCalls ? JSON.stringify(msg.toolCalls) : null
       );
     }
+
+    updateSession.run(session.project, session.cwd, session.endedAt, session.id, session.id);
   };
 
   if (db.transaction) {
-    const insertMany = db.transaction(writeMessages);
-    insertMany(session.messages);
+    const tx = db.transaction(writeSession);
+    tx();
   } else {
-    writeMessages(session.messages);
+    writeSession();
   }
 
-  return { sessionId: session.id, messagesIndexed: session.messages.length, skipped: false };
+  const after = db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?').get(session.id) as { count: number };
+  const messagesIndexed = after.count - before.count;
+
+  return { sessionId: session.id, messagesIndexed, skipped: Boolean(existingSession) && messagesIndexed === 0 };
+}
+
+type SessionManagerSnapshot = {
+  getHeader: () => { id: string; timestamp: string; cwd: string } | null;
+  getEntries: () => unknown[];
+  getSessionFile?: () => string | undefined;
+};
+
+type SessionMessageEntryLike = {
+  type?: unknown;
+  id?: unknown;
+  timestamp?: unknown;
+  message?: {
+    role?: unknown;
+    content?: unknown;
+  };
+};
+
+function extractTextContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    const b = block as Record<string, unknown>;
+
+    switch (b.type) {
+      case 'text':
+        if (typeof b.text === 'string') parts.push(b.text);
+        break;
+      case 'tool_result':
+        if (typeof b.content === 'string') {
+          parts.push(b.content);
+        } else if (Array.isArray(b.content)) {
+          for (const item of b.content) {
+            if (item && typeof item === 'object' && (item as Record<string, unknown>).type === 'text') {
+              const text = (item as Record<string, unknown>).text;
+              if (typeof text === 'string') parts.push(text);
+            }
+          }
+        }
+        break;
+    }
+  }
+
+  return parts.join('\n').trim();
+}
+
+function extractToolCalls(content: unknown): string[] | undefined {
+  if (!Array.isArray(content)) return undefined;
+
+  const toolNames: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    const b = block as Record<string, unknown>;
+    if ((b.type === 'toolCall' || b.type === 'tool_use') && typeof b.name === 'string') {
+      toolNames.push(b.name);
+    }
+  }
+  return toolNames.length > 0 ? toolNames : undefined;
+}
+
+function parseMessageEntry(entry: unknown): ParsedSession['messages'][number] | null {
+  if (!entry || typeof entry !== 'object') return null;
+  const e = entry as SessionMessageEntryLike;
+  if (e.type !== 'message' || typeof e.id !== 'string' || typeof e.timestamp !== 'string' || !e.message) return null;
+
+  const role = e.message.role;
+  if (role !== 'user' && role !== 'assistant' && role !== 'system') return null;
+
+  const content = extractTextContent(e.message.content);
+  if (!content) return null;
+
+  return {
+    id: e.id,
+    role,
+    content,
+    timestamp: e.timestamp,
+    toolCalls: role === 'assistant' ? extractToolCalls(e.message.content) : undefined,
+  };
+}
+
+export function parseSessionManagerSnapshot(sessionManager: SessionManagerSnapshot): ParsedSession | null {
+  const header = sessionManager.getHeader();
+  if (!header?.id || !header.cwd || !header.timestamp) return null;
+
+  const messages = sessionManager.getEntries()
+    .map(parseMessageEntry)
+    .filter((msg): msg is ParsedSession['messages'][number] => msg !== null);
+
+  return {
+    id: header.id,
+    project: header.cwd.split('/').pop() ?? header.cwd,
+    cwd: header.cwd,
+    startedAt: header.timestamp,
+    endedAt: null,
+    messages,
+  };
+}
+
+export function indexCurrentSession(dbManager: DatabaseManager, sessionManager: SessionManagerSnapshot): IndexResult | null {
+  const session = parseSessionManagerSnapshot(sessionManager);
+  if (!session) return null;
+  return indexSession(dbManager, session);
+}
+
+export function indexLiveSession(dbManager: DatabaseManager, sessionManager: SessionManagerSnapshot): IndexResult | null {
+  const sessionFile = sessionManager.getSessionFile?.();
+  if (sessionFile && fs.existsSync(sessionFile)) {
+    const session = parseSessionFile(sessionFile);
+    if (session) return indexSession(dbManager, session);
+  }
+
+  return indexCurrentSession(dbManager, sessionManager);
 }
 
 /**
@@ -122,6 +252,58 @@ export function indexAllSessions(
   }
 
   return result;
+}
+
+/**
+ * Cheaply count session JSONL files in the same scope indexAllSessions scans.
+ */
+export function countSessionFiles(sessionsDir: string): number {
+  return getSessionFiles(sessionsDir).length;
+}
+
+function getLastBackfillTimestamp(dbManager: DatabaseManager): string | null {
+  const db = dbManager.getDb();
+  const row = db.prepare('SELECT value FROM extension_metadata WHERE key = ?').get(LAST_SESSION_BACKFILL_KEY) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+function isRecentBackfillTimestamp(value: string | null, nowMs: number): boolean {
+  if (!value) return false;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return false;
+  return nowMs - parsed < SESSION_BACKFILL_INTERVAL_MS;
+}
+
+/**
+ * Determine whether a background session backfill should run.
+ *
+ * A backfill is needed when the number of JSONL session files differs from
+ * the indexed session count, or when no successful backfill has completed in
+ * the last 24 hours. The count check catches crashed/abnormal sessions; the
+ * timestamp check periodically repairs parse errors or manual DB edits.
+ */
+export function needsBackfill(dbManager: DatabaseManager, sessionsDir: string, now = new Date()): boolean {
+  const db = dbManager.getDb();
+  const fileCount = countSessionFiles(sessionsDir);
+  const indexed = db.prepare('SELECT COUNT(*) as count FROM sessions').get() as { count: number };
+
+  if (fileCount !== indexed.count) {
+    return true;
+  }
+
+  return !isRecentBackfillTimestamp(getLastBackfillTimestamp(dbManager), now.getTime());
+}
+
+/**
+ * Record a successful session backfill completion timestamp.
+ */
+export function touchBackfillTimestamp(dbManager: DatabaseManager, timestamp = new Date()): void {
+  const db = dbManager.getDb();
+  db.prepare(`
+    INSERT INTO extension_metadata (key, value)
+    VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(LAST_SESSION_BACKFILL_KEY, timestamp.toISOString());
 }
 
 /**

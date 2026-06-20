@@ -28,6 +28,8 @@ import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
 import { DatabaseManager } from "./store/db.js";
 import { indexSession } from "./store/session-indexer.js";
+import { scheduleSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-backfill.js";
+import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-live-index.js";
 import { parseSessionFile } from "./store/session-parser.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
 import { registerSkillTool } from "./tools/skill-tool.js";
@@ -107,6 +109,7 @@ export default function (pi: ExtensionAPI) {
     migrationSentinelPath: path.join(globalDir, ".skills-migrated-to-extension-storage"),
   });
   const dbManager = new DatabaseManager(globalDir);
+  const sessionsDir = path.join(agentRoot, "sessions");
 
   const refreshSkillProjectContext = (cwd?: string) => {
     const resource = resolveProjectSkillDiscovery(skillStore, config.projectsMemoryDir, cwd);
@@ -150,6 +153,19 @@ export default function (pi: ExtensionAPI) {
     await skillStore.ensureDiscoveredRoots();
     await store.loadFromDisk();
     if (projectStore) await projectStore.loadFromDisk();
+
+    scheduleSessionBackfill(dbManager, sessionsDir, {
+      notify: (message, level) => {
+        const ui = (ctx as { ui?: { notify?: (message: string, level?: string) => void } }).ui;
+        if (ui?.notify) {
+          ui.notify(message, level);
+        } else if (level === "error" || level === "warning") {
+          console.warn(message);
+        } else {
+          console.info(message);
+        }
+      },
+    });
   });
 
   registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir);
@@ -201,12 +217,19 @@ export default function (pi: ExtensionAPI) {
   registerSyncMarkdownMemoriesCommand(pi, dbManager, globalDir, config.projectsMemoryDir, agentRoot);
   registerPreviewContextCommand(pi, store, projectStore, projectName, config);
 
-  // ── 10. SQLite session search + extended memory ──
+  // ── 10. Live session indexing ──
+  pi.on("message_end", async (_event, ctx) => {
+    scheduleLiveSessionIndex(dbManager, ctx.sessionManager, {
+      onError: (err) => console.warn(`⚠️ Live session indexing failed: ${err instanceof Error ? err.message : String(err)}`),
+    });
+  });
+
+  // ── 11. SQLite session search + extended memory ──
   registerSessionSearchTool(pi, dbManager, config.sessionSearch ?? { variant: "legacy" });
   registerMemorySearchTool(pi, dbManager);
   registerIndexSessionsCommand(pi);
 
-  // ── 11. Auto-index session on shutdown ──
+  // ── 12. Auto-index session on shutdown ──
   // Registered last, so this runs after the session-flush shutdown handler and
   // is the final DB activity. Closing here truncates the WAL via
   // PRAGMA wal_checkpoint(TRUNCATE); without it the WAL only grows to its
@@ -229,6 +252,14 @@ export default function (pi: ExtensionAPI) {
     } catch {
       // Silent fail — don't block shutdown
     } finally {
+      try {
+        await Promise.all([
+          waitForSessionBackfill(SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS),
+          waitForLiveSessionIndex(SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS),
+        ]);
+      } catch {
+        // Best effort only — shutdown should not be held up by indexing errors.
+      }
       try { dbManager.close(); } catch { /* best effort — never block shutdown */ }
     }
   });

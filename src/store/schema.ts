@@ -10,6 +10,12 @@
  */
 
 export const SCHEMA_SQL = `
+  -- Extension key/value metadata
+  CREATE TABLE IF NOT EXISTS extension_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
   -- Session metadata
   CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
