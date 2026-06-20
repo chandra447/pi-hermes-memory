@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 
 /**
  * Parsed session data from a JSONL file.
@@ -179,23 +180,29 @@ export function parseSessionFile(filePath: string): ParsedSession | null {
  */
 export function getSessionFiles(sessionsDir: string, projectDir?: string): string[] {
   if (projectDir) {
-    const dir = `${sessionsDir}/${projectDir}`;
+    const dir = path.join(sessionsDir, projectDir);
     if (!fs.existsSync(dir)) return [];
     return fs.readdirSync(dir)
       .filter(f => f.endsWith('.jsonl'))
-      .map(f => `${dir}/${f}`);
+      .map(f => path.join(dir, f));
   }
 
   // All projects
   if (!fs.existsSync(sessionsDir)) return [];
   const files: string[] = [];
-  for (const dir of fs.readdirSync(sessionsDir)) {
-    const dirPath = `${sessionsDir}/${dir}`;
-    if (!fs.statSync(dirPath).isDirectory()) continue;
-    for (const f of fs.readdirSync(dirPath)) {
-      if (f.endsWith('.jsonl')) {
-        files.push(`${dirPath}/${f}`);
+  for (const entry of fs.readdirSync(sessionsDir)) {
+    const entryPath = path.join(sessionsDir, entry);
+    const stat = fs.statSync(entryPath);
+    if (stat.isDirectory()) {
+      // Scan .jsonl files inside project subdirectories
+      for (const f of fs.readdirSync(entryPath)) {
+        if (f.endsWith('.jsonl')) {
+          files.push(path.join(entryPath, f));
+        }
       }
+    } else if (stat.isFile() && entry.endsWith('.jsonl')) {
+      // Also pick up root-level .jsonl files
+      files.push(entryPath);
     }
   }
   return files;
