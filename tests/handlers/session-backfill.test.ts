@@ -109,6 +109,37 @@ describe('session backfill handler', () => {
     assert.equal(manualResult.sessionsIndexed, 0);
   });
 
+  it('does not mark backfill complete when startup parse limit is reached', async () => {
+    const state: SessionBackfillState = { inProgress: false, promise: null };
+    let touched = false;
+    const notifications: { message: string; level: string }[] = [];
+
+    const scheduled = scheduleSessionBackfill(dbManager, sessionsDir, {
+      state,
+      needsBackfillFn: () => true,
+      indexSessionsFn: () => ({
+        sessionsProcessed: 1,
+        sessionsIndexed: 1,
+        sessionsSkipped: 0,
+        messagesIndexed: 1,
+        errors: [],
+        reachedLimit: true,
+      }),
+      touchBackfillTimestampFn: () => { touched = true; },
+      notify: (message, level) => notifications.push({ message, level }),
+      setTimeoutFn: (callback) => {
+        queueMicrotask(callback);
+        return 0;
+      },
+    });
+
+    assert.equal(scheduled, true);
+    await state.promise;
+    assert.equal(touched, false);
+    assert.equal(notifications[0].level, 'warning');
+    assert.match(notifications[0].message, /startup limit reached/);
+  });
+
   it('scheduled task is best-effort and does not reject when indexing throws', async () => {
     const state: SessionBackfillState = { inProgress: false, promise: null };
     const notifications: { message: string; level: string }[] = [];
@@ -116,7 +147,7 @@ describe('session backfill handler', () => {
     const scheduled = scheduleSessionBackfill(dbManager, sessionsDir, {
       state,
       needsBackfillFn: () => true,
-      indexAllSessionsFn: () => {
+      indexSessionsFn: () => {
         throw new Error('boom');
       },
       notify: (message, level) => notifications.push({ message, level }),

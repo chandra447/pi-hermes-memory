@@ -1,12 +1,13 @@
 import type { DatabaseManager } from '../store/db.js';
 import {
-  indexAllSessions,
+  indexChangedSessions,
   needsBackfill,
   touchBackfillTimestamp,
   type BulkIndexResult,
 } from '../store/session-indexer.js';
 
 export const SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS = 5000;
+export const SESSION_BACKFILL_MAX_FILES = 50;
 
 type NotifyLevel = 'info' | 'warning' | 'error';
 type NotifyFn = (message: string, level: NotifyLevel) => void;
@@ -28,13 +29,15 @@ export interface ScheduleSessionBackfillOptions {
   state?: SessionBackfillState;
   setTimeoutFn?: SetTimeoutFn;
   needsBackfillFn?: typeof needsBackfill;
-  indexAllSessionsFn?: typeof indexAllSessions;
+  indexSessionsFn?: typeof indexChangedSessions;
+  maxFilesToIndex?: number;
   touchBackfillTimestampFn?: typeof touchBackfillTimestamp;
 }
 
 function formatBackfillResult(result: BulkIndexResult): string {
   const errorSuffix = result.errors.length > 0 ? ` (${result.errors.length} file error${result.errors.length === 1 ? '' : 's'})` : '';
-  return `🧠 Session backfill complete: ${result.sessionsIndexed} indexed, ${result.sessionsSkipped} skipped, ${result.messagesIndexed} messages${errorSuffix}.`;
+  const limitSuffix = result.reachedLimit ? ' (startup limit reached)' : '';
+  return `🧠 Session backfill complete: ${result.sessionsIndexed} indexed, ${result.sessionsSkipped} skipped, ${result.messagesIndexed} messages${errorSuffix}${limitSuffix}.`;
 }
 
 function notifyBestEffort(notify: NotifyFn | undefined, message: string, level: NotifyLevel): void {
@@ -46,11 +49,11 @@ function notifyBestEffort(notify: NotifyFn | undefined, message: string, level: 
 }
 
 /**
- * Schedule a best-effort, non-blocking backfill of unindexed Pi sessions.
+ * Schedule a best-effort, bounded incremental backfill of unindexed Pi sessions.
  *
- * The expensive indexAllSessions() pass is always deferred with setTimeout(0)
- * so session_start can resolve before disk parsing/indexing begins. A shared
- * state guard prevents concurrent backfills within this extension instance.
+ * The JSONL parsing work is deferred with setTimeout(0) so session_start can
+ * resolve first. The scheduled pass only parses new/changed files and caps the
+ * number of files parsed per startup.
  *
  * @returns true when a backfill task was scheduled; false when it was skipped.
  */
@@ -62,7 +65,8 @@ export function scheduleSessionBackfill(
   const state = options.state ?? sessionBackfillState;
   const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
   const needsBackfillFn = options.needsBackfillFn ?? needsBackfill;
-  const indexAllSessionsFn = options.indexAllSessionsFn ?? indexAllSessions;
+  const indexSessionsFn = options.indexSessionsFn ?? indexChangedSessions;
+  const maxFilesToIndex = options.maxFilesToIndex ?? SESSION_BACKFILL_MAX_FILES;
   const touchBackfillTimestampFn = options.touchBackfillTimestampFn ?? touchBackfillTimestamp;
 
   if (state.inProgress) {
@@ -86,9 +90,9 @@ export function scheduleSessionBackfill(
   state.promise = new Promise<void>((resolve) => {
     setTimeoutFn(() => {
       try {
-        const result = indexAllSessionsFn(dbManager, sessionsDir);
-        touchBackfillTimestampFn(dbManager);
-        notifyBestEffort(options.notify, formatBackfillResult(result), result.errors.length > 0 ? 'warning' : 'info');
+        const result = indexSessionsFn(dbManager, sessionsDir, { maxFilesToIndex });
+        if (!result.reachedLimit) touchBackfillTimestampFn(dbManager);
+        notifyBestEffort(options.notify, formatBackfillResult(result), result.errors.length > 0 || result.reachedLimit ? 'warning' : 'info');
       } catch (err) {
         notifyBestEffort(
           options.notify,

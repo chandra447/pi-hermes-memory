@@ -26,6 +26,15 @@ export const SCHEMA_SQL = `
     message_count INTEGER DEFAULT 0
   );
 
+  -- Indexed session file metadata for cheap incremental backfill
+  CREATE TABLE IF NOT EXISTS session_files (
+    path TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    size INTEGER NOT NULL,
+    mtime_ms INTEGER NOT NULL,
+    indexed_at TEXT NOT NULL
+  );
+
   -- All messages from all sessions
   CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY,
@@ -102,4 +111,5 @@ export const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
   CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
   CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
+  CREATE INDEX IF NOT EXISTS idx_session_files_session_id ON session_files(session_id);
 `;

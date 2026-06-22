@@ -7,6 +7,7 @@ import { DatabaseManager } from '../../src/store/db.js';
 import {
   indexSession,
   indexAllSessions,
+  indexChangedSessions,
   getSessionStats,
   countSessionFiles,
   needsBackfill,
@@ -15,6 +16,7 @@ import {
   indexCurrentSession,
   indexLiveSession,
   parseSessionManagerSnapshot,
+  sessionIdFromFilePath,
 } from '../../src/store/session-indexer.js';
 import type { ParsedSession } from '../../src/store/session-parser.js';
 
@@ -199,6 +201,83 @@ describe('session-indexer', () => {
     it('should handle non-existent sessions directory', () => {
       const result = indexAllSessions(dbManager, '/nonexistent/path');
       assert.strictEqual(result.sessionsProcessed, 0);
+    });
+  });
+
+  describe('indexChangedSessions', () => {
+    function writeJsonlSession(filePath: string, sessionId: string, messageIds = [`${sessionId}-m1`]): void {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      const lines = [
+        JSON.stringify({ type: 'session', id: sessionId, timestamp: '2026-05-03T00:00:00Z', cwd: `/test/${sessionId}` }),
+        ...messageIds.map((id, index) => JSON.stringify({
+          type: 'message',
+          id,
+          parentId: null,
+          timestamp: `2026-05-03T00:0${index + 1}:00Z`,
+          message: { role: 'user', content: [{ type: 'text', text: `Hello ${id}` }], timestamp: Date.now() },
+        })),
+      ];
+      fs.writeFileSync(filePath, lines.join('\n'));
+    }
+
+    it('extracts Pi session ids from root and project JSONL filenames', () => {
+      assert.strictEqual(sessionIdFromFilePath('/sessions/project/2026-06-20T10-03-35-024Z_019ee47c-58f0-77dd-8b73-940c0cf8c8bf.jsonl'), '019ee47c-58f0-77dd-8b73-940c0cf8c8bf');
+      assert.strictEqual(sessionIdFromFilePath('/sessions/project/s1.jsonl'), 's1');
+      assert.strictEqual(sessionIdFromFilePath('/sessions/project/readme.txt'), null);
+    });
+
+    it('skips unchanged files using stored size and mtime metadata without parsing them', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      const filePath = path.join(sessionsDir, 'project-a', 's1.jsonl');
+      writeJsonlSession(filePath, 's1');
+      indexAllSessions(dbManager, sessionsDir);
+
+      const result = indexChangedSessions(dbManager, sessionsDir);
+
+      assert.strictEqual(result.sessionsProcessed, 0);
+      assert.strictEqual(result.sessionsSkipped, 1);
+      assert.strictEqual(result.errors.length, 0);
+    });
+
+    it('indexes changed files and appends newly persisted messages', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      const filePath = path.join(sessionsDir, 'project-a', 's1.jsonl');
+      writeJsonlSession(filePath, 's1', ['s1-m1']);
+      indexAllSessions(dbManager, sessionsDir);
+
+      writeJsonlSession(filePath, 's1', ['s1-m1', 's1-m2']);
+      const result = indexChangedSessions(dbManager, sessionsDir);
+
+      assert.strictEqual(result.sessionsProcessed, 1);
+      assert.strictEqual(result.sessionsIndexed, 1);
+      assert.strictEqual(result.messagesIndexed, 1);
+      assert.strictEqual(dbManager.getStats().messages, 2);
+    });
+
+    it('seeds metadata for previously indexed sessions without parsing the JSONL body', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      const filePath = path.join(sessionsDir, 'project-a', 'prefix_s1.jsonl');
+      indexSession(dbManager, createTestSession({ id: 's1' }));
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, 'not jsonl');
+
+      const result = indexChangedSessions(dbManager, sessionsDir);
+
+      assert.strictEqual(result.sessionsProcessed, 0);
+      assert.strictEqual(result.sessionsSkipped, 1);
+      assert.strictEqual(result.errors.length, 0);
+    });
+
+    it('caps parsed files during startup incremental backfill', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(path.join(sessionsDir, 'project-a', 's1.jsonl'), 's1');
+      writeJsonlSession(path.join(sessionsDir, 'project-a', 's2.jsonl'), 's2');
+
+      const result = indexChangedSessions(dbManager, sessionsDir, { maxFilesToIndex: 1 });
+
+      assert.strictEqual(result.sessionsProcessed, 1);
+      assert.strictEqual(result.reachedLimit, true);
+      assert.strictEqual(dbManager.getStats().sessions, 1);
     });
   });
 
