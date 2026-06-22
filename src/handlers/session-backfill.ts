@@ -52,8 +52,8 @@ function notifyBestEffort(notify: NotifyFn | undefined, message: string, level: 
  * Schedule a best-effort, bounded incremental backfill of unindexed Pi sessions.
  *
  * The JSONL parsing work is deferred with setTimeout(0) so session_start can
- * resolve first. The scheduled pass only parses new/changed files and caps the
- * number of files parsed per startup.
+ * resolve first. The scheduled pass only parses files without matching stored
+ * metadata and caps the number of files parsed per startup.
  *
  * @returns true when a backfill task was scheduled; false when it was skipped.
  */

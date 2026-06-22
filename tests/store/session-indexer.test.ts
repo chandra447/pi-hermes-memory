@@ -16,7 +16,6 @@ import {
   indexCurrentSession,
   indexLiveSession,
   parseSessionManagerSnapshot,
-  sessionIdFromFilePath,
 } from '../../src/store/session-indexer.js';
 import type { ParsedSession } from '../../src/store/session-parser.js';
 
@@ -220,12 +219,6 @@ describe('session-indexer', () => {
       fs.writeFileSync(filePath, lines.join('\n'));
     }
 
-    it('extracts Pi session ids from root and project JSONL filenames', () => {
-      assert.strictEqual(sessionIdFromFilePath('/sessions/project/2026-06-20T10-03-35-024Z_019ee47c-58f0-77dd-8b73-940c0cf8c8bf.jsonl'), '019ee47c-58f0-77dd-8b73-940c0cf8c8bf');
-      assert.strictEqual(sessionIdFromFilePath('/sessions/project/s1.jsonl'), 's1');
-      assert.strictEqual(sessionIdFromFilePath('/sessions/project/readme.txt'), null);
-    });
-
     it('skips unchanged files using stored size and mtime metadata without parsing them', () => {
       const sessionsDir = path.join(tmpDir, 'sessions');
       const filePath = path.join(sessionsDir, 'project-a', 's1.jsonl');
@@ -254,18 +247,23 @@ describe('session-indexer', () => {
       assert.strictEqual(dbManager.getStats().messages, 2);
     });
 
-    it('seeds metadata for previously indexed sessions without parsing the JSONL body', () => {
+    it('parses existing sessions without file metadata and appends missed messages', () => {
       const sessionsDir = path.join(tmpDir, 'sessions');
-      const filePath = path.join(sessionsDir, 'project-a', 'prefix_s1.jsonl');
-      indexSession(dbManager, createTestSession({ id: 's1' }));
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, 'not jsonl');
+      const filePath = path.join(sessionsDir, 'project-a', 's1.jsonl');
+      indexSession(dbManager, createTestSession({
+        id: 's1',
+        messages: [
+          { id: 's1-m1', role: 'user', content: 'Hello s1-m1', timestamp: '2026-05-03T00:01:00Z' },
+        ],
+      }));
+      writeJsonlSession(filePath, 's1', ['s1-m1', 's1-m2']);
 
       const result = indexChangedSessions(dbManager, sessionsDir);
 
-      assert.strictEqual(result.sessionsProcessed, 0);
-      assert.strictEqual(result.sessionsSkipped, 1);
-      assert.strictEqual(result.errors.length, 0);
+      assert.strictEqual(result.sessionsProcessed, 1);
+      assert.strictEqual(result.sessionsIndexed, 1);
+      assert.strictEqual(result.messagesIndexed, 1);
+      assert.strictEqual(dbManager.getStats().messages, 2);
     });
 
     it('caps parsed files during startup incremental backfill', () => {
@@ -429,6 +427,32 @@ describe('session-indexer', () => {
       touchBackfillTimestamp(dbManager, new Date('2026-05-03T00:30:00Z'));
 
       assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), false);
+    });
+
+    it('needsBackfill is true when file metadata changes even with a recent timestamp', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'project-a', 's1');
+      indexAllSessions(dbManager, sessionsDir);
+      touchBackfillTimestamp(dbManager, new Date('2026-05-03T00:30:00Z'));
+
+      fs.appendFileSync(path.join(sessionsDir, 'project-a', 's1.jsonl'), '\n' + JSON.stringify({
+        type: 'message',
+        id: 's1-m2',
+        parentId: null,
+        timestamp: '2026-05-03T00:02:00Z',
+        message: { role: 'user', content: [{ type: 'text', text: 'Hello again' }], timestamp: Date.now() },
+      }));
+
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), true);
+    });
+
+    it('needsBackfill is true for existing sessions without file metadata even with a recent timestamp', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'project-a', 's1');
+      indexSession(dbManager, createTestSession({ id: 's1', messages: [] }));
+      touchBackfillTimestamp(dbManager, new Date('2026-05-03T00:30:00Z'));
+
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), true);
     });
 
     it('needsBackfill is true when timestamp is missing or older than 24 hours', () => {

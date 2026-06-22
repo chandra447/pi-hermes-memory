@@ -3,6 +3,7 @@
  *
  * Tables:
  * - sessions — Pi session metadata
+ * - session_files — indexed JSONL metadata for incremental backfill
  * - messages — all conversation messages
  * - message_fts — FTS5 index for full-text search across messages
  * - memories — extended memory entries (unlimited, searchable)

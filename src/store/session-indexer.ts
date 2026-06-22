@@ -223,15 +223,6 @@ export function indexLiveSession(dbManager: DatabaseManager, sessionManager: Ses
   return indexCurrentSession(dbManager, sessionManager);
 }
 
-export function sessionIdFromFilePath(filePath: string): string | null {
-  const fileName = filePath.split(/[\\/]/).pop();
-  if (!fileName?.endsWith('.jsonl')) return null;
-  const base = fileName.slice(0, -'.jsonl'.length);
-  if (!base) return null;
-  const underscore = base.lastIndexOf('_');
-  return underscore >= 0 ? base.slice(underscore + 1) : base;
-}
-
 function getSessionFileMetadata(filePath: string): SessionFileMetadata {
   const stat = fs.statSync(filePath);
   return { path: filePath, size: stat.size, mtimeMs: Math.trunc(stat.mtimeMs) };
@@ -263,20 +254,6 @@ function upsertSessionFileMetadata(
       mtime_ms = excluded.mtime_ms,
       indexed_at = excluded.indexed_at
   `).run(metadata.path, sessionId, metadata.size, metadata.mtimeMs, indexedAt.toISOString());
-}
-
-function seedMetadataForExistingSession(dbManager: DatabaseManager, filePath: string, metadata: SessionFileMetadata): boolean {
-  if (getStoredSessionFileMetadata(dbManager, filePath)) return false;
-
-  const sessionId = sessionIdFromFilePath(filePath);
-  if (!sessionId) return false;
-
-  const db = dbManager.getDb();
-  const existing = db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId) as { id: string } | undefined;
-  if (!existing) return false;
-
-  upsertSessionFileMetadata(dbManager, filePath, existing.id, metadata);
-  return true;
 }
 
 function emptyBulkIndexResult(): BulkIndexResult {
@@ -336,12 +313,11 @@ export function indexAllSessions(
 }
 
 /**
- * Incrementally index only new or changed session JSONL files.
+ * Incrementally index session JSONL files without matching stored metadata.
  *
  * This is intentionally cheaper than indexAllSessions() for startup backfill:
- * unchanged files are skipped by stored size/mtime metadata, and files that
- * were indexed before metadata existed are seeded from the session id encoded
- * in Pi's filename without parsing the whole JSONL file.
+ * files with matching stored size/mtime metadata are skipped, and all other
+ * files are parsed under the startup cap.
  */
 export function indexChangedSessions(
   dbManager: DatabaseManager,
@@ -355,7 +331,7 @@ export function indexChangedSessions(
   for (const file of files) {
     try {
       const metadata = getSessionFileMetadata(file);
-      if (storedSessionFileMatches(dbManager, metadata) || seedMetadataForExistingSession(dbManager, file, metadata)) {
+      if (storedSessionFileMatches(dbManager, metadata)) {
         result.sessionsSkipped++;
         continue;
       }
@@ -397,9 +373,8 @@ function isRecentBackfillTimestamp(value: string | null, nowMs: number): boolean
 /**
  * Determine whether a background session backfill should run.
  *
- * The check stays cheap: it compares file counts, stored file size/mtime
- * metadata, and session ids encoded in Pi JSONL filenames. Full JSONL parsing
- * is left to the scheduled incremental backfill.
+ * The check stays cheap: it compares file counts and stored file size/mtime
+ * metadata. Full JSONL parsing is left to the scheduled incremental backfill.
  */
 export function needsBackfill(dbManager: DatabaseManager, sessionsDir: string, now = new Date()): boolean {
   const db = dbManager.getDb();
@@ -414,13 +389,6 @@ export function needsBackfill(dbManager: DatabaseManager, sessionsDir: string, n
     try {
       const metadata = getSessionFileMetadata(file);
       if (storedSessionFileMatches(dbManager, metadata)) continue;
-
-      const sessionId = sessionIdFromFilePath(file);
-      if (sessionId) {
-        const existing = db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId) as { id: string } | undefined;
-        if (existing) continue;
-      }
-
       return true;
     } catch {
       return true;
