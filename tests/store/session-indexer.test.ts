@@ -16,8 +16,9 @@ import {
   indexCurrentSession,
   indexLiveSession,
   parseSessionManagerSnapshot,
+  upsertSessionFileMetadata,
 } from '../../src/store/session-indexer.js';
-import type { ParsedSession } from '../../src/store/session-parser.js';
+import { parseSessionFile, type ParsedSession } from '../../src/store/session-parser.js';
 
 describe('session-indexer', () => {
   let tmpDir: string;
@@ -277,6 +278,28 @@ describe('session-indexer', () => {
       assert.strictEqual(result.reachedLimit, true);
       assert.strictEqual(dbManager.getStats().sessions, 1);
     });
+
+    it('processes the most recently modified changed files first when the cap is reached', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      // Write an older file first, then a newer one. With newest-first ordering
+      // the newer file must be indexed even when the cap only allows one file.
+      const olderPath = path.join(sessionsDir, 'project-a', 'older.jsonl');
+      const newerPath = path.join(sessionsDir, 'project-a', 'newer.jsonl');
+      writeJsonlSession(olderPath, 'older');
+      // Ensure a measurable mtime gap (some filesystems have coarse mtime resolution).
+      const past = new Date(Date.now() - 60_000);
+      fs.utimesSync(olderPath, past, past);
+      writeJsonlSession(newerPath, 'newer');
+
+      const result = indexChangedSessions(dbManager, sessionsDir, { maxFilesToIndex: 1 });
+
+      assert.strictEqual(result.sessionsProcessed, 1);
+      assert.strictEqual(result.reachedLimit, true);
+      assert.strictEqual(dbManager.getStats().sessions, 1);
+      // The newer file should be the one indexed.
+      const indexed = dbManager.getDb().prepare('SELECT id FROM sessions').all() as { id: string }[];
+      assert.deepStrictEqual(indexed.map((r) => r.id), ['newer']);
+    });
   });
 
   describe('current session indexing helpers', () => {
@@ -472,6 +495,34 @@ describe('session-indexer', () => {
 
       const row = dbManager.getDb().prepare('SELECT value FROM extension_metadata WHERE key = ?').get(LAST_SESSION_BACKFILL_KEY) as { value: string };
       assert.strictEqual(row.value, '2026-05-03T01:00:00.000Z');
+    });
+
+    it('upsertSessionFileMetadata keeps stored metadata in sync after a session file is appended', () => {
+      // Mirrors the session_shutdown path: index the session, then upsert the
+      // file metadata for the final on-disk state. A subsequent
+      // indexChangedSessions pass must skip the file instead of re-parsing it.
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'project-a', 's1');
+      const filePath = path.join(sessionsDir, 'project-a', 's1.jsonl');
+
+      indexAllSessions(dbManager, sessionsDir);
+      // Simulate Pi appending the closing entry on shutdown.
+      fs.appendFileSync(filePath, '\n' + JSON.stringify({
+        type: 'message',
+        id: 's1-m2',
+        parentId: null,
+        timestamp: '2026-05-03T00:02:00Z',
+        message: { role: 'user', content: [{ type: 'text', text: 'Hello again' }], timestamp: Date.now() },
+      }));
+      const session = parseSessionFile(filePath);
+      indexSession(dbManager, session);
+      upsertSessionFileMetadata(dbManager, filePath, session.id);
+
+      const result = indexChangedSessions(dbManager, sessionsDir);
+
+      assert.strictEqual(result.sessionsProcessed, 0);
+      assert.strictEqual(result.sessionsSkipped, 1);
+      assert.strictEqual(result.reachedLimit, undefined);
     });
   });
 

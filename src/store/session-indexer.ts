@@ -237,7 +237,7 @@ function storedSessionFileMatches(dbManager: DatabaseManager, metadata: SessionF
   return Boolean(row && row.size === metadata.size && row.mtime_ms === metadata.mtimeMs);
 }
 
-function upsertSessionFileMetadata(
+export function upsertSessionFileMetadata(
   dbManager: DatabaseManager,
   filePath: string,
   sessionId: string,
@@ -328,6 +328,13 @@ export function indexChangedSessions(
   const maxFilesToIndex = options.maxFilesToIndex ?? 50;
   const result = emptyBulkIndexResult();
 
+  // Gather the changed set first, then sort newest-first before applying the
+  // cap. Crash recovery is the primary value of startup backfill (the live
+  // message_end path missed the session's final state), and crashed sessions
+  // are the most recently modified files. Sorting newest-first ensures they
+  // are indexed on the very next startup instead of waiting behind old
+  // historical files that fill the per-startup cap in filesystem order.
+  const changed: SessionFileMetadata[] = [];
   for (const file of files) {
     try {
       const metadata = getSessionFileMetadata(file);
@@ -335,15 +342,23 @@ export function indexChangedSessions(
         result.sessionsSkipped++;
         continue;
       }
-
-      if (result.sessionsProcessed >= maxFilesToIndex) {
-        result.reachedLimit = true;
-        break;
-      }
-
-      indexSessionFile(dbManager, file, result);
+      changed.push(metadata);
     } catch (err) {
       result.errors.push(`Error indexing ${file}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  changed.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  for (const metadata of changed) {
+    if (result.sessionsProcessed >= maxFilesToIndex) {
+      result.reachedLimit = true;
+      break;
+    }
+    try {
+      indexSessionFile(dbManager, metadata.path, result);
+    } catch (err) {
+      result.errors.push(`Error indexing ${metadata.path}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
