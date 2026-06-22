@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.19] - 2026-06-23
+
+### Fixed
+
+- **Bounded startup session backfill** ([#83](https://github.com/chandra447/pi-hermes-memory/issues/83), [#84](https://github.com/chandra447/pi-hermes-memory/pull/84)): startup no longer synchronously parses the full session history. The `session_start` backfill now does a stat-only discovery pass and only parses files without matching stored size/mtime metadata, capped at 50 files per startup, instead of calling `indexAllSessions` on every Pi launch. Eliminates multi-second startup stalls for users with large session archives.
+- **Newest-first backfill ordering** ([#85](https://github.com/chandra447/pi-hermes-memory/pull/85)): `indexChangedSessions` now sorts changed files by modification time descending before applying the per-startup cap, so recently crashed sessions are indexed on the next startup instead of waiting behind old historical files.
+- **Shutdown metadata sync** ([#85](https://github.com/chandra447/pi-hermes-memory/pull/85)): the `session_shutdown` handler now upserts `session_files` metadata after indexing, so stored size/mtime reflects the final on-disk state. Prevents every startup from re-parsing recently-closed sessions whose metadata had gone stale.
+
 ### Fixed
 
 - **Failure-memory consolidation** ([#68](https://github.com/chandra447/pi-hermes-memory/issues/68)): `failures.md` now participates in both automatic and manual consolidation flows, so full failure memory no longer gets stuck in a persistent overflow state while other core memory targets can recover.
