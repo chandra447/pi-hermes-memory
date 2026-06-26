@@ -9,7 +9,7 @@ import { DatabaseManager } from '../store/db.js';
 import { indexAllSessions, getSessionStats } from '../store/session-indexer.js';
 import { AGENT_ROOT } from '../paths.js';
 
-const SESSIONS_DIR = path.join(AGENT_ROOT, 'sessions');
+const SESSIONS_DIR = process.env.PI_CODING_AGENT_SESSION_DIR || path.join(AGENT_ROOT, 'sessions');
 
 export function registerIndexSessionsCommand(pi: ExtensionAPI): void {
   pi.registerCommand("memory-index-sessions", {
