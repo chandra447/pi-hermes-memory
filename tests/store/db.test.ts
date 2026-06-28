@@ -176,6 +176,81 @@ describe('DatabaseManager', () => {
       migratedManager.close();
     });
 
+    it('should migrate legacy sessions table without project column', () => {
+      const dbPath = path.join(tmpDir, 'sessions.db');
+      const legacyDb = new Database(dbPath);
+
+      legacyDb.exec(`
+        CREATE TABLE sessions (
+          id TEXT PRIMARY KEY,
+          cwd TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          ended_at TEXT,
+          message_count INTEGER DEFAULT 0
+        );
+      `);
+      legacyDb.prepare(`
+        INSERT INTO sessions (id, cwd, started_at)
+        VALUES (?, ?, ?)
+      `).run('legacy-session', '/work/my-app', '2026-05-03T00:00:00Z');
+      legacyDb.close();
+
+      const migratedManager = new DatabaseManager(tmpDir);
+      const migratedDb = migratedManager.getDb();
+      const columns = migratedDb.prepare('PRAGMA table_info(sessions)').all() as { name: string }[];
+      const names = columns.map((c) => c.name);
+
+      assert.ok(names.includes('project'));
+
+      const row = migratedDb.prepare('SELECT project FROM sessions WHERE id = ?').get('legacy-session') as { project: string };
+      assert.strictEqual(row.project, 'my-app');
+
+      assert.doesNotThrow(() => {
+        migratedDb.prepare(`
+          INSERT INTO sessions (id, project, cwd, started_at)
+          VALUES (?, ?, ?, ?)
+        `).run('new-session', 'new-project', '/work/new-project', '2026-05-04T00:00:00Z');
+      });
+
+      migratedManager.close();
+    });
+
+    it('should migrate legacy memories table without project column', () => {
+      const dbPath = path.join(tmpDir, 'sessions.db');
+      const legacyDb = new Database(dbPath);
+
+      legacyDb.exec(`
+        CREATE TABLE memories (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          target TEXT NOT NULL CHECK (target IN ('memory', 'user')),
+          content TEXT NOT NULL,
+          created DATE NOT NULL,
+          last_referenced DATE NOT NULL
+        );
+      `);
+      legacyDb.prepare(`
+        INSERT INTO memories (target, content, created, last_referenced)
+        VALUES (?, ?, ?, ?)
+      `).run('memory', 'legacy memory entry', '2026-05-09', '2026-05-09');
+      legacyDb.close();
+
+      const migratedManager = new DatabaseManager(tmpDir);
+      const migratedDb = migratedManager.getDb();
+      const columns = migratedDb.prepare('PRAGMA table_info(memories)').all() as { name: string }[];
+      const names = columns.map((c) => c.name);
+
+      assert.ok(names.includes('project'));
+
+      const row = migratedDb.prepare('SELECT project, content FROM memories').get() as {
+        project: string | null;
+        content: string;
+      };
+      assert.strictEqual(row.project, null);
+      assert.strictEqual(row.content, 'legacy memory entry');
+
+      migratedManager.close();
+    });
+
     it('should migrate legacy target CHECK constraint to allow failure entries', () => {
       const dbPath = path.join(tmpDir, 'sessions.db');
       const legacyDb = new Database(dbPath);

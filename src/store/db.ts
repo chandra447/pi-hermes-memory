@@ -245,19 +245,19 @@ export class DatabaseManager {
     try {
       db.exec(SCHEMA_SQL);
     } catch (err) {
-      if (!this.isLegacyMemoriesCategoryError(err)) {
+      if (!this.isLegacySchemaError(err)) {
         throw err;
       }
 
-      // Legacy DB from pre-v0.6 can have memories table without the category
-      // and failure metadata columns. Add missing columns, then retry schema.
-      this.ensureMemoriesColumns(db);
+      // Legacy DBs can be missing v0.6 failure-memory columns and/or the project
+      // column on sessions/memories. Add missing columns, then retry schema.
+      this.ensureLegacySchemaColumns(db);
       db.exec(SCHEMA_SQL);
     }
 
-    // Extra safety: always ensure legacy memories columns exist, then migrate
-    // legacy CHECK(target IN ('memory','user')) constraints to include 'failure'.
-    this.ensureMemoriesColumns(db);
+    // Extra safety: always ensure legacy columns exist, then migrate legacy
+    // CHECK(target IN ('memory','user')) constraints to include 'failure'.
+    this.ensureLegacySchemaColumns(db);
     this.migrateLegacyMemoriesTargetConstraint(db);
     this.rebuildMemoryFts(db);
   }
@@ -590,19 +590,30 @@ export class DatabaseManager {
     try { db.close(); } catch { /* best effort */ }
   }
 
-  private isLegacyMemoriesCategoryError(err: unknown): boolean {
+  private isLegacySchemaError(err: unknown): boolean {
     if (!(err instanceof Error)) return false;
     const msg = err.message.toLowerCase();
-    return msg.includes('no such column: category') || msg.includes('memories(category)');
+    return msg.includes('no such column: category')
+      || msg.includes('memories(category)')
+      || msg.includes('no such column: project')
+      || msg.includes('sessions(project)')
+      || msg.includes('memories(project)');
+  }
+
+  private ensureLegacySchemaColumns(db: DatabaseLike): void {
+    this.ensureMemoriesColumns(db);
+    this.ensureSessionsColumns(db);
   }
 
   private ensureMemoriesColumns(db: DatabaseLike): void {
     const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memories'").get() as { name: string } | undefined;
     if (!tableExists) return;
 
-    const columns = db.prepare('PRAGMA table_info(memories)').all() as { name: string }[];
-    const names = new Set(columns.map((c) => c.name));
+    const names = this.getColumnNames(db, 'memories');
 
+    if (!names.has('project')) {
+      db.exec('ALTER TABLE memories ADD COLUMN project TEXT');
+    }
     if (!names.has('category')) {
       db.exec('ALTER TABLE memories ADD COLUMN category TEXT');
     }
@@ -614,6 +625,40 @@ export class DatabaseManager {
     }
     if (!names.has('corrected_to')) {
       db.exec('ALTER TABLE memories ADD COLUMN corrected_to TEXT');
+    }
+  }
+
+  private ensureSessionsColumns(db: DatabaseLike): void {
+    const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'").get() as { name: string } | undefined;
+    if (!tableExists) return;
+
+    const names = this.getColumnNames(db, 'sessions');
+    if (!names.has('project')) {
+      db.exec('ALTER TABLE sessions ADD COLUMN project TEXT');
+    }
+
+    this.backfillSessionsProject(db);
+  }
+
+  private backfillSessionsProject(db: DatabaseLike): void {
+    const names = this.getColumnNames(db, 'sessions');
+    if (!names.has('project') || !names.has('cwd') || !names.has('id')) return;
+
+    const rows = db.prepare('SELECT id, cwd, project FROM sessions').all() as Array<{
+      id?: unknown;
+      cwd?: unknown;
+      project?: unknown;
+    }>;
+    const update = db.prepare('UPDATE sessions SET project = ? WHERE id = ?');
+
+    for (const row of rows) {
+      if (typeof row.id !== 'string') continue;
+      if (typeof row.project === 'string' && row.project.trim()) continue;
+
+      const project = typeof row.cwd === 'string' && row.cwd.trim()
+        ? (path.basename(row.cwd) || 'unknown')
+        : 'unknown';
+      update.run(project, row.id);
     }
   }
 
