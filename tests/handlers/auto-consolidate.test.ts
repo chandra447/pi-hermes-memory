@@ -14,6 +14,22 @@ import { ENTRY_DELIMITER } from "../../src/constants.js";
 // ─── Mock infrastructure ───
 
 let execCalls: any[];
+let LOCK_DIR = "";
+const OLD_LOCK_DIR = process.env.PI_HERMES_CONSOLIDATION_LOCK_DIR;
+
+before(async () => {
+  LOCK_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "pi-consolidation-lock-"));
+  process.env.PI_HERMES_CONSOLIDATION_LOCK_DIR = LOCK_DIR;
+});
+
+after(async () => {
+  if (OLD_LOCK_DIR === undefined) {
+    delete process.env.PI_HERMES_CONSOLIDATION_LOCK_DIR;
+  } else {
+    process.env.PI_HERMES_CONSOLIDATION_LOCK_DIR = OLD_LOCK_DIR;
+  }
+  try { await fs.rm(LOCK_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
+});
 
 function logicalChildArgs(call: any[]): string[] {
   const [cmd, args] = call;
@@ -80,6 +96,34 @@ describe("triggerConsolidation", () => {
 
     assert.strictEqual(result.consolidated, true);
     assert.strictEqual(result.error, undefined);
+  });
+
+  it("skips duplicate consolidation subprocesses for the same target", async () => {
+    let releaseExec!: () => void;
+    let markExecStarted!: () => void;
+    const execStarted = new Promise<void>((resolve) => { markExecStarted = resolve; });
+    const pi = {
+      on: () => {},
+      exec: async (...args: any[]) => {
+        execCalls.push(args);
+        markExecStarted();
+        await new Promise<void>((release) => { releaseExec = release; });
+        return { code: 0, stdout: "Done", stderr: "" };
+      },
+      registerTool: () => {},
+      registerCommand: () => {},
+    } as any;
+
+    const first = triggerConsolidation(pi, mockStore, "memory");
+    await execStarted;
+
+    const second = await triggerConsolidation(pi, mockStore, "memory");
+    assert.strictEqual(second.consolidated, false);
+    assert.match(second.error!, /already in progress/i);
+    assert.strictEqual(execCalls.length, 1, "only one child Pi process should be spawned");
+
+    releaseExec();
+    assert.strictEqual((await first).consolidated, true);
   });
 
   it("returns { consolidated: false } on failure (non-zero exit code)", async () => {
