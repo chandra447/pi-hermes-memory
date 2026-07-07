@@ -7,14 +7,84 @@
  * from disk after consolidation completes.
  */
 
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import { CONSOLIDATION_PROMPT, ENTRY_DELIMITER } from "../constants.js";
 import type { ConsolidationResult, MemoryConfig } from "../types.js";
+import { AGENT_ROOT } from "../paths.js";
 import { execChildPrompt } from "./pi-child-process.js";
 
 type MemoryTarget = "memory" | "user" | "failure";
 type ToolMemoryTarget = MemoryTarget | "project";
+
+const CONSOLIDATION_LOCK_STALE_GRACE_MS = 30000;
+const CONSOLIDATION_LOCK_ENV = "PI_HERMES_CONSOLIDATION_LOCK_DIR";
+
+interface ConsolidationLock {
+  path: string;
+  release: () => Promise<void>;
+}
+
+function consolidationLockRoot(): string {
+  return process.env[CONSOLIDATION_LOCK_ENV]?.trim()
+    || path.join(AGENT_ROOT, "pi-hermes-memory", ".consolidation-locks");
+}
+
+function sanitizeLockPart(value: string): string {
+  return value.replace(/[^a-z0-9._-]+/gi, "_").slice(0, 80) || "unknown";
+}
+
+function consolidationLockPath(target: MemoryTarget, toolTarget: ToolMemoryTarget): string {
+  return path.join(consolidationLockRoot(), `${sanitizeLockPart(toolTarget)}-${sanitizeLockPart(target)}.lock`);
+}
+
+async function lockIsStale(lockDir: string, timeoutMs: number): Promise<boolean> {
+  try {
+    const stat = await fs.stat(lockDir);
+    const staleAfterMs = Math.max(timeoutMs, 0) + CONSOLIDATION_LOCK_STALE_GRACE_MS;
+    return Date.now() - stat.mtimeMs > staleAfterMs;
+  } catch {
+    return false;
+  }
+}
+
+async function tryAcquireConsolidationLock(
+  target: MemoryTarget,
+  toolTarget: ToolMemoryTarget,
+  timeoutMs: number,
+): Promise<ConsolidationLock | null> {
+  const lockDir = consolidationLockPath(target, toolTarget);
+  await fs.mkdir(path.dirname(lockDir), { recursive: true });
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await fs.mkdir(lockDir);
+      await fs.writeFile(
+        path.join(lockDir, "owner.json"),
+        JSON.stringify({ pid: process.pid, target, toolTarget, startedAt: new Date().toISOString() }, null, 2),
+        "utf-8",
+      );
+      return {
+        path: lockDir,
+        release: async () => {
+          await fs.rm(lockDir, { recursive: true, force: true });
+        },
+      };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") throw err;
+      if (attempt === 0 && await lockIsStale(lockDir, timeoutMs)) {
+        await fs.rm(lockDir, { recursive: true, force: true });
+        continue;
+      }
+      return null;
+    }
+  }
+
+  return null;
+}
 
 function entriesForTarget(store: MemoryStore, target: MemoryTarget): string[] {
   if (target === "user") return store.getUserEntries();
@@ -64,7 +134,17 @@ export async function triggerConsolidation(
     `Use the memory tool to consolidate. Target: '${toolTarget}'`,
   ].join("\n");
 
+  let lock: ConsolidationLock | null = null;
+
   try {
+    lock = await tryAcquireConsolidationLock(target, toolTarget, timeoutMs);
+    if (!lock) {
+      return {
+        consolidated: false,
+        error: `Consolidation already in progress for target '${toolTarget}'. Skipping duplicate subprocess.`,
+      };
+    }
+
     const result = await execChildPrompt(pi, prompt, llmConfig, {
       signal,
       timeoutMs,
@@ -83,6 +163,10 @@ export async function triggerConsolidation(
       consolidated: false,
       error: `Consolidation failed: ${String(err).slice(0, 200)}`,
     };
+  } finally {
+    if (lock) {
+      try { await lock.release(); } catch { /* best-effort cleanup */ }
+    }
   }
 }
 
