@@ -775,4 +775,94 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.ok(!memRaw.includes(`${TEST_MARKER} user fact`));
     });
   });
+
+  // ─── External write detection (consolidation race) ───
+
+  describe("external file changes (consolidation race)", () => {
+    /** Ensure the next external write gets a distinct mtime on coarse-grained filesystems. */
+    async function tick(): Promise<void> {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    it("add() after an external rewrite preserves the on-disk state instead of clobbering it", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+
+      await store.add("memory", `${TEST_MARKER} stale entry A`);
+      await settle();
+
+      // Simulate a consolidation child process rewriting the file on disk
+      await tick();
+      const consolidated = `${TEST_MARKER} CONSOLIDATED entry <!-- created=2026-01-01, last=2026-01-01 -->`;
+      await writeRaw(memoryPath, consolidated);
+
+      const result = await store.add("memory", `${TEST_MARKER} entry B after consolidation`);
+      await settle();
+
+      assert.ok(result.success);
+      const raw = await readRaw(memoryPath);
+      assert.ok(raw.includes("CONSOLIDATED entry"), "externally-written consolidated content must survive");
+      assert.ok(raw.includes(`${TEST_MARKER} entry B after consolidation`), "new entry must be appended");
+      assert.ok(!raw.includes(`${TEST_MARKER} stale entry A`), "stale pre-consolidation entry must not be resurrected");
+    });
+
+    it("remove() matches entries written externally after the last load", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+
+      await store.add("memory", `${TEST_MARKER} original entry`);
+      await settle();
+
+      await tick();
+      const external = `${TEST_MARKER} externally added entry <!-- created=2026-01-01, last=2026-01-01 -->`;
+      const current = await readRaw(memoryPath);
+      await writeRaw(memoryPath, current + ENTRY_DELIMITER + external);
+
+      const result = await store.remove("memory", `${TEST_MARKER} externally added entry`);
+      await settle();
+
+      assert.ok(result.success, "remove should see the externally-added entry");
+      const raw = await readRaw(memoryPath);
+      assert.ok(!raw.includes("externally added entry"));
+      assert.ok(raw.includes(`${TEST_MARKER} original entry`));
+    });
+
+    it("replace() matches entries written externally after the last load", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+
+      await tick();
+      const external = `${TEST_MARKER} external entry to replace <!-- created=2026-01-01, last=2026-01-01 -->`;
+      await writeRaw(memoryPath, external);
+
+      const result = await store.replace(
+        "memory",
+        `${TEST_MARKER} external entry to replace`,
+        `${TEST_MARKER} replaced content`,
+      );
+      await settle();
+
+      assert.ok(result.success, "replace should see the externally-written entry");
+      const raw = await readRaw(memoryPath);
+      assert.ok(raw.includes(`${TEST_MARKER} replaced content`));
+      assert.ok(!raw.includes("external entry to replace"));
+      // Original created date must be preserved from the external entry
+      assert.ok(raw.includes("created=2026-01-01"));
+    });
+
+    it("does not reload when the file is unchanged (steady state)", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+
+      await store.add("memory", `${TEST_MARKER} first`);
+      await store.add("memory", `${TEST_MARKER} second`);
+      await settle();
+
+      const raw = await readRaw(memoryPath);
+      assert.ok(raw.includes(`${TEST_MARKER} first`));
+      assert.ok(raw.includes(`${TEST_MARKER} second`));
+      const count = raw.split(ENTRY_DELIMITER).filter(Boolean).length;
+      assert.equal(count, 2);
+    });
+  });
 });

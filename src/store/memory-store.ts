@@ -32,6 +32,8 @@ export class MemoryStore {
   private userEntries: string[] = [];
   private failureEntries: string[] = [];
   private snapshot: MemorySnapshot = { memory: "", user: "" };
+  /** Per-file fingerprint (mtimeMs:size) captured at last load/save — detects external writes. */
+  private fileFingerprints: Record<string, string> = {};
   private consolidator: ((target: "memory" | "user" | "failure", signal?: AbortSignal) => Promise<ConsolidationResult>) | null = null;
 
   constructor(private config: MemoryConfig) {}
@@ -90,6 +92,11 @@ export class MemoryStore {
     this.userEntries = await this.readFile(this.pathFor("user"));
     this.failureEntries = await this.readFile(this.pathFor("failure"));
 
+    for (const target of ["memory", "user", "failure"] as const) {
+      const filePath = this.pathFor(target);
+      this.fileFingerprints[filePath] = await this.fingerprintOf(filePath);
+    }
+
     // Deduplicate preserving order
     this.memoryEntries = [...new Set(this.memoryEntries)];
     this.userEntries = [...new Set(this.userEntries)];
@@ -147,6 +154,12 @@ export class MemoryStore {
 
     const scanError = scanContent(content);
     if (scanError) return { success: false, error: scanError };
+
+    // Guard against external file writes (e.g. a consolidation child process):
+    // re-sync this target from disk before mutating, or the save below would
+    // clobber the newer on-disk state (and our new entry could later be lost
+    // to a loadFromDisk that discards unsaved in-memory changes).
+    await this.syncTargetFromDiskIfChanged(target);
 
     const entries = this.entriesFor(target);
     const limit = this.charLimit(target);
@@ -244,6 +257,9 @@ export class MemoryStore {
     const scanError = scanContent(newContent);
     if (scanError) return { success: false, error: scanError };
 
+    // Re-sync from disk if the file changed externally (see _add).
+    await this.syncTargetFromDiskIfChanged(target);
+
     const entries = this.entriesFor(target);
     // Match against stripped text (entries may have metadata comments)
     const matches = entries.filter((e) => this.stripMetadata(e).includes(oldText));
@@ -284,6 +300,9 @@ export class MemoryStore {
   async remove(target: "memory" | "user" | "failure", oldText: string): Promise<MemoryResult> {
     oldText = normalizeMemoryLookupText(oldText);
     if (!oldText) return { success: false, error: "old_text cannot be empty." };
+
+    // Re-sync from disk if the file changed externally (see _add).
+    await this.syncTargetFromDiskIfChanged(target);
 
     const entries = this.entriesFor(target);
     const matches = entries.filter((e) => this.stripMetadata(e).includes(oldText));
@@ -470,6 +489,32 @@ export class MemoryStore {
     return `${header}\n${bulletList}`;
   }
 
+  /** Fingerprint of a file's current on-disk state; "missing" when unreadable. */
+  private async fingerprintOf(filePath: string): Promise<string> {
+    try {
+      const st = await fs.stat(filePath);
+      return `${st.mtimeMs}:${st.size}`;
+    } catch {
+      return "missing";
+    }
+  }
+
+  /**
+   * If the target's file changed on disk since our last load/save (external
+   * writer: consolidation child process, another pi session, manual edit),
+   * re-read just that target so mutations apply on top of the fresh state
+   * instead of clobbering it with stale in-memory arrays.
+   * Does NOT rebuild the frozen system-prompt snapshot (prompt-cache safety).
+   */
+  private async syncTargetFromDiskIfChanged(target: "memory" | "user" | "failure"): Promise<void> {
+    const filePath = this.pathFor(target);
+    const fp = await this.fingerprintOf(filePath);
+    if (this.fileFingerprints[filePath] === fp) return;
+    const entries = await this.readFile(filePath);
+    this.setEntries(target, [...new Set(entries)]);
+    this.fileFingerprints[filePath] = fp;
+  }
+
   private async readFile(filePath: string): Promise<string[]> {
     try {
       const raw = await fs.readFile(filePath, "utf-8");
@@ -498,6 +543,7 @@ export class MemoryStore {
     try {
       await fs.writeFile(tmpPath, content, "utf-8");
       await fs.rename(tmpPath, filePath);
+      this.fileFingerprints[filePath] = await this.fingerprintOf(filePath);
     } catch (err) {
       try { await fs.unlink(tmpPath); } catch { /* ignore */ }
       throw err;
