@@ -194,7 +194,7 @@ describe('session live indexing handler', () => {
 
     assert.equal(attempts, 2);
     assert.equal(errors.length, 0);
-    assert.equal(dbManager.getLastRecovery()?.strategy, 'rebuilt');
+    assert.equal(dbManager.getLastRecovery()?.strategy, 'reused');
   });
 
   it('shutdown wait resolves true when live indexing completes before timeout', async () => {

@@ -16,7 +16,10 @@ import {
   removeSyncedMemories,
   parseMarkdownMemoryEntry,
   formatFailureMemoryContent,
+  reconcileMarkdownMemoryScope,
+  reconcileMarkdownFailureScopes,
 } from '../../src/store/sqlite-memory-store.js';
+import { MemoryStore } from '../../src/store/memory-store.js';
 
 describe('sqlite-memory-store', () => {
   let tmpDir: string;
@@ -114,6 +117,140 @@ describe('sqlite-memory-store', () => {
       assert.strictEqual(parsed.failureReason, 'npm install rewrote lockfile');
       assert.strictEqual(parsed.created, '2026-05-08');
       assert.strictEqual(parsed.lastReferenced, '2026-05-09');
+    });
+
+    it('does not infer project scope from spoofable failure content', () => {
+      const raw = '[correction] literal user text — Project: other-project <!-- created=2026-05-08, last=2026-05-09 -->';
+
+      reconcileMarkdownFailureScopes(dbManager, [raw]);
+
+      assert.strictEqual(getMemories(dbManager, { target: 'failure', project: 'other-project' }).length, 0);
+      assert.strictEqual(getMemories(dbManager, { target: 'failure', project: null }).length, 1);
+    });
+
+    it('round-trips project correction scope through authoritative Markdown metadata', async () => {
+      const store = new MemoryStore({
+        memoryDir: tmpDir,
+        memoryCharLimit: 5_000,
+        userCharLimit: 5_000,
+        failureCharLimit: 5_000,
+      } as any);
+      await store.loadFromDisk();
+
+      await store.addFailure('use pnpm in this repo', {
+        category: 'correction',
+        failureReason: 'User corrected the agent',
+        project: 'project-a',
+      });
+      const [raw] = store.getRawEntriesForSync('failure');
+      reconcileMarkdownFailureScopes(dbManager, [raw]);
+
+      const entries = getMemories(dbManager, { target: 'failure', project: 'project-a' });
+      assert.strictEqual(entries.length, 1);
+      assert.strictEqual(entries[0].project, 'project-a');
+      assert.doesNotMatch(entries[0].content, /Project: project-a/);
+    });
+  });
+
+  describe('reconcileMarkdownMemoryScope', () => {
+    it('keeps explicit global MEMORY and USER scope despite embedded project metadata', () => {
+      const marker = 'c3Bvb2ZlZC1wcm9qZWN0';
+
+      reconcileMarkdownMemoryScope(
+        dbManager,
+        [`global memory <!-- created=2026-07-01, last=2026-07-02, project64=${marker} -->`],
+        'memory',
+        null,
+      );
+      reconcileMarkdownMemoryScope(
+        dbManager,
+        [`global user <!-- created=2026-07-01, last=2026-07-02, project64=${marker} -->`],
+        'user',
+        null,
+      );
+
+      assert.deepStrictEqual(
+        getMemories(dbManager).map((entry) => [entry.project, entry.target, entry.content]),
+        [
+          [null, 'memory', 'global memory'],
+          [null, 'user', 'global user'],
+        ],
+      );
+      assert.deepStrictEqual(getMemories(dbManager, { project: 'spoofed-project' }), []);
+    });
+
+    it('prunes only absent rows in the exact target and project scope', () => {
+      addMemory(dbManager, 'kept global memory', 'memory', null);
+      addMemory(dbManager, 'orphaned global memory', 'memory', null);
+      addMemory(dbManager, 'unrelated global user', 'user', null);
+      addMemory(dbManager, 'unrelated project memory', 'memory', 'project-a');
+
+      const first = reconcileMarkdownMemoryScope(
+        dbManager,
+        ['kept global memory <!-- created=2026-07-01, last=2026-07-02 -->'],
+        'memory',
+        null,
+      );
+      const second = reconcileMarkdownMemoryScope(
+        dbManager,
+        ['kept global memory <!-- created=2026-07-01, last=2026-07-02 -->'],
+        'memory',
+        null,
+      );
+
+      assert.strictEqual(first.removed, 1);
+      assert.strictEqual(second.removed, 0);
+      assert.deepStrictEqual(
+        getMemories(dbManager).map((entry) => entry.content).sort(),
+        ['kept global memory', 'unrelated global user', 'unrelated project memory'].sort(),
+      );
+    });
+
+    it('removes duplicate and stale-category rows by full Markdown identity', () => {
+      const first = addMemory(
+        dbManager,
+        '[correction] use pnpm',
+        'failure',
+        'project-a',
+        'correction',
+        'original reason',
+        null,
+        'pnpm install',
+        '2026-06-01',
+        '2026-07-05',
+      );
+      addMemory(dbManager, '[correction] use pnpm', 'failure', 'project-a', 'correction');
+      addMemory(dbManager, '[correction] use pnpm', 'failure', 'project-a', 'tool-quirk');
+
+      const result = reconcileMarkdownMemoryScope(
+        dbManager,
+        ['[correction] use pnpm <!-- created=2026-07-01, last=2026-07-02, project64=cHJvamVjdC1h -->'],
+        'failure',
+        'project-a',
+      );
+
+      const rows = dbManager.getDb().prepare(`
+        SELECT id, category, failure_reason, corrected_to, created, last_referenced
+        FROM memories
+        WHERE project = 'project-a' AND target = 'failure'
+      `).all() as Array<{
+        id: number;
+        category: string | null;
+        failure_reason: string | null;
+        corrected_to: string | null;
+        created: string;
+        last_referenced: string;
+      }>;
+
+      assert.strictEqual(result.removed, 2);
+      assert.deepStrictEqual(rows, [{
+        id: first.id,
+        category: 'correction',
+        failure_reason: 'original reason',
+        corrected_to: 'pnpm install',
+        created: '2026-06-01',
+        last_referenced: '2026-07-05',
+      }]);
     });
   });
 

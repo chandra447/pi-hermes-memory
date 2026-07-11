@@ -10,6 +10,7 @@ import { registerMemoryTool } from "../../src/tools/memory-tool.js";
 import { MemoryStore } from "../../src/store/memory-store.js";
 import { DatabaseManager } from "../../src/store/db.js";
 import { getMemories, syncMemoryEntry } from "../../src/store/sqlite-memory-store.js";
+import { ENTRY_DELIMITER, MEMORY_FILE } from "../../src/constants.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 describe("registerMemoryTool", () => {
@@ -148,6 +149,99 @@ describe("registerMemoryTool", () => {
     const results = getMemories(dbManager, { target: 'memory', project: null });
     assert.strictEqual(results.length, 1);
     assert.strictEqual(results[0].content, 'Entry one');
+  });
+
+  it("prunes same-scope SQLite orphans after a Markdown mutation", async () => {
+    let capturedResult: any;
+    const mockPi = {
+      registerTool: (definition: any) => { capturedResult = definition; },
+    } as unknown as ExtensionAPI;
+    const store = new MemoryStore({
+      memoryMode: "policy-only",
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      projectCharLimit: 5000,
+      nudgeInterval: 10,
+      reviewEnabled: false,
+      flushOnCompact: false,
+      flushOnShutdown: false,
+      flushMinTurns: 6,
+      autoConsolidate: false,
+      correctionDetection: false,
+      failureInjectionEnabled: true,
+      failureInjectionMaxAgeDays: 7,
+      failureInjectionMaxEntries: 5,
+      nudgeToolCalls: 15,
+      consolidationTimeoutMs: 60000,
+      memoryDir: tmpDir,
+    });
+    await store.loadFromDisk();
+    syncMemoryEntry(dbManager, { content: "orphaned row", target: "memory", project: null });
+
+    registerMemoryTool(mockPi, store, null, dbManager);
+    await capturedResult.execute(
+      "tc-1",
+      { action: "add", target: "memory", content: "authoritative Markdown row" },
+      undefined,
+      undefined,
+      undefined,
+    );
+
+    assert.deepStrictEqual(
+      getMemories(dbManager, { target: "memory", project: null }).map((entry) => entry.content),
+      ["authoritative Markdown row"],
+    );
+  });
+
+  it("reconciles SQLite from fresh authoritative Markdown state", async () => {
+    let capturedResult: any;
+    const mockPi = {
+      registerTool: (definition: any) => { capturedResult = definition; },
+    } as unknown as ExtensionAPI;
+    const store = new MemoryStore({
+      memoryMode: "policy-only",
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      projectCharLimit: 5000,
+      nudgeInterval: 10,
+      reviewEnabled: false,
+      flushOnCompact: false,
+      flushOnShutdown: false,
+      flushMinTurns: 6,
+      autoConsolidate: false,
+      correctionDetection: false,
+      failureInjectionEnabled: true,
+      failureInjectionMaxAgeDays: 7,
+      failureInjectionMaxEntries: 5,
+      nudgeToolCalls: 15,
+      consolidationTimeoutMs: 60000,
+      memoryDir: tmpDir,
+    });
+    await store.loadFromDisk();
+
+    const originalSave = (store as any).saveToDisk.bind(store);
+    (store as any).saveToDisk = async (target: "memory") => {
+      await originalSave(target);
+      const markdownPath = path.join(tmpDir, MEMORY_FILE);
+      const existing = fs.readFileSync(markdownPath, "utf-8");
+      const date = new Date().toISOString().split("T")[0];
+      fs.writeFileSync(markdownPath, `${existing}${ENTRY_DELIMITER}newer writer <!-- created=${date}, last=${date} -->`);
+      syncMemoryEntry(dbManager, { content: "newer writer", target: "memory", project: null });
+    };
+
+    registerMemoryTool(mockPi, store, null, dbManager);
+    await capturedResult.execute(
+      "tc-1",
+      { action: "add", target: "memory", content: "first writer" },
+      undefined,
+      undefined,
+      undefined,
+    );
+
+    assert.deepStrictEqual(
+      getMemories(dbManager, { target: "memory", project: null }).map((entry) => entry.content).sort(),
+      ["first writer", "newer writer"],
+    );
   });
 
   it("removes FIFO-evicted entries from the SQLite mirror", async () => {

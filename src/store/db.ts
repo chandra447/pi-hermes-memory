@@ -2,6 +2,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { SCHEMA_SQL } from './schema.js';
+import { AtomicLockCoordinator } from './atomic-lock-coordinator.js';
+import { canonicalStoragePathSync } from './canonical-storage-path.js';
 
 type StatementLike = {
   run: (...args: any[]) => any;
@@ -34,10 +36,28 @@ type MovedDatabaseFile = {
 };
 
 export interface DatabaseRecoveryResult {
-  strategy: 'rebuilt' | 'recreated-empty';
+  strategy: 'rebuilt' | 'recreated-empty' | 'reused';
   backupPaths: string[];
   recoveredRows?: Record<string, number>;
   error?: string;
+}
+
+export interface DatabaseRecoveryOptions {
+  recoveryLockWaitMs?: number;
+  recoveryLockPollMs?: number;
+  recoveryLockStaleMs?: number;
+  recoveryCircuitLimit?: number;
+  recoveryCircuitWindowMs?: number;
+  recoveryBackupRetention?: number;
+}
+
+interface ResolvedDatabaseRecoveryOptions {
+  recoveryLockWaitMs: number;
+  recoveryLockPollMs: number;
+  recoveryLockStaleMs: number;
+  recoveryCircuitLimit: number;
+  recoveryCircuitWindowMs: number;
+  recoveryBackupRetention: number;
 }
 
 class DatabaseCorruptionError extends Error {
@@ -54,6 +74,14 @@ export const SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
 const DATABASE_FILE_SUFFIXES: readonly DatabaseFileSuffix[] = ['', '-wal', '-shm'];
 const MEMORY_TARGETS = new Set(['memory', 'user', 'failure']);
 const MEMORY_CATEGORIES = new Set(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk']);
+const DEFAULT_RECOVERY_OPTIONS: ResolvedDatabaseRecoveryOptions = {
+  recoveryLockWaitMs: 5000,
+  recoveryLockPollMs: 50,
+  recoveryLockStaleMs: 300000,
+  recoveryCircuitLimit: 3,
+  recoveryCircuitWindowMs: 300000,
+  recoveryBackupRetention: 3,
+};
 
 function quoteIdentifier(identifier: string): string {
   return `"${identifier.replace(/"/g, '""')}"`;
@@ -110,11 +138,26 @@ const Database = loadDatabaseCtor();
 
 export class DatabaseManager {
   private db: DatabaseLike | null = null;
-  private readonly dbPath: string;
+  private readonly displayDbPath: string;
+  private canonicalDbPath: string | null = null;
+  private readonly recoveryOptions: ResolvedDatabaseRecoveryOptions;
   private lastRecovery: DatabaseRecoveryResult | null = null;
+  private openGuard: (() => void) | null = null;
 
-  constructor(memoryDir: string) {
-    this.dbPath = path.join(memoryDir, 'sessions.db');
+  constructor(memoryDir: string, recoveryOptions: DatabaseRecoveryOptions = {}) {
+    this.displayDbPath = path.join(memoryDir, 'sessions.db');
+    this.recoveryOptions = { ...DEFAULT_RECOVERY_OPTIONS, ...recoveryOptions };
+  }
+
+  private get dbPath(): string {
+    if (!this.canonicalDbPath) {
+      this.canonicalDbPath = canonicalStoragePathSync(this.displayDbPath);
+    }
+    return this.canonicalDbPath;
+  }
+
+  setOpenGuard(guard: (() => void) | null): void {
+    this.openGuard = guard;
   }
 
   /**
@@ -147,6 +190,7 @@ export class DatabaseManager {
    */
   getDb(): DatabaseLike {
     if (!this.db) {
+      this.openGuard?.();
       this.db = this.open();
     }
     return this.db;
@@ -181,7 +225,15 @@ export class DatabaseManager {
    */
   recoverFromCorruption(cause?: unknown): DatabaseRecoveryResult {
     this.close();
-    const recovery = this.recoverDatabaseFile(cause);
+    let verifiedDb: DatabaseLike | null = null;
+    let recovery: DatabaseRecoveryResult;
+    try {
+      recovery = this.recoverDatabaseFile(cause, () => {
+        verifiedDb = this.openUnchecked();
+      });
+    } finally {
+      if (verifiedDb) this.safeClose(verifiedDb);
+    }
     this.lastRecovery = recovery;
     return recovery;
   }
@@ -202,9 +254,19 @@ export class DatabaseManager {
         throw err;
       }
 
-      const recovery = this.recoverDatabaseFile(err);
+      let recoveredDb: DatabaseLike | null = null;
+      let recovery: DatabaseRecoveryResult;
+      try {
+        recovery = this.recoverDatabaseFile(err, () => {
+          recoveredDb = this.openUnchecked();
+        });
+      } catch (error) {
+        if (recoveredDb) this.safeClose(recoveredDb);
+        throw error;
+      }
       this.lastRecovery = recovery;
-      return this.openUnchecked();
+      if (!recoveredDb) throw new Error(`SQLite recovery verification did not open ${this.displayDbPath}`);
+      return recoveredDb;
     }
   }
 
@@ -297,7 +359,55 @@ export class DatabaseManager {
     }
   }
 
-  private recoverDatabaseFile(cause?: unknown): DatabaseRecoveryResult {
+  private recoverDatabaseFile(cause: unknown, verify: () => void): DatabaseRecoveryResult {
+    const coordinator = new AtomicLockCoordinator(path.join(path.dirname(this.dbPath), '.pi-hermes-locks.sqlite'));
+    const lockKey = `recovery:${this.dbPath}`;
+    const deadline = Date.now() + Math.max(0, this.recoveryOptions.recoveryLockWaitMs);
+
+    while (true) {
+      const lease = coordinator.tryAcquire(lockKey, { staleMs: this.recoveryOptions.recoveryLockStaleMs });
+      if (!lease) {
+        if (Date.now() >= deadline) {
+          throw new Error(`SQLite recovery already in progress for ${this.displayDbPath}; timed out after ${this.recoveryOptions.recoveryLockWaitMs}ms`);
+        }
+        DatabaseManager.sleepSync(Math.min(
+          this.recoveryOptions.recoveryLockPollMs,
+          Math.max(1, deadline - Date.now()),
+        ));
+        continue;
+      }
+
+      try {
+        if (this.currentDatabaseIsHealthy()) {
+          try {
+            verify();
+            this.clearRecoveryFailuresBestEffort();
+            return { strategy: 'reused', backupPaths: [] };
+          } catch (error) {
+            this.recordRecoveryFailure();
+            throw error;
+          }
+        }
+
+        this.assertRecoveryCircuitClosed();
+        try {
+          this.cleanupRecoveryArtifactsBestEffort();
+          const result = this.recoverDatabaseFileUnlocked(cause);
+          verify();
+          this.cleanupRecoveryArtifactsBestEffort();
+          this.clearRecoveryFailuresBestEffort();
+          return result;
+        } catch (error) {
+          this.recordRecoveryFailure();
+          throw error;
+        }
+      } finally {
+        lease.release();
+      }
+    }
+  }
+
+  private recoverDatabaseFileUnlocked(cause?: unknown): DatabaseRecoveryResult {
     const backupBase = this.corruptBackupBase();
     let rebuildError: unknown;
 
@@ -315,6 +425,112 @@ export class DatabaseManager {
       backupPaths: moved.map((file) => file.backup),
       error: DatabaseManager.errorMessage(rebuildError ?? cause ?? 'unknown corruption'),
     };
+  }
+
+  private currentDatabaseIsHealthy(): boolean {
+    if (!this.hasExistingMainDatabaseFile()) return false;
+    let db: DatabaseLike | null = null;
+    try {
+      db = new Database(this.dbPath);
+      this.assertIntegrityOk(db, 'quick_check', 'while joining corruption recovery');
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (db) this.safeClose(db);
+    }
+  }
+
+  private recoveryCircuitPath(): string {
+    return `${this.dbPath}.recovery-state.json`;
+  }
+
+  private recentRecoveryFailures(): number[] {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.recoveryCircuitPath(), 'utf-8')) as { failures?: unknown };
+      if (!Array.isArray(parsed.failures)) return [];
+      const cutoff = Date.now() - Math.max(0, this.recoveryOptions.recoveryCircuitWindowMs);
+      return parsed.failures.filter((value): value is number => typeof value === 'number' && value >= cutoff);
+    } catch {
+      return [];
+    }
+  }
+
+  private assertRecoveryCircuitClosed(): void {
+    if (this.recentRecoveryFailures().length >= Math.max(1, this.recoveryOptions.recoveryCircuitLimit)) {
+      throw new Error(
+        `SQLite recovery circuit is open for ${this.displayDbPath}: too many failed recovery attempts within ${this.recoveryOptions.recoveryCircuitWindowMs}ms`,
+      );
+    }
+  }
+
+  private recordRecoveryFailure(): void {
+    const statePath = this.recoveryCircuitPath();
+    const tempPath = `${statePath}.tmp-${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
+    const failures = [...this.recentRecoveryFailures(), Date.now()];
+    try {
+      fs.writeFileSync(tempPath, JSON.stringify({ failures }), { encoding: 'utf-8', mode: 0o600 });
+      fs.renameSync(tempPath, statePath);
+    } finally {
+      fs.rmSync(tempPath, { force: true });
+    }
+  }
+
+  private clearRecoveryFailures(): void {
+    fs.rmSync(this.recoveryCircuitPath(), { force: true });
+  }
+
+  private clearRecoveryFailuresBestEffort(): void {
+    try { this.clearRecoveryFailures(); } catch {}
+  }
+
+  private cleanupRecoveryArtifactsBestEffort(): void {
+    try { this.cleanupRecoveryArtifacts(); } catch {}
+  }
+
+  private cleanupRecoveryArtifacts(): void {
+    const dir = path.dirname(this.dbPath);
+    const databaseName = path.basename(this.dbPath);
+    let names: string[];
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      return;
+    }
+
+    for (const name of names) {
+      if (name.startsWith(`${databaseName}.rebuild-`)) {
+        fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+      }
+    }
+
+    const backupGroups = new Map<string, number>();
+    for (const name of names) {
+      if (!name.startsWith(`${databaseName}.corrupt-`)) continue;
+      const group = name.replace(/-(?:wal|shm)$/, '');
+      try {
+        const mtimeMs = fs.statSync(path.join(dir, name)).mtimeMs;
+        backupGroups.set(group, Math.max(backupGroups.get(group) ?? 0, mtimeMs));
+      } catch {
+        // Artifact disappeared while scanning.
+      }
+    }
+
+    const retained = Math.max(0, this.recoveryOptions.recoveryBackupRetention);
+    const expired = [...backupGroups.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .slice(retained);
+    for (const [group] of expired) {
+      for (const suffix of DATABASE_FILE_SUFFIXES) {
+        fs.rmSync(path.join(dir, `${group}${suffix}`), { force: true });
+      }
+    }
+  }
+
+  private static sleepSync(milliseconds: number): void {
+    if (milliseconds <= 0) return;
+    const signal = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.wait(signal, 0, 0, milliseconds);
   }
 
   private rebuildDatabaseFromReadableRows(backupBase: string): DatabaseRecoveryResult {
@@ -765,7 +981,7 @@ export class DatabaseManager {
    * Get the database file path.
    */
   getPath(): string {
-    return this.dbPath;
+    return this.displayDbPath;
   }
 
   /**

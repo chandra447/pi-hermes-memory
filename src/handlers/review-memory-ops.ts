@@ -7,14 +7,7 @@ import { completeSimple, type Message, type SimpleStreamOptions } from "@earendi
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DIRECT_REVIEW_SYSTEM_PROMPT } from "../constants.js";
 import { MemoryStore } from "../store/memory-store.js";
-import { DatabaseManager } from "../store/db.js";
-import {
-  formatFailureMemoryContent,
-  removeExactSyncedMemories,
-  removeSyncedMemories,
-  replaceSyncedMemories,
-  syncMemoryEntry,
-} from "../store/sqlite-memory-store.js";
+import type { DatabaseManager } from "../store/db.js";
 import type { MemoryCategory, MemoryConfig, MemoryResult, ThinkingLevel } from "../types.js";
 
 export interface ReviewMemoryOperation {
@@ -203,107 +196,12 @@ export function parseReviewOperations(text: string): ReviewMemoryOperation[] | n
   return parsed;
 }
 
-function sqliteProjectFor(
-  rawTarget: ReviewMemoryOperation["target"],
-  projectName?: string | null,
-): string | null | undefined {
-  if (rawTarget === "project") return projectName?.trim() || null;
-  if (rawTarget === "memory" || rawTarget === "user" || rawTarget === "failure") return null;
-  return undefined;
-}
-
-function sqliteTargetFor(rawTarget: ReviewMemoryOperation["target"]): "memory" | "user" | "failure" {
-  return rawTarget === "user" ? "user" : rawTarget === "failure" ? "failure" : "memory";
-}
-
-async function syncAdd(
-  rawTarget: ReviewMemoryOperation["target"],
-  content: string,
-  category: MemoryCategory | undefined,
-  failureReason: string | undefined,
-  dbManager: DatabaseManager | null,
-  projectName?: string | null,
-): Promise<void> {
-  if (!dbManager) return;
-
-  const sqliteTarget = sqliteTargetFor(rawTarget);
-  const sqliteProject = sqliteProjectFor(rawTarget, projectName);
-
-  if (rawTarget === "failure") {
-    const failureCategory = category ?? "failure";
-    syncMemoryEntry(dbManager, {
-      content: formatFailureMemoryContent(content, {
-        category: failureCategory,
-        failureReason,
-      }),
-      target: "failure",
-      project: sqliteProject ?? null,
-      category: failureCategory,
-      failureReason,
-    });
-    return;
-  }
-
-  syncMemoryEntry(dbManager, {
-    content,
-    target: sqliteTarget,
-    project: sqliteProject ?? null,
-  });
-}
-
-async function syncReplace(
-  rawTarget: ReviewMemoryOperation["target"],
-  oldText: string,
-  newContent: string,
-  dbManager: DatabaseManager | null,
-  projectName?: string | null,
-): Promise<void> {
-  if (!dbManager) return;
-  replaceSyncedMemories(dbManager, oldText, {
-    content: newContent,
-    target: sqliteTargetFor(rawTarget),
-    project: sqliteProjectFor(rawTarget, projectName),
-  });
-}
-
-async function syncRemove(
-  rawTarget: ReviewMemoryOperation["target"],
-  oldText: string,
-  dbManager: DatabaseManager | null,
-  projectName?: string | null,
-): Promise<void> {
-  if (!dbManager) return;
-  removeSyncedMemories(dbManager, oldText, {
-    target: sqliteTargetFor(rawTarget),
-    project: sqliteProjectFor(rawTarget, projectName),
-  });
-}
-
-async function syncEvictions(
-  rawTarget: ReviewMemoryOperation["target"],
-  evictedEntries: string[] | undefined,
-  dbManager: DatabaseManager | null,
-  projectName?: string | null,
-): Promise<void> {
-  if (!dbManager || !evictedEntries?.length) return;
-  for (const entry of evictedEntries) {
-    try {
-      removeExactSyncedMemories(dbManager, entry, {
-        target: sqliteTargetFor(rawTarget),
-        project: sqliteProjectFor(rawTarget, projectName),
-      });
-    } catch {
-      // best effort
-    }
-  }
-}
-
 export async function applyReviewOperations(
   store: MemoryStore,
   projectStore: MemoryStore | null,
   operations: ReviewMemoryOperation[],
-  dbManager: DatabaseManager | null = null,
-  projectName?: string | null,
+  _dbManager: DatabaseManager | null = null,
+  _projectName?: string | null,
 ): Promise<ApplyReviewOperationsResult> {
   let appliedCount = 0;
   let skippedCount = 0;
@@ -332,7 +230,6 @@ export async function applyReviewOperations(
             failureReason: op.failure_reason,
           });
           if (result.success) {
-            await syncAdd(rawTarget, op.content, category, op.failure_reason, dbManager, projectName);
             appliedCount++;
           } else {
             skippedCount++;
@@ -340,8 +237,6 @@ export async function applyReviewOperations(
         } else {
           result = await activeStore.add(memoryTarget, op.content);
           if (result.success) {
-            await syncEvictions(rawTarget, result.evicted_entries, dbManager, projectName);
-            await syncAdd(rawTarget, op.content, undefined, undefined, dbManager, projectName);
             appliedCount++;
           } else {
             skippedCount++;
@@ -356,7 +251,6 @@ export async function applyReviewOperations(
         }
         result = await activeStore.replace(memoryTarget, op.old_text, op.content);
         if (result.success) {
-          await syncReplace(rawTarget, op.old_text, op.content, dbManager, projectName);
           appliedCount++;
         } else {
           skippedCount++;
@@ -370,7 +264,6 @@ export async function applyReviewOperations(
         }
         result = await activeStore.remove(memoryTarget, op.old_text);
         if (result.success) {
-          await syncRemove(rawTarget, op.old_text, dbManager, projectName);
           appliedCount++;
         } else {
           skippedCount++;
@@ -379,7 +272,9 @@ export async function applyReviewOperations(
       }
       default:
         skippedCount++;
+        continue;
     }
+
   }
 
   return { appliedCount, skippedCount };

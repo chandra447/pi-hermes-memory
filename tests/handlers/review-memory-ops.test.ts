@@ -10,6 +10,8 @@ import {
   buildDirectReviewCompletionOptions,
   parseReviewOperations,
 } from "../../src/handlers/review-memory-ops.js";
+import { DatabaseManager } from "../../src/store/db.js";
+import { reconcileMarkdownMemoryScope } from "../../src/store/sqlite-memory-store.js";
 
 function mockModel(reasoning: boolean): Model<Api> {
   return {
@@ -134,5 +136,42 @@ describe("applyReviewOperations", () => {
 
     assert.strictEqual(result.appliedCount, 0);
     assert.strictEqual(result.skippedCount, 1);
+  });
+
+  it("uses the in-lock mutation observer as the sole SQLite reconciliation path", async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+
+    const dbManager = new DatabaseManager(path.join(tmpDir, "db"));
+    const originalGetDb = dbManager.getDb.bind(dbManager);
+    let insideObserver = false;
+    (dbManager as any).getDb = () => {
+      if (!insideObserver) throw new Error("out-of-lock SQLite access");
+      return originalGetDb();
+    };
+    store.setMutationObserver((_target, entries) => {
+      insideObserver = true;
+      try {
+        reconcileMarkdownMemoryScope(dbManager, entries, "memory", null);
+      } finally {
+        insideObserver = false;
+      }
+      return null;
+    });
+
+    try {
+      const result = await applyReviewOperations(store, null, [
+        { action: "add", target: "memory", content: "observer owns reconciliation" },
+      ], dbManager);
+
+      assert.strictEqual(result.appliedCount, 1);
+    } finally {
+      dbManager.close();
+    }
   });
 });
