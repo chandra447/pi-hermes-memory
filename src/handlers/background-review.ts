@@ -8,13 +8,13 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { COMBINED_REVIEW_PROMPT } from "../constants.js";
+import { COMBINED_REVIEW_PROMPT, DIRECT_REVIEW_SYSTEM_PROMPT } from "../constants.js";
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import type { MemoryConfig } from "../types.js";
 import { applyRecentMessageLimit, collectMessageParts } from "./message-parts.js";
 import { execChildPrompt } from "./pi-child-process.js";
-import { runDirectBackgroundReview, type DirectReviewResult } from "./review-memory-ops.js";
+import { runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult } from "./review-memory-ops.js";
 
 export interface BackgroundReviewOptions {
   dbManager?: DatabaseManager | null;
@@ -23,7 +23,7 @@ export interface BackgroundReviewOptions {
 }
 
 export interface BackgroundReviewDeps {
-  runDirectReview?: typeof runDirectBackgroundReview;
+  runDirectReview?: typeof runDirectMemoryCompletion;
   execChildPrompt?: typeof execChildPrompt;
 }
 
@@ -97,10 +97,6 @@ function shouldNotifySubprocess(stdout: string | undefined): boolean {
   return !!output && !output.toLowerCase().includes("nothing to save");
 }
 
-function usesDirectTransport(config: MemoryConfig): boolean {
-  return (config.reviewTransport ?? "direct") === "direct";
-}
-
 async function runSubprocessReview(
   pi: ExtensionAPI,
   prompt: string,
@@ -122,7 +118,7 @@ export function setupBackgroundReview(
 ): void {
   const dbManager = options.dbManager ?? null;
   const projectName = options.projectName ?? null;
-  const runDirectReview = options.deps?.runDirectReview ?? runDirectBackgroundReview;
+  const runDirectReview = options.deps?.runDirectReview ?? runDirectMemoryCompletion;
   const execChild = options.deps?.execChildPrompt ?? execChildPrompt;
 
   let turnsSinceReview = 0;
@@ -208,7 +204,7 @@ export function setupBackgroundReview(
           ctx as Pick<ExtensionContext, "model" | "modelRegistry">,
           store,
           projectStore,
-          { userPrompt: directPrompt, config, timeoutMs: 120000 },
+          { userPrompt: directPrompt, systemPrompt: DIRECT_REVIEW_SYSTEM_PROMPT, config, timeoutMs: 120000 },
           dbManager,
           projectName,
         );

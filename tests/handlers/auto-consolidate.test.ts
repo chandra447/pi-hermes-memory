@@ -17,6 +17,25 @@ import { ENTRY_DELIMITER } from "../../src/constants.js";
 // ─── Mock infrastructure ───
 
 let execCalls: any[];
+let directCalls: unknown[][];
+
+const directTransportLlmConfig = { reviewTransport: "direct" as const };
+
+function createDirectCtx(): { model: unknown; modelRegistry: unknown; _tag: string } {
+  return { model: {}, modelRegistry: {}, _tag: "consolidation-direct-ctx" };
+}
+
+function makeDirectDeps(
+  result: { ok: boolean; appliedCount: number } | "throw",
+): { runDirectMemoryCompletion: (...args: unknown[]) => Promise<{ ok: boolean; appliedCount: number }> } {
+  return {
+    runDirectMemoryCompletion: async (...args: unknown[]) => {
+      directCalls.push(args);
+      if (result === "throw") throw new Error("injected direct consolidation failure");
+      return result;
+    },
+  };
+}
 let LOCK_DIR = "";
 const OLD_LOCK_DIR = process.env.PI_HERMES_CONSOLIDATION_LOCK_DIR;
 
@@ -355,6 +374,122 @@ describe("triggerConsolidation", () => {
     const prompt = childPrompt(execCalls[0]);
     assert.ok(prompt.includes("(empty)"), "prompt should show (empty) for empty entries");
   });
+
+  describe("direct transport", () => {
+    beforeEach(() => {
+      directCalls = [];
+    });
+
+    it("returns consolidated true via direct transport without calling subprocess when appliedCount is positive", async () => {
+      const pi = createMockPi();
+      const directCtx = createDirectCtx();
+      const result = await triggerConsolidation(
+        pi,
+        mockStore,
+        "memory",
+        undefined,
+        60000,
+        "memory",
+        directTransportLlmConfig,
+        directCtx,
+        null,
+        null,
+        makeDirectDeps({ ok: true, appliedCount: 3 }),
+      );
+
+      assert.strictEqual(result.consolidated, true);
+      assert.strictEqual(result.error, undefined);
+      assert.strictEqual(directCalls.length, 1);
+      assert.strictEqual(execCalls.length, 0, "subprocess must not run on successful direct consolidation");
+    });
+
+    it("falls back to subprocess when direct transport succeeds with appliedCount 0", async () => {
+      const pi = createMockPi();
+      const directCtx = createDirectCtx();
+      const result = await triggerConsolidation(
+        pi,
+        mockStore,
+        "memory",
+        undefined,
+        60000,
+        "memory",
+        directTransportLlmConfig,
+        directCtx,
+        null,
+        null,
+        makeDirectDeps({ ok: true, appliedCount: 0 }),
+      );
+
+      assert.strictEqual(result.consolidated, true);
+      assert.strictEqual(directCalls.length, 1);
+      assert.strictEqual(execCalls.length, 1, "empty direct result must fall back to subprocess");
+    });
+
+    it("falls back to subprocess when direct transport returns ok false", async () => {
+      const pi = createMockPi();
+      const directCtx = createDirectCtx();
+      const result = await triggerConsolidation(
+        pi,
+        mockStore,
+        "memory",
+        undefined,
+        60000,
+        "memory",
+        directTransportLlmConfig,
+        directCtx,
+        null,
+        null,
+        makeDirectDeps({ ok: false, appliedCount: 0 }),
+      );
+
+      assert.strictEqual(result.consolidated, true);
+      assert.strictEqual(directCalls.length, 1);
+      assert.strictEqual(execCalls.length, 1, "failed direct result must fall back to subprocess");
+    });
+
+    it("falls back to subprocess when direct transport throws without propagating", async () => {
+      const pi = createMockPi();
+      const directCtx = createDirectCtx();
+      const result = await triggerConsolidation(
+        pi,
+        mockStore,
+        "memory",
+        undefined,
+        60000,
+        "memory",
+        directTransportLlmConfig,
+        directCtx,
+        null,
+        null,
+        makeDirectDeps("throw"),
+      );
+
+      assert.strictEqual(result.consolidated, true);
+      assert.strictEqual(directCalls.length, 1);
+      assert.strictEqual(execCalls.length, 1, "thrown direct error must fall back to subprocess");
+    });
+
+    it("does not attempt direct transport when directCtx is null", async () => {
+      const pi = createMockPi();
+      const result = await triggerConsolidation(
+        pi,
+        mockStore,
+        "memory",
+        undefined,
+        60000,
+        "memory",
+        directTransportLlmConfig,
+        null,
+        null,
+        null,
+        makeDirectDeps({ ok: true, appliedCount: 3 }),
+      );
+
+      assert.strictEqual(result.consolidated, true);
+      assert.strictEqual(directCalls.length, 0, "direct path must be skipped without directCtx");
+      assert.strictEqual(execCalls.length, 1, "subprocess-only path must still consolidate");
+    });
+  });
 });
 
 describe("registerConsolidateCommand", () => {
@@ -462,6 +597,56 @@ describe("registerConsolidateCommand", () => {
         },
       });
     });
+  });
+
+  it("passes command ctx to direct consolidation and reflects success in the summary", async () => {
+    directCalls = [];
+    let handler: ((_args: unknown, ctx: unknown) => Promise<void>) | undefined;
+    const notifications: string[] = [];
+    const commandCtx = {
+      model: {},
+      modelRegistry: {},
+      signal: undefined,
+      ui: { notify: (message: string) => { notifications.push(message); } },
+      _tag: "manual-consolidate-ctx",
+    };
+
+    const pi = {
+      on: () => {},
+      exec: async (...args: unknown[]) => {
+        execCalls.push(captureExecArgs(args as Parameters<typeof captureExecArgs>[0]));
+        return { code: 0, stdout: "Done", stderr: "" };
+      },
+      registerTool: () => {},
+      registerCommand: (_name: string, command: { handler: typeof handler }) => {
+        handler = command.handler;
+      },
+    } as unknown as Parameters<typeof registerConsolidateCommand>[0];
+
+    registerConsolidateCommand(
+      pi,
+      mockStore,
+      60000,
+      null,
+      null,
+      directTransportLlmConfig,
+      null,
+      makeDirectDeps({ ok: true, appliedCount: 2 }),
+    );
+
+    assert.ok(handler, "command handler should be registered");
+    await handler!({}, commandCtx);
+
+    assert.strictEqual(directCalls.length, 3, "memory, user, and failure targets should use direct transport");
+    assert.strictEqual(execCalls.length, 0, "successful direct consolidation should not spawn subprocess");
+    for (const call of directCalls) {
+      assert.strictEqual(call[0], commandCtx, "runDirectMemoryCompletion must receive the command ctx");
+    }
+
+    const finalNotification = notifications[notifications.length - 1] ?? "";
+    assert.ok(finalNotification.includes("memory: ✅ consolidated"), "summary should show memory consolidated");
+    assert.ok(finalNotification.includes("user: ✅ consolidated"), "summary should show user consolidated");
+    assert.ok(finalNotification.includes("failure: ✅ consolidated"), "summary should show failure consolidated");
   });
 });
 

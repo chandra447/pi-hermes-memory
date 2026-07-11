@@ -145,16 +145,11 @@ For failures, include: what was tried, why it failed, what error occurred, and w
 
 Only act if there's something genuinely worth saving. If nothing stands out, just say 'Nothing to save.' and stop.`;
 
-// ─── Direct (in-process) background review prompts ───
-export const DIRECT_REVIEW_SYSTEM_PROMPT = `You review coding conversations and extract durable memories worth saving across sessions.
-
-Review these aspects:
-- **Memory**: User persona, preferences, expectations about how the agent should behave, work style.
-- **Failures & Corrections**: What failed, user corrections, insights, conventions, tool quirks.
-
-Do NOT create or modify skills. Only save genuinely durable facts — not task progress, session outcomes, or temporary state.
-
-Respond with JSON only (no markdown fences):
+// ─── Shared JSON operations schema for direct (in-process) completions ───
+// (review/flush/consolidation/correction all ask the model to respond with
+// this same {"operations":[...]} shape instead of calling the memory tool,
+// since direct mode is a single completeSimple() call with no tool loop).
+const DIRECT_MEMORY_OPERATIONS_SCHEMA = `Respond with JSON only (no markdown fences):
 {
   "operations": [
     {
@@ -171,9 +166,56 @@ Operation fields:
 - content: required for add/replace
 - old_text: required for replace/remove (substring match)
 - category: for failure target — failure | correction | insight | convention | tool-quirk | preference
-- failure_reason: optional context for failure entries
+- failure_reason: optional context for failure entries`;
+
+export const DIRECT_REVIEW_SYSTEM_PROMPT = `You review coding conversations and extract durable memories worth saving across sessions.
+
+Review these aspects:
+- **Memory**: User persona, preferences, expectations about how the agent should behave, work style.
+- **Failures & Corrections**: What failed, user corrections, insights, conventions, tool quirks.
+
+Do NOT create or modify skills. Only save genuinely durable facts — not task progress, session outcomes, or temporary state.
+
+${DIRECT_MEMORY_OPERATIONS_SCHEMA}
 
 If nothing is worth saving, return {"operations":[]}.`;
+
+// ─── Direct (in-process) flush prompt — used by session-flush.ts when the
+// session is about to lose context (compaction/shutdown). ───
+export const DIRECT_FLUSH_SYSTEM_PROMPT = `The session is being compressed and about to lose context. Save anything worth remembering from the conversation — prioritize user preferences, corrections, and recurring patterns over task-specific details.
+
+${DIRECT_MEMORY_OPERATIONS_SCHEMA}
+
+If nothing is worth saving, return {"operations":[]}.`;
+
+// ─── Direct (in-process) consolidation prompt — used by auto-consolidate.ts.
+// Unlike review/flush/correction, a single triggerConsolidation() call is
+// always scoped to exactly one target/store, passed via the user prompt. ───
+export const DIRECT_CONSOLIDATION_SYSTEM_PROMPT = `The memory store you're given is at capacity. Consolidate its current entries:
+- Merge related entries into a single, concise entry
+- Remove outdated or superseded entries (entries older than 30 days without recent references are candidates for removal)
+- Keep the most important and frequently-referenced facts
+- Preserve user preferences and corrections (highest priority)
+
+Each entry shows when it was created and last referenced in HTML comments (<!-- created=..., last=... -->). Use this to identify stale entries.
+
+Express a merge as "remove" operations for the entries being dropped plus one "add" operation for the new merged entry. Be aggressive about merging — less is more. Every operation MUST use the exact target given to you in the user message; do not touch any other target.
+
+${DIRECT_MEMORY_OPERATIONS_SCHEMA}`;
+
+// ─── Direct (in-process) correction-save prompt — used by correction-detector.ts. ───
+export const DIRECT_CORRECTION_SYSTEM_PROMPT = `The user just corrected the agent. Review what went wrong and decide what durable memory to save.
+
+Priority:
+1. User preference ("don't do X", "always use Y instead")
+2. Wrong assumption the agent made
+3. Environment fact the agent got wrong
+
+If this contradicts an existing entry, use a "replace" operation to update it instead of "add".
+
+${DIRECT_MEMORY_OPERATIONS_SCHEMA}
+
+If nothing is worth saving beyond the automatic failure-memory capture, return {"operations":[]}.`;
 
 // ─── Flush prompt (ported from flush_memories() in run_agent.py ~L7379) ───
 export const FLUSH_PROMPT = `[System: The session is being compressed. Save anything worth remembering — prioritize user preferences, corrections, and recurring patterns over task-specific details.]`;

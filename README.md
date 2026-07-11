@@ -339,18 +339,18 @@ Background review triggers based on **activity level**, not just turn count:
 
 Both counters reset after each review.
 
-### Background Review Transport
+### Direct-Transport LLM Calls (Review, Flush, Correction, Consolidation)
 
-By default, background review uses an in-process `completeSimple()` side-channel: a small JSON-only prompt, no child `pi` process, and memory writes applied directly by the extension. This keeps the main session's system prompt, tools, and LLM prefix cache intact.
+By default, background review, session flush, correction save, and the manual `/memory-consolidate` command use an in-process `completeSimple()` side-channel: a small JSON-only prompt, no child `pi` process, and memory writes applied directly by the extension. This keeps the main session's system prompt, tools, and LLM prefix cache intact, and avoids the subprocess path's argv/`--no-extensions` concerns entirely on the common path.
 
-If direct review fails (no model, no auth, provider error, unparseable response), it automatically falls back to the legacy `pi -p --no-session` subprocess path.
+If direct mode fails (no model, no auth, provider error, unparseable response, or — for consolidation only — a result that didn't actually free any space), it automatically falls back to the legacy `pi -p --no-session` subprocess path. The automatic over-capacity consolidator triggered from `MemoryStore` itself always uses the subprocess path, since it runs without extension-runtime access.
 
 Set `reviewTransport` in config only when you need to override this:
 
 | Value | Behavior |
 |---|---|
 | `direct` (default) | Try in-process `completeSimple()` first; fall back to subprocess on failure |
-| `subprocess` | Always use `pi -p` subprocess (pre-PR #92 behavior) |
+| `subprocess` | Always use `pi -p` subprocess for every LLM-driven memory operation (pre-PR #92 behavior) |
 
 ### Skill Auto-Extraction
 
@@ -471,12 +471,12 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.pi/agent/sessions/` |
 | `llmModelOverride` | unset | Optional model override for background review (direct and subprocess), correction save, session flush, and consolidation |
 | `llmThinkingOverride` | unset | Optional thinking override for those LLM calls; valid values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. If `llmModelOverride` is set and this is omitted, review/child calls default to `off` |
-| `childExtensionPaths` | unset | Trusted provider/auth adapter entry paths explicitly allowed in isolated child Pi processes; the installed `pi-claude-oauth-adapter` is detected automatically |
+| `childExtensionPaths` | unset | Trusted provider/auth adapter entry paths explicitly allowed in isolated child Pi processes; sibling packages matching the `*-oauth-adapter`/`*-auth-adapter` naming convention (including scoped packages, via their `package.json` `pi.extensions` manifest) are detected automatically — this setting is only needed for adapters that don't match that convention. In-process direct transport (the default for review/flush/correction/consolidation) doesn't need this at all, since it reads whatever provider auth is already registered |
 | `nudgeInterval` | `10` | Turns between auto-reviews |
 | `nudgeToolCalls` | `15` | Tool calls between auto-reviews (OR with turns) |
 | `reviewRecentMessages` | `0` | Recent messages included in background review (`0` = all) |
 | `reviewEnabled` | `true` | Enable/disable background learning loop |
-| `reviewTransport` | `direct` | Background review LLM transport: `direct` uses in-process `completeSimple()` with subprocess fallback; `subprocess` forces legacy `pi -p` only |
+| `reviewTransport` | `direct` | LLM transport for background review, session flush, correction save, and manual consolidation: `direct` uses in-process `completeSimple()` with subprocess fallback; `subprocess` forces legacy `pi -p` only |
 | `memoryOverflowStrategy` | `auto-consolidate` | Behavior when MEMORY.md, USER.md, failures.md, or project-scoped memory reaches its character limit: `auto-consolidate` runs the existing consolidation flow; `reject` returns an error; `fifo-evict` rotates older entries in file order until the new entry fits |
 | `autoConsolidate` | `true` | Legacy alias for `memoryOverflowStrategy` when `memoryOverflowStrategy` is not set (`true` = `auto-consolidate`, `false` = `reject`) |
 | `consolidationTimeoutMs` | `60000` | Maximum time in milliseconds for auto-consolidation to complete |

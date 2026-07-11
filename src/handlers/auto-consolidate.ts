@@ -2,24 +2,34 @@
  * Auto-consolidation — when memory hits capacity, trigger automatic
  * consolidation instead of returning an error.
  *
- * Uses pi.exec() to spawn a one-shot consolidation process.
- * The child process modifies files on disk, so the parent MUST reload
- * from disk after consolidation completes.
+ * Default transport: in-process direct completion (same mechanism as
+ * background review — see review-memory-ops.ts), used only when a caller
+ * supplies model/modelRegistry access (the manual `/memory-consolidate`
+ * command has it; the automatic over-capacity consolidator registered on
+ * MemoryStore does not, since MemoryStore itself has no extension-runtime
+ * access, so that path stays subprocess-only). Falls back to a `pi -p`
+ * subprocess when direct mode is unavailable, declines, or fails.
+ *
+ * The subprocess child process modifies files on disk, so the parent MUST
+ * reload from disk after a subprocess-based consolidation completes.
  */
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
-import { CONSOLIDATION_PROMPT, ENTRY_DELIMITER } from "../constants.js";
+import { DatabaseManager } from "../store/db.js";
+import { CONSOLIDATION_PROMPT, DIRECT_CONSOLIDATION_SYSTEM_PROMPT, ENTRY_DELIMITER } from "../constants.js";
 import type { ConsolidationResult, MemoryConfig } from "../types.js";
 import { AGENT_ROOT } from "../paths.js";
 import { execChildPrompt } from "./pi-child-process.js";
+import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
 import { AtomicLockCoordinator } from "../store/atomic-lock-coordinator.js";
 
 type MemoryTarget = "memory" | "user" | "failure";
 type ToolMemoryTarget = MemoryTarget | "project";
+type ConsolidationLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride" | "reviewTransport">;
 
 const CONSOLIDATION_LOCK_STALE_GRACE_MS = 30000;
 const CONSOLIDATION_LOCK_ENV = "PI_HERMES_CONSOLIDATION_LOCK_DIR";
@@ -93,10 +103,47 @@ export async function triggerConsolidation(
   signal?: AbortSignal,
   timeoutMs: number = 60000,
   toolTarget: ToolMemoryTarget = target,
-  llmConfig: Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride"> = {},
+  llmConfig: ConsolidationLlmConfig = {},
+  directCtx: Pick<ExtensionContext, "model" | "modelRegistry"> | null = null,
+  dbManager: DatabaseManager | null = null,
+  projectName?: string | null,
+  deps: { runDirectMemoryCompletion?: typeof runDirectMemoryCompletion } = {},
 ): Promise<ConsolidationResult> {
   const entries = entriesForTarget(store, target);
   const currentContent = entries.join(ENTRY_DELIMITER);
+  const runDirect = deps.runDirectMemoryCompletion ?? runDirectMemoryCompletion;
+
+  if (directCtx && usesDirectTransport(llmConfig)) {
+    try {
+      const directResult = await runDirect(
+        directCtx,
+        store,
+        toolTarget === "project" ? store : null,
+        {
+          systemPrompt: DIRECT_CONSOLIDATION_SYSTEM_PROMPT,
+          userPrompt: [
+            `--- Current ${labelForTarget(target, toolTarget)} Entries (target: '${toolTarget}') ---`,
+            currentContent || "(empty)",
+            "",
+            `Only emit operations with "target": "${toolTarget}".`,
+          ].join("\n"),
+          config: llmConfig,
+          timeoutMs,
+          signal,
+        },
+        dbManager,
+        projectName,
+      );
+      // Consolidation only did its job if it actually freed space — unlike
+      // review/flush/correction, an empty or fully-skipped result here is a
+      // failure worth falling back to subprocess for, not a normal outcome.
+      if (directResult.ok && directResult.appliedCount > 0) {
+        return { consolidated: true };
+      }
+    } catch {
+      // Fall through to subprocess below.
+    }
+  }
 
   const prompt = [
     CONSOLIDATION_PROMPT,
@@ -152,7 +199,9 @@ export function registerConsolidateCommand(
   timeoutMs: number = 60000,
   projectStore: MemoryStore | null = null,
   projectName?: string | null,
-  llmConfig: Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride"> = {},
+  llmConfig: ConsolidationLlmConfig = {},
+  dbManager: DatabaseManager | null = null,
+  deps: { runDirectMemoryCompletion?: typeof runDirectMemoryCompletion } = {},
 ): void {
   pi.registerCommand("memory-consolidate", {
     description: "Manually trigger memory consolidation to free up space",
@@ -214,6 +263,10 @@ export function registerConsolidateCommand(
           manualTimeoutMs,
           item.toolTarget,
           llmConfig,
+          ctx,
+          dbManager,
+          projectName,
+          deps,
         );
 
         if (result.consolidated) {
