@@ -3,8 +3,10 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import Database from 'better-sqlite3';
 import { DatabaseManager, SQLITE_WAL_AUTOCHECKPOINT_PAGES } from '../../src/store/db.js';
+import { AtomicLockCoordinator } from '../../src/store/atomic-lock-coordinator.js';
 
 describe('DatabaseManager', () => {
   let tmpDir: string;
@@ -94,6 +96,22 @@ describe('DatabaseManager', () => {
       const manager = new DatabaseManager(nestedDir);
       manager.getDb();
       assert.ok(fs.existsSync(path.join(nestedDir, 'sessions.db')));
+      manager.close();
+    });
+
+    it('defers database creation while an initialization guard is active', () => {
+      const guardedDir = path.join(tmpDir, 'guarded');
+      const manager = new DatabaseManager(guardedDir);
+      manager.setOpenGuard(() => {
+        throw new Error('legacy database migration pending');
+      });
+
+      assert.throws(() => manager.getDb(), /legacy database migration pending/);
+      assert.equal(fs.existsSync(path.join(guardedDir, 'sessions.db')), false);
+
+      manager.setOpenGuard(null);
+      assert.ok(manager.getDb());
+      assert.equal(fs.existsSync(path.join(guardedDir, 'sessions.db')), true);
       manager.close();
     });
   });
@@ -295,6 +313,342 @@ describe('DatabaseManager', () => {
   });
 
   describe('corruption recovery', () => {
+    it('waits for a recovery owner and reuses the healthy database it leaves behind', () => {
+      dbManager.getDb();
+      dbManager.close();
+      const canonicalDbPath = fs.realpathSync(path.join(tmpDir, 'sessions.db'));
+      const lockDbPath = path.join(path.dirname(canonicalDbPath), '.pi-hermes-locks.sqlite');
+      const lockKey = `recovery:${canonicalDbPath}`;
+      const coordinator = new AtomicLockCoordinator(lockDbPath);
+      const lease = coordinator.tryAcquire(lockKey, { staleMs: 10_000 });
+      assert.ok(lease);
+      spawn(process.execPath, [
+        '-e',
+        `setTimeout(() => {
+          const Database = require('better-sqlite3');
+          const db = new Database(process.argv[1]);
+          db.prepare('DELETE FROM locks WHERE lock_key = ? AND token = ?').run(process.argv[2], process.argv[3]);
+          db.close();
+        }, 100)`,
+        lockDbPath,
+        lockKey,
+        lease.token,
+      ], { stdio: 'ignore' });
+
+      dbManager = new DatabaseManager(tmpDir, { recoveryLockWaitMs: 1000, recoveryLockPollMs: 10, recoveryLockStaleMs: 10_000 });
+      const started = Date.now();
+      const result = dbManager.recoverFromCorruption(corruptSqliteError());
+
+      assert.strictEqual(result.strategy, 'reused');
+      assert.ok(Date.now() - started >= 50, 'peer should wait for the active recovery owner');
+      assert.strictEqual(fs.readdirSync(tmpDir).filter((name) => name.startsWith('sessions.db.corrupt-')).length, 0);
+    });
+
+    it('takes over a stale recovery lock', () => {
+      dbManager.close();
+      fs.writeFileSync(path.join(tmpDir, 'sessions.db'), 'not a sqlite database');
+      const canonicalDbPath = fs.realpathSync(path.join(tmpDir, 'sessions.db'));
+      const lockDbPath = path.join(path.dirname(canonicalDbPath), '.pi-hermes-locks.sqlite');
+      const coordinator = new AtomicLockCoordinator(lockDbPath);
+      coordinator.tryAcquire('schema-init', { staleMs: 50 })!.release();
+      const lockDb = new Database(lockDbPath);
+      lockDb.prepare(`
+        INSERT INTO locks (lock_key, token, pid, acquired_at)
+        VALUES (?, 'dead-owner', 999999, ?)
+      `).run(`recovery:${canonicalDbPath}`, Date.now() - 10_000);
+      lockDb.close();
+
+      dbManager = new DatabaseManager(tmpDir, { recoveryLockStaleMs: 50 });
+      const db = dbManager.getDb();
+
+      assertQuickCheckOk(db as InstanceType<typeof Database>);
+    });
+
+    it('aborts destructive recovery rename when the recovery lease was stolen mid-flight', () => {
+      dbManager.close();
+      fs.writeFileSync(path.join(tmpDir, 'sessions.db'), 'not a sqlite database');
+      dbManager = new DatabaseManager(tmpDir, { recoveryLockStaleMs: 60_000 });
+
+      type MoveDatabaseFilesToBackup = (this: DatabaseManager, backupBase: string) => unknown;
+      const prototype = DatabaseManager.prototype as unknown as {
+        moveDatabaseFilesToBackup: MoveDatabaseFilesToBackup;
+      };
+      const originalMove = prototype.moveDatabaseFilesToBackup;
+      let moveCalls = 0;
+      prototype.moveDatabaseFilesToBackup = function (this: DatabaseManager, backupBase: string) {
+        moveCalls++;
+        if (moveCalls === 1) {
+          const canonicalDbPath = fs.realpathSync(path.join(tmpDir, 'sessions.db'));
+          const lockDbPath = path.join(path.dirname(canonicalDbPath), '.pi-hermes-locks.sqlite');
+          const lockKey = `recovery:${canonicalDbPath}`;
+          const lockDb = new Database(lockDbPath);
+          try {
+            lockDb.prepare('UPDATE locks SET acquired_at = ? WHERE lock_key = ?').run(Date.now() - 100_000, lockKey);
+          } finally {
+            lockDb.close();
+          }
+          const thief = new AtomicLockCoordinator(lockDbPath);
+          const stolen = thief.tryAcquire(lockKey, { staleMs: 50 });
+          assert.ok(stolen);
+          stolen.release();
+        }
+        return originalMove.call(this, backupBase);
+      };
+
+      try {
+        assert.throws(
+          () => dbManager.getDb(),
+          /SQLite recovery lease lost/,
+        );
+        assert.strictEqual(moveCalls, 1);
+      } finally {
+        prototype.moveDatabaseFilesToBackup = originalMove;
+      }
+    });
+
+    it('serializes recovery through symlinked database aliases', { skip: process.platform === 'win32' }, () => {
+      dbManager.close();
+      const realDir = path.join(tmpDir, 'real');
+      const aliasDir = path.join(tmpDir, 'alias');
+      fs.mkdirSync(realDir);
+      fs.symlinkSync(realDir, aliasDir, 'dir');
+      fs.writeFileSync(path.join(realDir, 'sessions.db'), 'not a sqlite database');
+
+      const canonicalDbPath = fs.realpathSync(path.join(realDir, 'sessions.db'));
+      const coordinator = new AtomicLockCoordinator(path.join(path.dirname(canonicalDbPath), '.pi-hermes-locks.sqlite'));
+      const lease = coordinator.tryAcquire(`recovery:${canonicalDbPath}`, { staleMs: 60_000 });
+      assert.ok(lease);
+
+      const aliasManager = new DatabaseManager(aliasDir, {
+        recoveryLockWaitMs: 25,
+        recoveryLockPollMs: 5,
+        recoveryLockStaleMs: 60_000,
+      });
+      try {
+        assert.throws(
+          () => aliasManager.getDb(),
+          /SQLite recovery already in progress/,
+        );
+      } finally {
+        aliasManager.close();
+        lease.release();
+      }
+    });
+
+    it('repairs a file-symlinked database target without replacing the link', { skip: process.platform === 'win32' }, () => {
+      dbManager.close();
+      const realDir = path.join(tmpDir, 'real');
+      const aliasDir = path.join(tmpDir, 'alias');
+      fs.mkdirSync(realDir);
+      fs.mkdirSync(aliasDir);
+      const realDbPath = path.join(realDir, 'sessions.db');
+      const aliasDbPath = path.join(aliasDir, 'sessions.db');
+      fs.writeFileSync(realDbPath, 'not a sqlite database');
+      fs.symlinkSync(realDbPath, aliasDbPath, 'file');
+
+      const aliasManager = new DatabaseManager(aliasDir);
+      const aliasDb = aliasManager.getDb();
+      aliasDb.prepare("INSERT INTO extension_metadata (key, value) VALUES ('alias-write', 'kept')").run();
+      aliasManager.close();
+
+      assert.equal(fs.lstatSync(aliasDbPath).isSymbolicLink(), true);
+      const directManager = new DatabaseManager(realDir);
+      try {
+        const directDb = directManager.getDb();
+        assertQuickCheckOk(directDb as InstanceType<typeof Database>);
+        assert.deepEqual(
+          directDb.prepare("SELECT value FROM extension_metadata WHERE key = 'alias-write'").get(),
+          { value: 'kept' },
+        );
+      } finally {
+        directManager.close();
+      }
+    });
+
+    it('creates and repairs a dangling absolute database symlink through its target', { skip: process.platform === 'win32' }, () => {
+      dbManager.close();
+      const realDir = path.join(tmpDir, 'real');
+      const aliasDir = path.join(tmpDir, 'alias');
+      fs.mkdirSync(realDir);
+      fs.mkdirSync(aliasDir);
+      const realDbPath = path.join(realDir, 'sessions.db');
+      const aliasDbPath = path.join(aliasDir, 'sessions.db');
+      fs.symlinkSync(realDbPath, aliasDbPath, 'file');
+
+      const aliasManager = new DatabaseManager(aliasDir);
+      aliasManager.getDb().prepare(
+        "INSERT INTO extension_metadata (key, value) VALUES ('before-corruption', 'kept')",
+      ).run();
+      aliasManager.close();
+      fs.writeFileSync(realDbPath, 'not a sqlite database');
+
+      try {
+        assertQuickCheckOk(aliasManager.getDb() as InstanceType<typeof Database>);
+      } finally {
+        aliasManager.close();
+      }
+      assert.equal(fs.lstatSync(aliasDbPath).isSymbolicLink(), true);
+      const directDb = new Database(realDbPath);
+      try {
+        assertQuickCheckOk(directDb);
+      } finally {
+        directDb.close();
+      }
+    });
+
+    it('rejects database symlink loops before opening SQLite', { skip: process.platform === 'win32' }, () => {
+      dbManager.close();
+      const loopDir = path.join(tmpDir, 'loop');
+      fs.mkdirSync(loopDir);
+      fs.symlinkSync('sessions.other', path.join(loopDir, 'sessions.db'), 'file');
+      fs.symlinkSync('sessions.db', path.join(loopDir, 'sessions.other'), 'file');
+
+      const manager = new DatabaseManager(loopDir);
+      assert.throws(() => manager.getDb(), /symbolic link loop/i);
+      manager.close();
+    });
+
+    it('cleans abandoned rebuild files and caps corrupt backup sets', () => {
+      dbManager.close();
+      for (let index = 0; index < 5; index++) {
+        fs.writeFileSync(path.join(tmpDir, `sessions.db.corrupt-20260701-${index}`), `backup-${index}`);
+      }
+      fs.writeFileSync(path.join(tmpDir, 'sessions.db.rebuild-abandoned.tmp'), 'abandoned');
+      fs.writeFileSync(path.join(tmpDir, 'sessions.db'), 'not a sqlite database');
+
+      dbManager = new DatabaseManager(tmpDir, { recoveryBackupRetention: 3 });
+      dbManager.getDb();
+
+      const names = fs.readdirSync(tmpDir);
+      assert.strictEqual(names.some((name) => name.startsWith('sessions.db.rebuild-')), false);
+      assert.ok(names.filter((name) => name.startsWith('sessions.db.corrupt-')).length <= 3);
+    });
+
+    it('does not count successful recreations toward the recovery circuit', () => {
+      dbManager.close();
+      const dbPath = path.join(tmpDir, 'sessions.db');
+      fs.writeFileSync(dbPath, 'first corrupt database');
+      dbManager = new DatabaseManager(tmpDir, {
+        recoveryCircuitLimit: 1,
+        recoveryCircuitWindowMs: 60_000,
+      });
+      dbManager.getDb();
+      dbManager.close();
+
+      fs.writeFileSync(dbPath, 'second corrupt database');
+      dbManager = new DatabaseManager(tmpDir, {
+        recoveryCircuitLimit: 1,
+        recoveryCircuitWindowMs: 60_000,
+      });
+
+      assert.doesNotThrow(() => dbManager.getDb());
+      assert.strictEqual(dbManager.getLastRecovery()?.strategy, 'recreated-empty');
+    });
+
+    it('keeps verified recovery successful when cleanup state removal fails', () => {
+      dbManager.close();
+      fs.writeFileSync(path.join(tmpDir, 'sessions.db'), 'corrupt database');
+      dbManager = new DatabaseManager(tmpDir);
+      let cleanupCalls = 0;
+      (dbManager as any).cleanupRecoveryArtifacts = () => {
+        cleanupCalls++;
+        if (cleanupCalls > 1) throw new Error('injected cleanup failure');
+      };
+      (dbManager as any).clearRecoveryFailures = () => {
+        throw new Error('injected circuit cleanup failure');
+      };
+
+      const db = dbManager.getDb();
+
+      assert.ok(db);
+      assert.strictEqual(dbManager.getLastRecovery()?.strategy, 'recreated-empty');
+      assertQuickCheckOk(db as InstanceType<typeof Database>);
+    });
+
+    it('keeps verified recovery successful and clears a failed release before retry', () => {
+      const prototype = AtomicLockCoordinator.prototype as any;
+      const originalDeleteOwnedLock = prototype.deleteOwnedLock;
+      let deleteAttempts = 0;
+      prototype.deleteOwnedLock = function (key: string, token: string): void {
+        deleteAttempts++;
+        if (deleteAttempts <= 3) throw new Error('injected recovery release failure');
+        return originalDeleteOwnedLock.call(this, key, token);
+      };
+
+      try {
+        dbManager.close();
+        const dbPath = path.join(tmpDir, 'sessions.db');
+        fs.writeFileSync(dbPath, 'first corrupt database');
+        dbManager = new DatabaseManager(tmpDir);
+        assert.doesNotThrow(() => dbManager.getDb());
+        assert.strictEqual(dbManager.getLastRecovery()?.strategy, 'recreated-empty');
+
+        dbManager.close();
+        fs.writeFileSync(dbPath, 'second corrupt database');
+        dbManager = new DatabaseManager(tmpDir);
+        assert.doesNotThrow(() => dbManager.getDb());
+        assert.strictEqual(dbManager.getLastRecovery()?.strategy, 'recreated-empty');
+        assert.ok(deleteAttempts >= 4);
+      } finally {
+        prototype.deleteOwnedLock = originalDeleteOwnedLock;
+      }
+    });
+
+    it('opens the recovery circuit after a failed recovery', () => {
+      dbManager.close();
+      fs.writeFileSync(path.join(tmpDir, 'sessions.db'), 'corrupt database');
+      dbManager = new DatabaseManager(tmpDir, {
+        recoveryCircuitLimit: 1,
+        recoveryCircuitWindowMs: 60_000,
+      });
+      let recoveryCalls = 0;
+      (dbManager as any).recoverDatabaseFileUnlocked = () => {
+        recoveryCalls++;
+        throw new Error('injected recovery failure');
+      };
+
+      assert.throws(() => dbManager.recoverFromCorruption(corruptSqliteError()), /injected recovery failure/);
+      assert.throws(() => dbManager.recoverFromCorruption(corruptSqliteError()), /recovery circuit is open/i);
+      assert.strictEqual(recoveryCalls, 1);
+    });
+
+    it('counts a failed post-recovery open before clearing the circuit', () => {
+      dbManager.close();
+      fs.writeFileSync(path.join(tmpDir, 'sessions.db'), 'corrupt database');
+      dbManager = new DatabaseManager(tmpDir, {
+        recoveryCircuitLimit: 1,
+        recoveryCircuitWindowMs: 60_000,
+      });
+      const originalOpenUnchecked = (dbManager as any).openUnchecked.bind(dbManager);
+      let openCalls = 0;
+      (dbManager as any).openUnchecked = () => {
+        openCalls++;
+        if (openCalls === 2) throw new Error('injected post-recovery open failure');
+        return originalOpenUnchecked();
+      };
+
+      assert.throws(() => dbManager.getDb(), /injected post-recovery open failure/);
+      const state = JSON.parse(
+        fs.readFileSync(path.join(tmpDir, 'sessions.db.recovery-state.json'), 'utf-8'),
+      );
+      assert.strictEqual(state.failures.length, 1);
+    });
+
+    it('does not treat legacy recovery attempt state as failed recoveries', () => {
+      dbManager.close();
+      fs.writeFileSync(path.join(tmpDir, 'sessions.db'), 'corrupt database');
+      fs.writeFileSync(
+        path.join(tmpDir, 'sessions.db.recovery-state.json'),
+        JSON.stringify({ attempts: [Date.now()] }),
+      );
+      dbManager = new DatabaseManager(tmpDir, {
+        recoveryCircuitLimit: 1,
+        recoveryCircuitWindowMs: 60_000,
+      });
+
+      assert.doesNotThrow(() => dbManager.getDb());
+    });
+
     it('repairs recoverable corruption on open and preserves readable rows', () => {
       const db = dbManager.getDb();
       db.prepare(`
@@ -362,7 +716,7 @@ describe('DatabaseManager', () => {
 
       assert.strictEqual(result, 'ok');
       assert.strictEqual(attempts, 2);
-      assert.strictEqual(dbManager.getLastRecovery()?.strategy, 'rebuilt');
+      assert.strictEqual(dbManager.getLastRecovery()?.strategy, 'reused');
     });
   });
 

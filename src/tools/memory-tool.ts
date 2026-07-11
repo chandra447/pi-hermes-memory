@@ -11,6 +11,8 @@ import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import {
   formatFailureMemoryContent,
+  reconcileMarkdownFailureScopes,
+  reconcileMarkdownMemoryScope,
   removeExactSyncedMemories,
   removeSyncedMemories,
   replaceSyncedMemories,
@@ -185,6 +187,31 @@ async function syncEvictionsFromSqlite(
   }
 }
 
+async function reconcileStoreScope(
+  entries: string[],
+  rawTarget: "memory" | "user" | "project" | "failure",
+  dbManager: DatabaseManager | null,
+  projectName?: string | null,
+): Promise<string | null | undefined> {
+  if (!dbManager) return undefined;
+  try {
+    if (rawTarget === "failure") {
+      reconcileMarkdownFailureScopes(dbManager, entries);
+      return null;
+    }
+    const target = sqliteTargetFor(rawTarget);
+    reconcileMarkdownMemoryScope(
+      dbManager,
+      entries,
+      target,
+      sqliteProjectFor(rawTarget, projectName) ?? null,
+    );
+    return null;
+  } catch (err) {
+    return `Saved to Markdown, but SQLite search reconciliation failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
 export function registerMemoryTool(
   pi: ExtensionAPI,
   store: MemoryStore,
@@ -192,6 +219,16 @@ export function registerMemoryTool(
   dbManager: DatabaseManager | null = null,
   projectName?: string | null,
 ): void {
+  const reconciledStores = new WeakSet<MemoryStore>();
+  if (typeof store.setMutationObserver === "function") {
+    store.setMutationObserver((target, entries) => reconcileStoreScope(entries, target, dbManager, projectName));
+    reconciledStores.add(store);
+  }
+  if (projectStore && typeof projectStore.setMutationObserver === "function") {
+    projectStore.setMutationObserver((_target, entries) => reconcileStoreScope(entries, "project", dbManager, projectName));
+    reconciledStores.add(projectStore);
+  }
+
   pi.registerTool({
     name: "memory",
     label: "Memory",
@@ -244,6 +281,7 @@ export function registerMemoryTool(
 
       let result: MemoryResult;
       let syncWarning: string | null = null;
+      const syncHandled = reconciledStores.has(store_);
       switch (action) {
         case "add":
           if (!content) {
@@ -267,12 +305,12 @@ export function registerMemoryTool(
               category: memoryCategory,
               failureReason: failure_reason,
             });
-            if (result.success) {
+            if (result.success && !syncHandled) {
               syncWarning = await syncAddToSqlite(rawTarget, content, memoryCategory, failure_reason, dbManager, projectName);
             }
           } else {
-            result = await store_.add(target, content);
-            if (result.success) {
+            result = await store_.add(target, content, signal);
+            if (result.success && !syncHandled) {
               await syncEvictionsFromSqlite(rawTarget, result.evicted_entries, dbManager, projectName);
               syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, projectName);
             }
@@ -309,9 +347,7 @@ export function registerMemoryTool(
             };
           }
           result = await store_.replace(target, old_text, content);
-          if (result.success) {
-            syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, projectName);
-          }
+          if (result.success && !syncHandled) syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, projectName);
           break;
 
         case "remove":
@@ -330,9 +366,7 @@ export function registerMemoryTool(
             };
           }
           result = await store_.remove(target, old_text);
-          if (result.success) {
-            syncWarning = await syncRemoveFromSqlite(rawTarget, old_text, dbManager, projectName);
-          }
+          if (result.success && !syncHandled) syncWarning = await syncRemoveFromSqlite(rawTarget, old_text, dbManager, projectName);
           break;
 
         default:
@@ -340,6 +374,11 @@ export function registerMemoryTool(
             success: false,
             error: `Unknown action '${action}'. Use: add, replace, remove`,
           };
+      }
+
+      if (result.success && !syncHandled && typeof store_.getRawEntriesForSync === "function") {
+        const reconciliationWarning = await reconcileStoreScope(store_.getRawEntriesForSync(target), rawTarget, dbManager, projectName);
+        if (reconciliationWarning !== undefined) syncWarning = reconciliationWarning;
       }
 
       if (syncWarning && result.success) {

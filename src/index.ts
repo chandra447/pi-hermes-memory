@@ -23,6 +23,7 @@
  */
 
 import * as path from "node:path";
+import * as fs from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
@@ -45,14 +46,14 @@ import { registerInterviewCommand } from "./handlers/interview.js";
 import { registerSwitchProjectCommand } from "./handlers/switch-project.js";
 import { registerIndexSessionsCommand } from "./handlers/index-sessions.js";
 import { registerLearnMemoryCommand } from "./handlers/learn-memory.js";
-import { registerSyncMarkdownMemoriesCommand, syncMarkdownMemoriesToSqlite } from "./handlers/sync-markdown-memories.js";
+import { migrateThenSyncMarkdownMemories, registerSyncMarkdownMemoriesCommand } from "./handlers/sync-markdown-memories.js";
 import { registerPreviewContextCommand } from "./handlers/preview-context.js";
 import { loadConfig } from "./config.js";
 import { detectProject, detectProjectSkills } from "./project.js";
 import { buildPromptContext } from "./prompt-context.js";
 import { migrateLegacyProjectMemoryDirs } from "./project-memory-migration.js";
-import { migrateExtensionRoot } from "./extension-root-migration.js";
 import { AGENT_ROOT } from "./paths.js";
+import { isDatabaseMigrationPending } from "./extension-root-migration.js";
 
 export function resolveProjectSkillDiscovery(
   skillStore: SkillStore,
@@ -95,7 +96,7 @@ export default function (pi: ExtensionAPI) {
     : configuredMemoryDir;
 
   const shouldMigrateExtensionRoot = !configuredMemoryDir || pointsToLegacyMemoryDir;
-  let extensionRootMigrated = false;
+  let persistenceInitialized = false;
 
   const store = new MemoryStore({ ...config, memoryDir: globalDir });
   const project = detectProject(config.projectsMemoryDir);
@@ -109,6 +110,15 @@ export default function (pi: ExtensionAPI) {
     migrationSentinelPath: path.join(globalDir, ".skills-migrated-to-extension-storage"),
   });
   const dbManager = new DatabaseManager(globalDir);
+  let databaseMigrationPending = shouldMigrateExtensionRoot
+    && isDatabaseMigrationPending(legacyGlobalDir, globalDir);
+  if (databaseMigrationPending) {
+    dbManager.setOpenGuard(() => {
+      if (databaseMigrationPending) {
+        throw new Error("Legacy sessions.db migration is pending");
+      }
+    });
+  }
   const sessionsDir = path.join(agentRoot, "sessions");
 
   const refreshSkillProjectContext = (cwd?: string) => {
@@ -124,12 +134,6 @@ export default function (pi: ExtensionAPI) {
   // ~/.pi/agent/<project>/ layout. This is non-destructive: legacy folders
   // remain in place while entries are copied/merged into projects-memory/.
   migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
-  try {
-    syncMarkdownMemoriesToSqlite(dbManager, globalDir, config.projectsMemoryDir, agentRoot);
-  } catch {
-    // Best-effort only: failed SQLite backfill should not block extension startup.
-  }
-
   // Detect project from cwd using shared helper
   // Project-scoped store: ~/.pi/agent/<projectsMemoryDir>/<project_name>/
   const projectConfig = project.memoryDir
@@ -139,13 +143,25 @@ export default function (pi: ExtensionAPI) {
 
   // ── 1. Load memory from disk on session start ──
   pi.on("session_start", async (_event, ctx) => {
-    if (shouldMigrateExtensionRoot && !extensionRootMigrated) {
+    if (!persistenceInitialized) {
       try {
-        await migrateExtensionRoot(legacyGlobalDir, globalDir);
+        await migrateThenSyncMarkdownMemories(
+          dbManager,
+          shouldMigrateExtensionRoot ? legacyGlobalDir : null,
+          globalDir,
+          config.projectsMemoryDir,
+          agentRoot,
+          {
+            onMigrationSucceeded: () => {
+              databaseMigrationPending = false;
+              dbManager.setOpenGuard(null);
+            },
+          },
+        );
+        persistenceInitialized = true;
       } catch {
-        // best effort migration only
+        // Best-effort only: migration or SQLite backfill must not block startup.
       }
-      extensionRootMigrated = true;
     }
 
     refreshSkillProjectContext(ctx.cwd);
@@ -154,7 +170,7 @@ export default function (pi: ExtensionAPI) {
     await store.loadFromDisk();
     if (projectStore) await projectStore.loadFromDisk();
 
-    scheduleSessionBackfill(dbManager, sessionsDir, {
+    if (persistenceInitialized) scheduleSessionBackfill(dbManager, sessionsDir, {
       notify: (message, level) => {
         const ui = (ctx as { ui?: { notify?: (message: string, level?: string) => void } }).ui;
         if (ui?.notify) {

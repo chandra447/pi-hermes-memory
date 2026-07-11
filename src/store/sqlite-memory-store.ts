@@ -74,6 +74,12 @@ export interface SqliteMemoryRemoveOptions {
   project?: string | null;
 }
 
+export interface MarkdownMemoryReconcileResult {
+  inserted: number;
+  existing: number;
+  removed: number;
+}
+
 export interface ParsedMarkdownMemoryEntry extends SqliteMemorySyncInput {}
 
 function today(): string {
@@ -179,13 +185,18 @@ function escapeLikePattern(text: string): string {
   return text.replace(/[\\%_]/g, '\\$&');
 }
 
-function parseMetadataComment(raw: string): { text: string; created: string; lastReferenced: string } {
-  const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^>]+)\s*-->\s*$/);
+function parseMetadataComment(raw: string): { text: string; created: string; lastReferenced: string; project: string | null } {
+  const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+)(?:,\s*project64=([A-Za-z0-9_-]+))?\s*-->\s*$/);
   if (match) {
+    let project: string | null = null;
+    if (match[4]) {
+      try { project = Buffer.from(match[4], 'base64url').toString('utf-8').trim() || null; } catch {}
+    }
     return {
       text: match[1].trim(),
       created: match[2].trim(),
       lastReferenced: match[3].trim(),
+      project,
     };
   }
 
@@ -194,6 +205,7 @@ function parseMetadataComment(raw: string): { text: string; created: string; las
     text: raw.trim(),
     created: fallback,
     lastReferenced: fallback,
+    project: null,
   };
 }
 
@@ -251,7 +263,6 @@ export function formatFailureMemoryContent(
   if (options.failureReason) parts.push(`Failed: ${options.failureReason}`);
   if (options.toolState) parts.push(`Tool state: ${options.toolState}`);
   if (options.correctedTo) parts.push(`Corrected to: ${options.correctedTo}`);
-  if (options.project) parts.push(`Project: ${options.project}`);
   return parts.join(' — ');
 }
 
@@ -265,7 +276,8 @@ export function parseMarkdownMemoryEntry(
   target: 'memory' | 'user' | 'failure',
   project: string | null = null,
 ): ParsedMarkdownMemoryEntry {
-  const { text, created, lastReferenced } = parseMetadataComment(rawEntry);
+  const metadata = parseMetadataComment(rawEntry);
+  const { text, created, lastReferenced } = metadata;
   const parsedProject = normalizeNullable(project);
 
   if (target !== 'failure') {
@@ -401,6 +413,111 @@ export function syncMemoryEntry(
     action: 'existing',
     entry: getMemoryById(dbManager, existing.id)!,
   };
+}
+
+/**
+ * Make one exact Markdown target/project scope authoritative in SQLite.
+ * Upserts and orphan deletion are committed together when transactions are
+ * supported by the active SQLite driver.
+ */
+export function reconcileMarkdownMemoryScope(
+  dbManager: DatabaseManager,
+  rawEntries: string[],
+  target: 'memory' | 'user' | 'failure',
+  project: string | null = null,
+): MarkdownMemoryReconcileResult {
+  const db = dbManager.getDb();
+  const normalizedProject = normalizeNullable(project);
+
+  const reconcile = (): MarkdownMemoryReconcileResult => {
+    let inserted = 0;
+    let existing = 0;
+    const desiredIdentities = new Set<string>();
+
+    for (const rawEntry of rawEntries) {
+      const parsed = parseMarkdownMemoryEntry(rawEntry, target, normalizedProject);
+      desiredIdentities.add(JSON.stringify([
+        normalizeCategory(parsed.category),
+        parsed.content.trim(),
+      ]));
+      const result = syncMemoryEntry(dbManager, parsed);
+      if (result.action === 'inserted') inserted++;
+      else existing++;
+    }
+
+    const params: unknown[] = [];
+    const conditions = buildScopeConditions(params, target, normalizedProject);
+    const scopedRows = db.prepare(`
+      SELECT id, content, category
+      FROM memories
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY id ASC
+    `).all(...params) as Array<{ id: number; content: string; category: MemoryCategory | null }>;
+    const retainedIdentities = new Set<string>();
+    const orphanIds: number[] = [];
+    for (const row of scopedRows) {
+      const identity = JSON.stringify([normalizeCategory(row.category), row.content.trim()]);
+      if (!desiredIdentities.has(identity) || retainedIdentities.has(identity)) {
+        orphanIds.push(row.id);
+      } else {
+        retainedIdentities.add(identity);
+      }
+    }
+
+    let removed = 0;
+    if (orphanIds.length > 0) {
+      const placeholders = orphanIds.map(() => '?').join(', ');
+      removed = db.prepare(`DELETE FROM memories WHERE id IN (${placeholders})`).run(...orphanIds).changes;
+    }
+
+    return { inserted, existing, removed };
+  };
+
+  const transactional = db.transaction?.(reconcile);
+  return transactional ? transactional() : reconcile();
+}
+
+function failureProject(rawEntry: string): string | null {
+  return parseMetadataComment(rawEntry).project;
+}
+
+export function reconcileMarkdownFailureScopes(
+  dbManager: DatabaseManager,
+  rawEntries: string[],
+): MarkdownMemoryReconcileResult {
+  const entriesByProject = new Map<string | null, string[]>();
+  for (const rawEntry of rawEntries) {
+    const project = failureProject(rawEntry);
+    const entries = entriesByProject.get(project) ?? [];
+    entries.push(rawEntry);
+    entriesByProject.set(project, entries);
+  }
+
+  const mirroredProjects = dbManager.getDb().prepare(`
+    SELECT DISTINCT project
+    FROM memories
+    WHERE target = 'failure'
+  `).all() as Array<{ project: string | null }>;
+  const projects = new Set<string | null>([
+    null,
+    ...entriesByProject.keys(),
+    ...mirroredProjects.map(({ project }) => normalizeNullable(project)),
+  ]);
+  const total: MarkdownMemoryReconcileResult = { inserted: 0, existing: 0, removed: 0 };
+
+  for (const project of projects) {
+    const result = reconcileMarkdownMemoryScope(
+      dbManager,
+      entriesByProject.get(project) ?? [],
+      'failure',
+      project,
+    );
+    total.inserted += result.inserted;
+    total.existing += result.existing;
+    total.removed += result.removed;
+  }
+
+  return total;
 }
 
 /**

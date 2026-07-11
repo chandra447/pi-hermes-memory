@@ -43,16 +43,6 @@ after(async () => {
   try { await fs.rm(LOCK_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
 });
 
-function captureExecArgs(args: any[]): any[] {
-  const [command, childArgs, options] = args;
-  const capturedArgs = [...childArgs];
-  const promptReference = capturedArgs.at(-1);
-  if (typeof promptReference === "string" && promptReference.startsWith("@")) {
-    capturedArgs[capturedArgs.length - 1] = readFileSync(promptReference.slice(1), "utf-8");
-  }
-  return [command, capturedArgs, options];
-}
-
 function logicalChildArgs(call: any[]): string[] {
   const [cmd, args] = call;
   const logicalArgs = cmd === "pi" ? args : args.slice(1);

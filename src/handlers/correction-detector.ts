@@ -12,10 +12,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import {
-  formatFailureMemoryContent,
-  syncMemoryEntry,
-} from "../store/sqlite-memory-store.js";
-import {
   CORRECTION_SAVE_PROMPT,
   CORRECTION_STRONG_PATTERNS,
   CORRECTION_WEAK_PATTERNS,
@@ -127,7 +123,7 @@ export function setupCorrectionDetector(
   store: MemoryStore,
   projectStore: MemoryStore | null,
   config: MemoryConfig,
-  dbManager: DatabaseManager | null = null,
+  _dbManager: DatabaseManager | null = null,
   projectName?: string | null,
 ): void {
   if (!config.correctionDetection) return;
@@ -226,29 +222,11 @@ export function setupCorrectionDetector(
           const directive = extractCorrectionDirective(correctionText);
           const failureReason = "User corrected the agent";
           const scopedProjectName = projectStore ? projectName?.trim() || null : null;
-          const addResult = await store.addFailure(directive, {
+          await store.addFailure(directive, {
             category: "correction",
             failureReason,
             project: scopedProjectName ?? undefined,
           });
-
-          if (addResult.success && dbManager) {
-            try {
-              syncMemoryEntry(dbManager, {
-                content: formatFailureMemoryContent(directive, {
-                  category: "correction",
-                  failureReason,
-                  project: scopedProjectName,
-                }),
-                target: "failure",
-                project: scopedProjectName,
-                category: "correction",
-                failureReason,
-              });
-            } catch {
-              // Best-effort — searchable sync should not block correction capture
-            }
-          }
         }
       } catch {
         // Best-effort — don't block the session
