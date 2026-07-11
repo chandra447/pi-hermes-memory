@@ -9,12 +9,14 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import { CONSOLIDATION_PROMPT, ENTRY_DELIMITER } from "../constants.js";
 import type { ConsolidationResult, MemoryConfig } from "../types.js";
 import { AGENT_ROOT } from "../paths.js";
 import { execChildPrompt } from "./pi-child-process.js";
+import { AtomicLockCoordinator } from "../store/atomic-lock-coordinator.js";
 
 type MemoryTarget = "memory" | "user" | "failure";
 type ToolMemoryTarget = MemoryTarget | "project";
@@ -23,7 +25,6 @@ const CONSOLIDATION_LOCK_STALE_GRACE_MS = 30000;
 const CONSOLIDATION_LOCK_ENV = "PI_HERMES_CONSOLIDATION_LOCK_DIR";
 
 interface ConsolidationLock {
-  path: string;
   release: () => Promise<void>;
 }
 
@@ -36,54 +37,26 @@ function sanitizeLockPart(value: string): string {
   return value.replace(/[^a-z0-9._-]+/gi, "_").slice(0, 80) || "unknown";
 }
 
-function consolidationLockPath(target: MemoryTarget, toolTarget: ToolMemoryTarget): string {
-  return path.join(consolidationLockRoot(), `${sanitizeLockPart(toolTarget)}-${sanitizeLockPart(target)}.lock`);
-}
-
-async function lockIsStale(lockDir: string, timeoutMs: number): Promise<boolean> {
-  try {
-    const stat = await fs.stat(lockDir);
-    const staleAfterMs = Math.max(timeoutMs, 0) + CONSOLIDATION_LOCK_STALE_GRACE_MS;
-    return Date.now() - stat.mtimeMs > staleAfterMs;
-  } catch {
-    return false;
-  }
+function consolidationLockKey(target: MemoryTarget, toolTarget: ToolMemoryTarget, storageIdentity: string): string {
+  const storageHash = createHash("sha256").update(storageIdentity).digest("hex");
+  return `${sanitizeLockPart(toolTarget)}:${sanitizeLockPart(target)}:${storageHash}`;
 }
 
 async function tryAcquireConsolidationLock(
+  store: MemoryStore,
   target: MemoryTarget,
   toolTarget: ToolMemoryTarget,
   timeoutMs: number,
 ): Promise<ConsolidationLock | null> {
-  const lockDir = consolidationLockPath(target, toolTarget);
-  await fs.mkdir(path.dirname(lockDir), { recursive: true });
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      await fs.mkdir(lockDir);
-      await fs.writeFile(
-        path.join(lockDir, "owner.json"),
-        JSON.stringify({ pid: process.pid, target, toolTarget, startedAt: new Date().toISOString() }, null, 2),
-        "utf-8",
-      );
-      return {
-        path: lockDir,
-        release: async () => {
-          await fs.rm(lockDir, { recursive: true, force: true });
-        },
-      };
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "EEXIST") throw err;
-      if (attempt === 0 && await lockIsStale(lockDir, timeoutMs)) {
-        await fs.rm(lockDir, { recursive: true, force: true });
-        continue;
-      }
-      return null;
-    }
-  }
-
-  return null;
+  const storageIdentity = await store.getStorageIdentity(target);
+  const root = consolidationLockRoot();
+  await fs.mkdir(root, { recursive: true });
+  const coordinator = new AtomicLockCoordinator(path.join(root, "locks.sqlite"));
+  const lease = coordinator.tryAcquire(
+    consolidationLockKey(target, toolTarget, storageIdentity),
+    { staleMs: Math.max(timeoutMs, 0) + CONSOLIDATION_LOCK_STALE_GRACE_MS },
+  );
+  return lease ? { release: async () => lease.release() } : null;
 }
 
 function entriesForTarget(store: MemoryStore, target: MemoryTarget): string[] {
@@ -137,7 +110,7 @@ export async function triggerConsolidation(
   let lock: ConsolidationLock | null = null;
 
   try {
-    lock = await tryAcquireConsolidationLock(target, toolTarget, timeoutMs);
+    lock = await tryAcquireConsolidationLock(store, target, toolTarget, timeoutMs);
     if (!lock) {
       return {
         consolidated: false,

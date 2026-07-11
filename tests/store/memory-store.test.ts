@@ -9,6 +9,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { describe, it, before, after, beforeEach, afterEach } from "node:test";
 
 
@@ -395,6 +396,36 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const count = raw.split(ENTRY_DELIMITER).filter(Boolean).length;
       assert.equal(count, 1);
     });
+
+    it("keeps identical failure text in global and distinct project scopes", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+
+      const first = await store.addFailure(`${TEST_MARKER} use pnpm`, {
+        category: "correction",
+        project: "project-a",
+      });
+      const second = await store.addFailure(`${TEST_MARKER} use pnpm`, {
+        category: "correction",
+        project: "project-b",
+      });
+      const global = await store.addFailure(`${TEST_MARKER} use pnpm`, {
+        category: "correction",
+      });
+      const duplicate = await store.addFailure(`${TEST_MARKER} use pnpm`, {
+        category: "correction",
+        project: "project-a",
+      });
+
+      assert.ok(first.success);
+      assert.ok(second.success);
+      assert.equal(second.entry_count, 2);
+      assert.ok(global.success);
+      assert.equal(global.entry_count, 3);
+      assert.equal(duplicate.message, "Entry already exists (no duplicate added).");
+      assert.equal(duplicate.entry_count, 3);
+      assert.equal(store.getRawEntriesForSync("failure").length, 3);
+    });
   });
 
   // ─── replace() tests ───
@@ -468,6 +499,31 @@ describe("MemoryStore", { concurrency: 1 }, () => {
 
       assert.ok(!result.success);
       assert.equal(result.error, "new_content cannot be empty. Use 'remove' to delete entries.");
+    });
+
+    it("replaces identical failure text across project scopes while preserving each scope", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.addFailure(`${TEST_MARKER} shared correction`, { category: "correction", project: "project-a" });
+      await store.addFailure(`${TEST_MARKER} shared correction`, { category: "correction", project: "project-b" });
+
+      const result = await store.replace(
+        "failure",
+        `[correction] ${TEST_MARKER} shared correction`,
+        `[correction] ${TEST_MARKER} replacement`,
+      );
+
+      assert.equal(result.success, true);
+      const entries = store.getRawEntriesForSync("failure");
+      assert.equal(entries.length, 2);
+      assert.ok(entries.every((entry) => entry.includes(`${TEST_MARKER} replacement`)));
+      assert.deepEqual(
+        entries.map((entry) => entry.match(/project64=([A-Za-z0-9_-]+)/)?.[1]).sort(),
+        [
+          Buffer.from("project-a", "utf-8").toString("base64url"),
+          Buffer.from("project-b", "utf-8").toString("base64url"),
+        ],
+      );
     });
   });
 
@@ -553,6 +609,19 @@ describe("MemoryStore", { concurrency: 1 }, () => {
 
       assert.ok(!result.success);
       assert.equal(result.error, "old_text cannot be empty.");
+    });
+
+    it("removes identical failure text across project scopes", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.addFailure(`${TEST_MARKER} shared correction`, { category: "correction", project: "project-a" });
+      await store.addFailure(`${TEST_MARKER} shared correction`, { category: "correction", project: "project-b" });
+
+      const result = await store.remove("failure", `[correction] ${TEST_MARKER} shared correction`);
+
+      assert.equal(result.success, true);
+      assert.deepEqual(store.getRawEntriesForSync("failure"), []);
+      assert.equal((await readRaw(failurePath)).trim(), "");
     });
   });
 
@@ -753,6 +822,79 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       raw = await readRaw(memoryPath);
       assert.equal(raw.trim(), "");
     });
+
+    it("mutates a file-symlinked Markdown target without replacing the link", { skip: process.platform === "win32" }, async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-memory-symlink-test-"));
+      const realDir = path.join(root, "real");
+      const aliasDir = path.join(root, "alias");
+      await fs.mkdir(realDir);
+      await fs.mkdir(aliasDir);
+      const realPath = path.join(realDir, MEMORY_FILE);
+      const aliasPath = path.join(aliasDir, MEMORY_FILE);
+      await fs.writeFile(realPath, `${TEST_MARKER} original`, "utf-8");
+      await fs.symlink(realPath, aliasPath, "file");
+
+      try {
+        const aliasStore = new MemoryStore(makeConfig({ memoryDir: aliasDir }));
+        await aliasStore.loadFromDisk();
+        await aliasStore.add("memory", `${TEST_MARKER} alias write`);
+
+        assert.equal((await fs.lstat(aliasPath)).isSymbolicLink(), true);
+        const directStore = new MemoryStore(makeConfig({ memoryDir: realDir }));
+        await directStore.loadFromDisk();
+        await directStore.add("memory", `${TEST_MARKER} direct write`);
+
+        const raw = await fs.readFile(realPath, "utf-8");
+        assert.match(raw, /original/);
+        assert.match(raw, /alias write/);
+        assert.match(raw, /direct write/);
+        assert.equal((await fs.lstat(aliasPath)).isSymbolicLink(), true);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("creates a dangling relative Markdown symlink target and preserves the link", { skip: process.platform === "win32" }, async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-memory-dangling-symlink-test-"));
+      const realDir = path.join(root, "real");
+      const aliasDir = path.join(root, "alias");
+      await fs.mkdir(realDir);
+      await fs.mkdir(aliasDir);
+      const realPath = path.join(realDir, MEMORY_FILE);
+      const aliasPath = path.join(aliasDir, MEMORY_FILE);
+      await fs.symlink(path.relative(aliasDir, realPath), aliasPath, "file");
+
+      try {
+        const aliasStore = new MemoryStore(makeConfig({ memoryDir: aliasDir }));
+        await aliasStore.loadFromDisk();
+        const aliasResult = await aliasStore.add("memory", `${TEST_MARKER} alias write`);
+        assert.equal(aliasResult.success, true);
+
+        const directStore = new MemoryStore(makeConfig({ memoryDir: realDir }));
+        await directStore.loadFromDisk();
+        const directResult = await directStore.add("memory", `${TEST_MARKER} direct write`);
+        assert.equal(directResult.success, true);
+
+        const raw = await fs.readFile(realPath, "utf-8");
+        assert.match(raw, /alias write/);
+        assert.match(raw, /direct write/);
+        assert.equal((await fs.lstat(aliasPath)).isSymbolicLink(), true);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects Markdown symlink loops before mutation", { skip: process.platform === "win32" }, async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-memory-symlink-loop-test-"));
+      await fs.symlink(USER_FILE, path.join(root, MEMORY_FILE), "file");
+      await fs.symlink(MEMORY_FILE, path.join(root, USER_FILE), "file");
+      try {
+        const store = new MemoryStore(makeConfig({ memoryDir: root }));
+        await assert.rejects(store.loadFromDisk(), /symbolic link loop/i);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   // ─── Both targets ───
@@ -776,93 +918,644 @@ describe("MemoryStore", { concurrency: 1 }, () => {
     });
   });
 
-  // ─── External write detection (consolidation race) ───
-
-  describe("external file changes (consolidation race)", () => {
-    /** Ensure the next external write gets a distinct mtime on coarse-grained filesystems. */
-    async function tick(): Promise<void> {
-      await new Promise((r) => setTimeout(r, 20));
+  describe("external file changes", () => {
+    async function replaceOnDiskSameSize(from: string, to: string): Promise<void> {
+      assert.equal(Buffer.byteLength(from), Buffer.byteLength(to));
+      const before = await readRaw(memoryPath);
+      const after = before.replace(from, to);
+      assert.notEqual(after, before);
+      assert.equal(Buffer.byteLength(after), Buffer.byteLength(before));
+      await writeRaw(memoryPath, after);
     }
 
-    it("add() after an external rewrite preserves the on-disk state instead of clobbering it", async () => {
+    it("add preserves a same-size external rewrite", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
-
-      await store.add("memory", `${TEST_MARKER} stale entry A`);
+      await store.add("memory", `${TEST_MARKER} stale-A`);
       await settle();
 
-      // Simulate a consolidation child process rewriting the file on disk
-      await tick();
-      const consolidated = `${TEST_MARKER} CONSOLIDATED entry <!-- created=2026-01-01, last=2026-01-01 -->`;
-      await writeRaw(memoryPath, consolidated);
-
-      const result = await store.add("memory", `${TEST_MARKER} entry B after consolidation`);
+      await replaceOnDiskSameSize("stale-A", "fresh-B");
+      const result = await store.add("memory", `${TEST_MARKER} appended`);
       await settle();
 
-      assert.ok(result.success);
+      assert.equal(result.success, true);
       const raw = await readRaw(memoryPath);
-      assert.ok(raw.includes("CONSOLIDATED entry"), "externally-written consolidated content must survive");
-      assert.ok(raw.includes(`${TEST_MARKER} entry B after consolidation`), "new entry must be appended");
-      assert.ok(!raw.includes(`${TEST_MARKER} stale entry A`), "stale pre-consolidation entry must not be resurrected");
+      assert.match(raw, /fresh-B/);
+      assert.match(raw, /appended/);
+      assert.doesNotMatch(raw, /stale-A/);
     });
 
-    it("remove() matches entries written externally after the last load", async () => {
+    it("replace sees a same-size external rewrite", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
-
-      await store.add("memory", `${TEST_MARKER} original entry`);
+      await store.add("memory", `${TEST_MARKER} stale-A`);
       await settle();
 
-      await tick();
-      const external = `${TEST_MARKER} externally added entry <!-- created=2026-01-01, last=2026-01-01 -->`;
-      const current = await readRaw(memoryPath);
-      await writeRaw(memoryPath, current + ENTRY_DELIMITER + external);
-
-      const result = await store.remove("memory", `${TEST_MARKER} externally added entry`);
+      await replaceOnDiskSameSize("stale-A", "fresh-B");
+      const result = await store.replace("memory", `${TEST_MARKER} fresh-B`, `${TEST_MARKER} replaced`);
       await settle();
 
-      assert.ok(result.success, "remove should see the externally-added entry");
+      assert.equal(result.success, true);
       const raw = await readRaw(memoryPath);
-      assert.ok(!raw.includes("externally added entry"));
-      assert.ok(raw.includes(`${TEST_MARKER} original entry`));
+      assert.match(raw, /replaced/);
+      assert.doesNotMatch(raw, /fresh-B|stale-A/);
     });
 
-    it("replace() matches entries written externally after the last load", async () => {
+    it("remove sees a same-size external rewrite", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} stale-A`);
+      await settle();
 
-      await tick();
-      const external = `${TEST_MARKER} external entry to replace <!-- created=2026-01-01, last=2026-01-01 -->`;
-      await writeRaw(memoryPath, external);
+      await replaceOnDiskSameSize("stale-A", "fresh-B");
+      const result = await store.remove("memory", `${TEST_MARKER} fresh-B`);
+      await settle();
 
-      const result = await store.replace(
-        "memory",
-        `${TEST_MARKER} external entry to replace`,
-        `${TEST_MARKER} replaced content`,
+      assert.equal(result.success, true);
+      const raw = await readRaw(memoryPath);
+      assert.doesNotMatch(raw, /fresh-B|stale-A/);
+    });
+
+    it("reapplies an add when an external write lands immediately before rename", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} existing`);
+
+      const originalSave = (store as any).saveToDisk.bind(store);
+      let injected = false;
+      (store as any).saveToDisk = async (target: "memory") => {
+        if (!injected) {
+          injected = true;
+          const current = await readRaw(memoryPath);
+          await writeRaw(memoryPath, `${current}${ENTRY_DELIMITER}${TEST_MARKER} external editor`);
+        }
+        return originalSave(target);
+      };
+
+      const result = await store.add("memory", `${TEST_MARKER} local add`);
+
+      assert.equal(result.success, true);
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /external editor/);
+      assert.match(raw, /local add/);
+      assert.equal(raw.match(/external editor/g)?.length, 1);
+      assert.equal(raw.match(/local add/g)?.length, 1);
+    });
+
+    it("reapplies an add when an external write lands after the final fingerprint read", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} existing`);
+
+      const originalRead = (store as any).readFileState.bind(store);
+      const canonicalMemoryPath = await fs.realpath(memoryPath);
+      let injected = false;
+      let memoryReads = 0;
+      (store as any).readFileState = async (filePath: string) => {
+        const state = await originalRead(filePath);
+        if (filePath === canonicalMemoryPath) memoryReads++;
+        if (!injected && filePath === canonicalMemoryPath && memoryReads === 2) {
+          injected = true;
+          const current = await readRaw(memoryPath);
+          await writeRaw(memoryPath, `${current}${ENTRY_DELIMITER}${TEST_MARKER} late editor`);
+        }
+        return state;
+      };
+
+      const result = await store.add("memory", `${TEST_MARKER} local add`);
+
+      assert.equal(result.success, true);
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /late editor/);
+      assert.match(raw, /local add/);
+    });
+
+    it("recovers a write through an open descriptor after displacement", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} existing`);
+      const handle = await fs.open(memoryPath, "r+");
+
+      const originalRead = (store as any).readFileState.bind(store);
+      let injected = false;
+      (store as any).readFileState = async (filePath: string) => {
+        if (!injected && path.basename(filePath).startsWith(`.${MEMORY_FILE}.recovery-`)) {
+          injected = true;
+          await handle.truncate(0);
+          await handle.writeFile(`${TEST_MARKER} descriptor editor`, "utf-8");
+          await handle.sync();
+        }
+        return originalRead(filePath);
+      };
+
+      try {
+        const result = await store.add("memory", `${TEST_MARKER} local add`);
+        assert.equal(result.success, true);
+      } finally {
+        await handle.close();
+      }
+
+      assert.equal(injected, true);
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /descriptor editor/);
+      assert.match(raw, /local add/);
+    });
+
+    it("preserves a late write through a displaced open descriptor", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} existing`);
+      const handle = await fs.open(memoryPath, "r+");
+
+      const originalRead = (store as any).readFileState.bind(store);
+      let displacedReads = 0;
+      (store as any).readFileState = async (filePath: string) => {
+        const state = await originalRead(filePath);
+        if (path.basename(filePath).startsWith(`.${MEMORY_FILE}.recovery-`)) {
+          displacedReads++;
+          if (displacedReads === 2) {
+            await handle.truncate(0);
+            await handle.writeFile(`${TEST_MARKER} late descriptor editor`, "utf-8");
+            await handle.sync();
+          }
+        }
+        return state;
+      };
+
+      try {
+        const result = await store.add("memory", `${TEST_MARKER} local add`);
+        assert.equal(result.success, true);
+      } finally {
+        await handle.close();
+      }
+
+      const siblings = await fs.readdir(MEMORY_DIR);
+      const recoveryFiles = siblings.filter((name) => name.startsWith(`.${MEMORY_FILE}.recovery-`));
+      assert.ok(recoveryFiles.length > 0);
+      const recovered = await Promise.all(
+        recoveryFiles.map((name) => fs.readFile(path.join(MEMORY_DIR, name), "utf-8")),
       );
-      await settle();
-
-      assert.ok(result.success, "replace should see the externally-written entry");
-      const raw = await readRaw(memoryPath);
-      assert.ok(raw.includes(`${TEST_MARKER} replaced content`));
-      assert.ok(!raw.includes("external entry to replace"));
-      // Original created date must be preserved from the external entry
-      assert.ok(raw.includes("created=2026-01-01"));
+      assert.ok(recovered.some((content) => content.includes("late descriptor editor")));
     });
 
-    it("does not reload when the file is unchanged (steady state)", async () => {
+    it("keeps the displaced original when either verification stage fails", async () => {
+      for (const failureRead of [1, 2]) {
+        await cleanSlate();
+        const store = new MemoryStore(makeConfig());
+        await store.loadFromDisk();
+        await store.add("memory", `${TEST_MARKER} original before failure ${failureRead}`);
+
+        const originalRead = (store as any).readFileState.bind(store);
+        let displacedReads = 0;
+        (store as any).readFileState = async (filePath: string) => {
+          if (path.basename(filePath).startsWith(`.${MEMORY_FILE}.recovery-`)) {
+            displacedReads++;
+            if (displacedReads === failureRead) {
+              throw new Error(`injected displaced verification failure ${failureRead}`);
+            }
+          }
+          return originalRead(filePath);
+        };
+
+        await assert.rejects(
+          store.add("memory", `${TEST_MARKER} local add`),
+          new RegExp(`injected displaced verification failure ${failureRead}`),
+        );
+
+        const siblings = await fs.readdir(MEMORY_DIR);
+        const recoveryFiles = siblings.filter((name) => name.startsWith(`.${MEMORY_FILE}.recovery-`));
+        const recovered = await Promise.all(
+          recoveryFiles.map((name) => fs.readFile(path.join(MEMORY_DIR, name), "utf-8")),
+        );
+        assert.ok(recovered.some((content) => content.includes(`original before failure ${failureRead}`)));
+        assert.match(await readRaw(memoryPath), new RegExp(`original before failure ${failureRead}`));
+      }
+    });
+
+    it("restores the authoritative file when conflict preservation fails", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} original before preservation failure`);
+
+      const originalRead = (store as any).readFileState.bind(store);
+      let displacedReads = 0;
+      (store as any).readFileState = async (filePath: string) => {
+        if (path.basename(filePath).startsWith(`.${MEMORY_FILE}.recovery-`)) {
+          displacedReads++;
+          if (displacedReads === 2) {
+            throw new Error("injected post-publish verification failure");
+          }
+        }
+        return originalRead(filePath);
+      };
+      (store as any).preserveConflictFile = async () => {
+        throw new Error("injected conflict preservation failure");
+      };
+
+      await assert.rejects(
+        store.add("memory", `${TEST_MARKER} failed local add`),
+        /injected post-publish verification failure/,
+      );
+      assert.match(await readRaw(memoryPath), /original before preservation failure/);
+      assert.doesNotMatch(await readRaw(memoryPath), /failed local add/);
+
+      (store as any).readFileState = originalRead;
+      const result = await store.add("memory", `${TEST_MARKER} later successful add`);
+      assert.equal(result.success, true);
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /original before preservation failure/);
+      assert.match(raw, /later successful add/);
+      assert.doesNotMatch(raw, /failed local add/);
+    });
+
+    it("rolls back a published mutation without copying through the temporary link", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} original before copy failure`);
+
+      const originalRead = (store as any).readFileState.bind(store);
+      let displacedReads = 0;
+      (store as any).readFileState = async (filePath: string) => {
+        if (path.basename(filePath).startsWith(`.${MEMORY_FILE}.recovery-`)) {
+          displacedReads++;
+          if (displacedReads === 2) throw new Error("injected post-publish failure");
+        }
+        return originalRead(filePath);
+      };
+      (store as any).preserveConflictFile = async (tmpPath: string) => {
+        await fs.unlink(tmpPath);
+        await fs.mkdir(tmpPath);
+        throw new Error("injected conflict copy failure");
+      };
+
+      await assert.rejects(
+        store.add("memory", `${TEST_MARKER} failed local add`),
+        /injected post-publish failure/,
+      );
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /original before copy failure/);
+      assert.doesNotMatch(raw, /failed local add/);
+    });
+
+    it("does not delete an editor file recreated during rollback", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} original before rollback race`);
+
+      const originalRead = (store as any).readFileState.bind(store);
+      let displacedReads = 0;
+      (store as any).readFileState = async (filePath: string) => {
+        if (path.basename(filePath).startsWith(`.${MEMORY_FILE}.recovery-`)) {
+          displacedReads++;
+          if (displacedReads === 2) throw new Error("injected post-publish failure");
+        }
+        return originalRead(filePath);
+      };
+      (store as any).preserveConflictFile = async () => {
+        await fs.rename(memoryPath, `${memoryPath}.owned-local`);
+        await writeRaw(memoryPath, `${TEST_MARKER} editor successor`);
+        return `${memoryPath}.owned-local`;
+      };
+
+      await assert.rejects(
+        store.add("memory", `${TEST_MARKER} failed local add`),
+        /injected post-publish failure/,
+      );
+
+      assert.equal(await readRaw(memoryPath), `${TEST_MARKER} editor successor`);
+    });
+
+    it("does not commit a failed add during a later mutation", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} existing`);
+
+      const originalSave = (store as any).saveToDisk.bind(store);
+      let failNextSave = true;
+      (store as any).saveToDisk = async (target: "memory") => {
+        if (failNextSave) {
+          failNextSave = false;
+          throw new Error("injected add save failure");
+        }
+        await originalSave(target);
+      };
+
+      await assert.rejects(
+        store.add("memory", `${TEST_MARKER} failed add`),
+        /injected add save failure/,
+      );
+      const result = await store.add("memory", `${TEST_MARKER} later add`);
+
+      assert.equal(result.success, true);
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /existing/);
+      assert.match(raw, /later add/);
+      assert.doesNotMatch(raw, /failed add/);
+    });
+
+    it("does not commit a failed replacement during a later mutation", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} original entry`);
+
+      const originalSave = (store as any).saveToDisk.bind(store);
+      let failNextSave = true;
+      (store as any).saveToDisk = async (target: "memory") => {
+        if (failNextSave) {
+          failNextSave = false;
+          throw new Error("injected replace save failure");
+        }
+        await originalSave(target);
+      };
+
+      await assert.rejects(
+        store.replace("memory", `${TEST_MARKER} original entry`, `${TEST_MARKER} failed replacement`),
+        /injected replace save failure/,
+      );
+      const result = await store.add("memory", `${TEST_MARKER} later add`);
+
+      assert.equal(result.success, true);
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /original entry/);
+      assert.match(raw, /later add/);
+      assert.doesNotMatch(raw, /failed replacement/);
+    });
+
+    it("does not commit a failed removal during a later mutation", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} retained entry`);
+
+      const originalSave = (store as any).saveToDisk.bind(store);
+      let failNextSave = true;
+      (store as any).saveToDisk = async (target: "memory") => {
+        if (failNextSave) {
+          failNextSave = false;
+          throw new Error("injected remove save failure");
+        }
+        await originalSave(target);
+      };
+
+      await assert.rejects(
+        store.remove("memory", `${TEST_MARKER} retained entry`),
+        /injected remove save failure/,
+      );
+      const result = await store.add("memory", `${TEST_MARKER} later add`);
+
+      assert.equal(result.success, true);
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /retained entry/);
+      assert.match(raw, /later add/);
+    });
+
+    it("prunes expired recovery files but retains recently active ones", async () => {
+      const pathStore = new MemoryStore(makeConfig());
+      const expiredPath = (pathStore as any).recoveryPathFor(memoryPath) as string;
+      const activePath = (pathStore as any).recoveryPathFor(memoryPath) as string;
+      await writeRaw(expiredPath, `${TEST_MARKER} expired recovery`);
+      await writeRaw(activePath, `${TEST_MARKER} active recovery`);
+      const expired = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+      await fs.utimes(expiredPath, expired, expired);
+
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} triggers recovery pruning`);
+
+      await assert.rejects(fs.stat(expiredPath), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+      assert.equal(await fs.readFile(activePath, "utf-8"), `${TEST_MARKER} active recovery`);
+      const retiredFiles = (await fs.readdir(MEMORY_DIR))
+        .filter((name) => name.startsWith(`.${MEMORY_FILE}.retired-`));
+      const retiredContents = await Promise.all(
+        retiredFiles.map((name) => fs.readFile(path.join(MEMORY_DIR, name), "utf-8")),
+      );
+      assert.ok(retiredContents.some((content) => content.includes("expired recovery")));
+    });
+
+    it("keeps the active recovery pathname stable for late writes within the grace period", async () => {
+      const pathStore = new MemoryStore(makeConfig());
+      const activePath = (pathStore as any).recoveryPathFor(memoryPath) as string;
+      await writeRaw(activePath, `${TEST_MARKER} displaced original`);
+      const handle = await fs.open(activePath, "r+");
+
+      try {
+        const store = new MemoryStore(makeConfig());
+        await store.loadFromDisk();
+        await store.add("memory", `${TEST_MARKER} triggers recovery pruning`);
+        await handle.truncate(0);
+        await handle.writeFile(`${TEST_MARKER} late active descriptor write`, "utf-8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+
+      assert.match(await fs.readFile(activePath, "utf-8"), /late active descriptor write/);
+    });
+
+    it("ignores generated-looking recovery symlinks during pruning", async (t) => {
+      if (process.platform === "win32") {
+        t.skip("symlink creation requires platform privileges");
+        return;
+      }
+      const outsidePath = path.join(path.dirname(MEMORY_DIR), "outside-sensitive.md");
+      const pathStore = new MemoryStore(makeConfig());
+      const symlinkPath = (pathStore as any).recoveryPathFor(memoryPath) as string;
+      await writeRaw(outsidePath, `${TEST_MARKER} outside sensitive content`);
+      await fs.symlink(outsidePath, symlinkPath);
+      const expired = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+      await fs.utimes(outsidePath, expired, expired);
+
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} triggers symlink-safe pruning`);
+
+      assert.equal((await fs.lstat(symlinkPath)).isSymbolicLink(), true);
+      const retiredFiles = (await fs.readdir(MEMORY_DIR))
+        .filter((name) => name.startsWith(`.${MEMORY_FILE}.retired-`));
+      const retiredContents = await Promise.all(
+        retiredFiles.map((name) => fs.readFile(path.join(MEMORY_DIR, name), "utf-8")),
+      );
+      assert.equal(retiredContents.some((content) => content.includes("outside sensitive content")), false);
+    });
+
+    it("bounds retired recovery snapshots by age, count, and bytes", async () => {
+      const pathStore = new MemoryStore(makeConfig());
+      const staleRetiredPath = (pathStore as any).retiredRecoveryPathFor(memoryPath) as string;
+      await writeRaw(staleRetiredPath, `${TEST_MARKER} stale retired snapshot`);
+      const stale = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+      await fs.utimes(staleRetiredPath, stale, stale);
+
+      for (let index = 0; index < 40; index++) {
+        const retiredPath = (pathStore as any).retiredRecoveryPathFor(memoryPath) as string;
+        await writeRaw(retiredPath, `${TEST_MARKER} retired ${index}`);
+        await fs.truncate(retiredPath, 2 * 1024 * 1024);
+      }
+
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} triggers retired pruning`);
+
+      const siblings = await fs.readdir(MEMORY_DIR);
+      const retiredFiles = siblings.filter((name) => name.startsWith(`.${MEMORY_FILE}.retired-`));
+      const retiredStats = await Promise.all(
+        retiredFiles.map((name) => fs.stat(path.join(MEMORY_DIR, name))),
+      );
+      assert.ok(!retiredFiles.includes(path.basename(staleRetiredPath)));
+      assert.ok(retiredFiles.length <= 32);
+      assert.ok(retiredStats.reduce((total, stat) => total + stat.size, 0) <= 64 * 1024 * 1024);
+    });
+
+    it("bounds generated conflict artifacts without following lookalike symlinks", async () => {
+      const externalPath = path.join(MEMORY_DIR, "outside-conflict-data");
+      await writeRaw(externalPath, `${TEST_MARKER} outside data`);
+      const symlinkPath = path.join(
+        MEMORY_DIR,
+        `.${MEMORY_FILE}.conflict-local-${Date.now()}-${randomUUID()}`,
+      );
+      if (process.platform !== "win32") await fs.symlink(externalPath, symlinkPath, "file");
+
+      for (let index = 0; index < 40; index++) {
+        const conflictPath = path.join(
+          MEMORY_DIR,
+          `.${MEMORY_FILE}.conflict-local-${Date.now() - index}-${randomUUID()}`,
+        );
+        await writeRaw(conflictPath, `${TEST_MARKER} conflict ${index}`);
+        await fs.truncate(conflictPath, 2 * 1024 * 1024);
+      }
+      const stalePath = path.join(
+        MEMORY_DIR,
+        `.${MEMORY_FILE}.conflict-local-${Date.now()}-${randomUUID()}`,
+      );
+      await writeRaw(stalePath, `${TEST_MARKER} stale conflict`);
+      const stale = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+      await fs.utimes(stalePath, stale, stale);
+
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} triggers conflict pruning`);
+
+      const names = await fs.readdir(MEMORY_DIR);
+      const conflicts = names.filter((name) => /^\.MEMORY\.md\.conflict-local-\d+-[0-9a-f-]{36}$/.test(name));
+      const regularConflicts = [];
+      for (const name of conflicts) {
+        const artifactPath = path.join(MEMORY_DIR, name);
+        if ((await fs.lstat(artifactPath)).isFile()) regularConflicts.push(artifactPath);
+      }
+      const stats = await Promise.all(regularConflicts.map((artifactPath) => fs.stat(artifactPath)));
+      assert.ok(!names.includes(path.basename(stalePath)));
+      assert.ok(regularConflicts.length <= 32);
+      assert.ok(stats.reduce((total, stat) => total + stat.size, 0) <= 64 * 1024 * 1024);
+      assert.equal(await fs.readFile(externalPath, "utf-8"), `${TEST_MARKER} outside data`);
+      if (process.platform !== "win32") assert.equal((await fs.lstat(symlinkPath)).isSymbolicLink(), true);
+    });
+
+    it("commits and observes a mutation when published-link cleanup fails", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} existing before cleanup failure`);
+
+      let cleanupAttempted = false;
+      let observed = false;
+      (store as any).unlinkPublishedTempLink = async () => {
+        cleanupAttempted = true;
+        throw new Error("injected published-link cleanup failure");
+      };
+      store.setMutationObserver(async () => {
+        observed = true;
+        return null;
+      });
+
+      const result = await store.add("memory", `${TEST_MARKER} committed despite cleanup failure`);
+
+      assert.equal(result.success, true);
+      assert.equal(cleanupAttempted, true);
+      assert.equal(observed, true);
+      assert.match(await readRaw(memoryPath), /committed despite cleanup failure/);
+    });
+
+    it("replays when an editor recreates the path after displacement", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} existing`);
+
+      const originalRead = (store as any).readFileState.bind(store);
+      let injected = false;
+      (store as any).readFileState = async (filePath: string) => {
+        const state = await originalRead(filePath);
+        if (!injected && path.basename(filePath).startsWith(`.${MEMORY_FILE}.recovery-`)) {
+          injected = true;
+          await writeRaw(memoryPath, `${TEST_MARKER} recreated editor`);
+        }
+        return state;
+      };
+
+      const result = await store.add("memory", `${TEST_MARKER} local add`);
+
+      assert.equal(result.success, true);
+      assert.equal(injected, true);
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /recreated editor/);
+      assert.match(raw, /local add/);
+    });
+
+    it("serializes concurrent mutations of the same canonical target", async () => {
+      const firstStore = new MemoryStore(makeConfig());
+      const secondStore = new MemoryStore(makeConfig());
+      await Promise.all([firstStore.loadFromDisk(), secondStore.loadFromDisk()]);
+
+      const originalSave = (firstStore as any).saveToDisk.bind(firstStore);
+      let releaseFirst!: () => void;
+      const firstCanSave = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      let firstEntered!: () => void;
+      const firstEnteredSave = new Promise<void>((resolve) => { firstEntered = resolve; });
+      (firstStore as any).saveToDisk = async (target: "memory") => {
+        firstEntered();
+        await firstCanSave;
+        await originalSave(target);
+      };
+
+      const first = firstStore.add("memory", `${TEST_MARKER} first writer`);
+      await firstEnteredSave;
+      const second = secondStore.add("memory", `${TEST_MARKER} second writer`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      releaseFirst();
+      await Promise.all([first, second]);
+
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /first writer/);
+      assert.match(raw, /second writer/);
+    });
+
+    it("allows different targets to mutate concurrently", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
-      await store.add("memory", `${TEST_MARKER} first`);
-      await store.add("memory", `${TEST_MARKER} second`);
-      await settle();
+      const originalSave = (store as any).saveToDisk.bind(store);
+      let releaseMemory!: () => void;
+      const memoryCanSave = new Promise<void>((resolve) => { releaseMemory = resolve; });
+      let memoryEntered!: () => void;
+      const memoryEnteredSave = new Promise<void>((resolve) => { memoryEntered = resolve; });
+      (store as any).saveToDisk = async (target: "memory" | "user") => {
+        if (target === "memory") {
+          memoryEntered();
+          await memoryCanSave;
+        }
+        await originalSave(target);
+      };
 
-      const raw = await readRaw(memoryPath);
-      assert.ok(raw.includes(`${TEST_MARKER} first`));
-      assert.ok(raw.includes(`${TEST_MARKER} second`));
-      const count = raw.split(ENTRY_DELIMITER).filter(Boolean).length;
-      assert.equal(count, 2);
+      const memoryWrite = store.add("memory", `${TEST_MARKER} blocked memory writer`);
+      await memoryEnteredSave;
+      const userWrite = store.add("user", `${TEST_MARKER} independent user writer`);
+      const outcome = await Promise.race([
+        userWrite.then(() => "completed" as const),
+        new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 250)),
+      ]);
+      releaseMemory();
+      const [, userResult] = await Promise.all([memoryWrite, userWrite]);
+
+      assert.equal(outcome, "completed");
+      assert.equal(userResult.success, true);
+      assert.match(await readRaw(userPath), /independent user writer/);
     });
+
   });
 });
