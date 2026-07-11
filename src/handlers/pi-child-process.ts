@@ -5,8 +5,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { MemoryConfig, ThinkingLevel } from "../types.js";
+import { AGENT_ROOT } from "../paths.js";
 
-type ChildLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride">;
+type ChildLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride" | "childExtensionPaths">;
 
 interface PiExecResult {
   code: number;
@@ -82,34 +83,75 @@ export function inheritedExtensionArgs(argv: string[] = process.argv.slice(2)): 
   return args;
 }
 
-function appendOwnExtensionArgs(args: string[]): void {
+function inheritedExtensionPaths(argv: string[]): string[] {
+  return inheritedExtensionArgs(argv).flatMap((arg, index, args) => {
+    if (arg === "-e" || arg === "--extension") return args[index + 1] ? [args[index + 1]] : [];
+    if (arg.startsWith("--extension=")) return [arg.slice("--extension=".length)];
+    return [];
+  });
+}
+
+export function detectClaudeOAuthAdapterPaths(ownExtensionPath = OWN_EXTENSION_PATH): string[] {
+  const candidates = new Set<string>();
+  if (ownExtensionPath) {
+    const packageRoot = dirname(dirname(ownExtensionPath));
+    candidates.add(join(dirname(packageRoot), "pi-claude-oauth-adapter", "extensions", "index.ts"));
+  }
+  candidates.add(join(AGENT_ROOT, "npm", "node_modules", "pi-claude-oauth-adapter", "extensions", "index.ts"));
+  return [...candidates].filter((candidate) => existsSync(candidate));
+}
+
+function childExtensionPaths(config: ChildLlmConfig, argv: string[]): string[] {
+  const candidates = [
+    OWN_EXTENSION_PATH,
+    ...(config.childExtensionPaths ?? []),
+    ...inheritedExtensionPaths(argv),
+    ...detectClaudeOAuthAdapterPaths(),
+  ];
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim();
+    if (!trimmed) continue;
+    const normalized = resolve(trimmed);
+    if (seen.has(normalized) || !existsSync(normalized)) continue;
+    seen.add(normalized);
+    paths.push(normalized);
+  }
+  return paths;
+}
+
+function appendOwnExtensionArgs(args: string[], config: ChildLlmConfig, argv: string[]): void {
   // Skip all packages from settings.json (--no-extensions) — the subprocess
-  // only needs pi-hermes-memory to access the memory tool. Loading every
-  // plugin (context-mode, pi-lens, pi-web-access, pi-review, …) wastes
-  // prompt tokens and startup CPU for simple one-shot memory tasks.
-  if (OWN_EXTENSION_PATH) {
-    args.push("--no-extensions", "-e", OWN_EXTENSION_PATH);
+  // loads only Hermes and explicitly required provider adapters.
+  args.push("--no-extensions");
+  for (const extensionPath of childExtensionPaths(config, argv)) {
+    args.push("-e", extensionPath);
   }
 }
 
-export function buildChildPiPromptArgs(prompt: string, config: ChildLlmConfig, _argv?: string[]): string[] {
+export function buildChildPiPromptArgs(
+  prompt: string,
+  config: ChildLlmConfig,
+  argv: string[] = process.argv.slice(2),
+): string[] {
   const args = ["-p", "--no-session"];
   const model = normalizedModelOverride(config);
   const thinking = effectiveThinkingOverride(config);
 
   if (model) args.push("--model", model);
   if (thinking) args.push("--thinking", thinking);
-  appendOwnExtensionArgs(args);
+  appendOwnExtensionArgs(args, config, argv);
   args.push(prompt);
 
   return args;
 }
 
-function basePromptArgs(prompt: string): string[] {
+function basePromptArgs(prompt: string, config: ChildLlmConfig): string[] {
   // Always use --no-extensions + own path so the retry also avoids loading
   // all settings.json packages — matching the primary code path.
   const args = ["-p", "--no-session"];
-  appendOwnExtensionArgs(args);
+  appendOwnExtensionArgs(args, config, process.argv.slice(2));
   args.push(prompt);
   return args;
 }
@@ -224,7 +266,7 @@ export async function execChildPrompt(
       }
     }
 
-    const retryInvocation = resolveChildPiInvocation(basePromptArgs(promptReference));
+    const retryInvocation = resolveChildPiInvocation(basePromptArgs(promptReference, config));
     return await pi.exec(retryInvocation.command, retryInvocation.args, execOptions) as PiExecResult;
   } finally {
     await fs.rm(temporaryPrompt.dir, { recursive: true, force: true });

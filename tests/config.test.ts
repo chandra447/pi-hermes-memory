@@ -94,6 +94,21 @@ describe("loadConfig", () => {
     assert.strictEqual(config.llmThinkingOverride, undefined);
   });
 
+  it("loads, trims, and deduplicates child extension paths", () => {
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      childExtensionPaths: [" /tmp/auth-adapter.ts ", "/tmp/auth-adapter.ts", "/tmp/other-adapter.ts"],
+    }));
+
+    const config = loadConfig(TEST_CONFIG_PATH);
+
+    assert.deepStrictEqual(config.childExtensionPaths, ["/tmp/auth-adapter.ts", "/tmp/other-adapter.ts"]);
+  });
+
+  it("ignores invalid child extension path configuration", () => {
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ childExtensionPaths: ["/tmp/auth.ts", 42] }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).childExtensionPaths, undefined);
+  });
+
   it("expands ~/ memoryDir into an absolute home path", () => {
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({

@@ -141,6 +141,12 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         if (trimmed.length > 0) config.llmModelOverride = trimmed;
       }
       if (isThinkingLevel(parsed.llmThinkingOverride)) config.llmThinkingOverride = parsed.llmThinkingOverride;
+      if (isStringArray(parsed.childExtensionPaths)) {
+        const childExtensionPaths = [...new Set<string>(
+          (parsed.childExtensionPaths as string[]).map((item) => item.trim()).filter(Boolean),
+        )];
+        if (childExtensionPaths.length > 0) config.childExtensionPaths = childExtensionPaths;
+      }
       if (hasMemoryOverflowStrategy) {
         config.autoConsolidate = config.memoryOverflowStrategy === "auto-consolidate";
       } else if (hasLegacyAutoConsolidate) {

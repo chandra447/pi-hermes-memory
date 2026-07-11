@@ -4,7 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildChildPiPromptArgs, execChildPrompt, inheritedExtensionArgs, resolveChildPiInvocation } from "../../src/handlers/pi-child-process.js";
+import {
+  buildChildPiPromptArgs,
+  detectClaudeOAuthAdapterPaths,
+  execChildPrompt,
+  inheritedExtensionArgs,
+  resolveChildPiInvocation,
+} from "../../src/handlers/pi-child-process.js";
 
 function logicalChildArgs(call: { cmd: string; args: string[] }): string[] {
   const expected = resolveChildPiInvocation(call.cmd === "pi" ? call.args : call.args.slice(1));
@@ -59,13 +65,50 @@ describe("buildChildPiPromptArgs", () => {
     );
   });
 
-  it("ignores inherited extension args and always uses own path", () => {
-    // The function no longer inherits parent -e flags; it always passes
-    // --no-extensions and its own resolved path.
+  it("ignores missing inherited extension paths", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", {}, ["-e", "src/index.ts"]),
       ["-p", "--no-session", ...EXT_ARGS, "hello"],
     );
+  });
+
+  it("preserves existing configured and inherited extensions without duplicating Hermes", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-child-extensions-"));
+    const configured = path.join(dir, "configured.ts");
+    const inherited = path.join(dir, "inherited.ts");
+    await fs.writeFile(configured, "export default () => {};");
+    await fs.writeFile(inherited, "export default () => {};");
+    try {
+      assert.deepStrictEqual(
+        buildChildPiPromptArgs("hello", {
+          childExtensionPaths: [configured, configured, "/missing/adapter.ts", OWN_EXTENSION_PATH],
+        }, ["-e", inherited, `--extension=${configured}`]),
+        [
+          "-p", "--no-session", "--no-extensions",
+          "-e", OWN_EXTENSION_PATH,
+          "-e", configured,
+          "-e", inherited,
+          "hello",
+        ],
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects a sibling pi-claude-oauth-adapter extension", async () => {
+    const nodeModules = await fs.mkdtemp(path.join(os.tmpdir(), "pi-node-modules-"));
+    const ownPath = path.join(nodeModules, "pi-hermes-memory", "src", "index.ts");
+    const adapterPath = path.join(nodeModules, "pi-claude-oauth-adapter", "extensions", "index.ts");
+    await fs.mkdir(path.dirname(ownPath), { recursive: true });
+    await fs.mkdir(path.dirname(adapterPath), { recursive: true });
+    await fs.writeFile(ownPath, "export default () => {};");
+    await fs.writeFile(adapterPath, "export default () => {};");
+    try {
+      assert.deepStrictEqual(detectClaudeOAuthAdapterPaths(ownPath), [adapterPath]);
+    } finally {
+      await fs.rm(nodeModules, { recursive: true, force: true });
+    }
   });
 });
 
@@ -148,6 +191,36 @@ describe("execChildPrompt", () => {
 
     assert.ok(promptPath.startsWith(os.tmpdir()));
     await assert.rejects(fs.access(promptPath), { code: "ENOENT" });
+  });
+
+  it("passes configured auth adapters to both override attempts", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-child-auth-"));
+    const adapterPath = path.join(dir, "adapter.ts");
+    await fs.writeFile(adapterPath, "export default () => {};");
+    const calls: string[][] = [];
+    const pi = {
+      exec: async (_cmd: string, args: string[]) => {
+        calls.push(args);
+        return calls.length === 1
+          ? { code: 1, stdout: "", stderr: "model not found" }
+          : { code: 0, stdout: "ok", stderr: "" };
+      },
+    };
+    try {
+      await execChildPrompt(pi as any, "hello", {
+        llmModelOverride: "missing/model",
+        childExtensionPaths: [adapterPath],
+      }, { timeoutMs: 30000, retryWithoutOverrides: true });
+
+      assert.equal(calls.length, 2);
+      for (const args of calls) {
+        const index = args.indexOf(adapterPath);
+        assert.ok(index > 0);
+        assert.equal(args[index - 1], "-e");
+      }
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("retries once without overrides when requested and the override subprocess fails for model resolution reasons", async () => {
