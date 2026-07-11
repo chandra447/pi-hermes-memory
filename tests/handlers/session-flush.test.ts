@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { setupSessionFlush } from "../../src/handlers/session-flush.js";
 import { resolveChildPiInvocation } from "../../src/handlers/pi-child-process.js";
-import { FLUSH_PROMPT } from "../../src/constants.js";
+import { DIRECT_FLUSH_SYSTEM_PROMPT, FLUSH_PROMPT } from "../../src/constants.js";
 import type { MemoryConfig } from "../../src/types.js";
+import type { DirectReviewResult } from "../../src/handlers/review-memory-ops.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,58 @@ function createMockPi() {
 
   return { pi: pi as any, handlers, execCalls };
 }
+interface MockSessionFlushPi {
+  pi: {
+    on(event: string, handler: Function): void;
+    exec(...args: unknown[]): Promise<{ code: number; stdout: string; stderr: string }>;
+    registerTool(): void;
+    registerCommand(): void;
+  };
+  handlers: Record<string, Function[]>;
+  execCalls: { args: unknown[] }[];
+}
+
+let directCalls: unknown[][];
+
+function makeDirectDeps(
+  result: DirectReviewResult | "throw",
+): { runDirectMemoryCompletion: (...args: unknown[]) => Promise<DirectReviewResult> } {
+  return {
+    runDirectMemoryCompletion: async (...args: unknown[]) => {
+      directCalls.push(args);
+      if (result === "throw") throw new Error("injected direct flush failure");
+      return result;
+    },
+  };
+}
+
+function defaultFlushCtx() {
+  return { sessionManager: { getBranch: () => mockBranch(8) } };
+}
+
+async function primeFlushReady(handlers: Record<string, Function[]>) {
+  await emitUserTurns(handlers, 8);
+}
+
+/** Emit session_shutdown and await fire-and-forget flush without wall-clock sleep. */
+async function emitShutdownAndAwaitFlush(
+  pi: MockSessionFlushPi,
+  handlers: Record<string, Function[]>,
+  ctx: { sessionManager: { getBranch: () => unknown[] } },
+) {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const originalExec = pi.pi.exec;
+  pi.pi.exec = async (...args: unknown[]) => {
+    try {
+      return await originalExec(...args);
+    } finally {
+      resolve();
+    }
+  };
+  await emit(handlers, "session_shutdown", {}, ctx);
+  await promise;
+}
+
 
 /** Build N messages alternating user/assistant */
 function mockBranch(n: number) {
@@ -112,7 +165,7 @@ function flushMessage(call: { args: any[] }): string {
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe("setupSessionFlush", () => {
-  let mockPi: ReturnType<typeof createMockPi>;
+  let mockPi: MockSessionFlushPi;
 
   beforeEach(() => {
     mockPi = createMockPi();
@@ -154,10 +207,7 @@ describe("setupSessionFlush", () => {
     await emitUserTurns(mockPi.handlers, 8);
 
     const ctx = { sessionManager: { getBranch: () => mockBranch(8) } };
-    await emit(mockPi.handlers, "session_shutdown", {}, ctx);
-
-    // Shutdown flush is fire-and-forget — wait for microtask queue to settle
-    await new Promise(r => setTimeout(r, 10));
+    await emitShutdownAndAwaitFlush(mockPi, mockPi.handlers, ctx);
     assert.equal(mockPi.execCalls.length, 1, "exec should be called once");
   });
 
@@ -375,13 +425,21 @@ describe("setupSessionFlush", () => {
 
     const ctx = { sessionManager: { getBranch: () => mockBranch(8) } };
 
-    // Fire both events
+    const { promise, resolve } = Promise.withResolvers<void>();
+    let execCount = 0;
+    const originalExec = mockPi.pi.exec;
+    mockPi.pi.exec = async (...args: unknown[]) => {
+      const result = await originalExec(...args);
+      execCount += 1;
+      if (execCount === 2) resolve();
+      return result;
+    };
+
     await Promise.all([
       emit(mockPi.handlers, "session_before_compact", { signal: undefined }, ctx),
       emit(mockPi.handlers, "session_shutdown", {}, ctx),
     ]);
-
-    await new Promise(r => setTimeout(r, 10));
+    await promise;
     assert.equal(mockPi.execCalls.length, 2, "both events should trigger flush");
   });
 
@@ -402,3 +460,118 @@ describe("setupSessionFlush", () => {
     assert.equal(opts.signal, signal, "signal should be forwarded to exec");
   });
 });
+
+describe("direct transport", () => {
+  let mockPi: MockSessionFlushPi;
+
+  beforeEach(() => {
+    mockPi = createMockPi();
+    directCalls = [];
+  });
+
+  it("session_before_compact uses direct transport without subprocess when direct returns ok", async () => {
+    const config = defaultConfig({ reviewTransport: "direct" });
+    setupSessionFlush(
+      mockPi.pi,
+      mockStore,
+      null,
+      config,
+      null,
+      null,
+      makeDirectDeps({ ok: true, appliedCount: 2 }),
+    );
+
+    await primeFlushReady(mockPi.handlers);
+    await emit(mockPi.handlers, "session_before_compact", { signal: undefined }, defaultFlushCtx());
+
+    assert.equal(directCalls.length, 1, "direct completion should run once");
+    assert.equal(mockPi.execCalls.length, 0, "subprocess must not run on successful direct flush");
+
+    const options = directCalls[0][3] as { systemPrompt: string; userPrompt: string };
+    assert.equal(options.systemPrompt, DIRECT_FLUSH_SYSTEM_PROMPT);
+    assert.match(options.userPrompt, /--- Conversation ---/);
+    assert.match(options.userPrompt, /msg 0/);
+  });
+
+  it("falls back to subprocess with flush message shape when direct returns ok false", async () => {
+    const config = defaultConfig({ reviewTransport: "direct" });
+    setupSessionFlush(
+      mockPi.pi,
+      mockStore,
+      null,
+      config,
+      null,
+      null,
+      makeDirectDeps({ ok: false, appliedCount: 0, fallbackReason: "no_model" }),
+    );
+
+    await primeFlushReady(mockPi.handlers);
+    await emit(mockPi.handlers, "session_before_compact", { signal: undefined }, defaultFlushCtx());
+
+    assert.equal(directCalls.length, 1);
+    assert.equal(mockPi.execCalls.length, 1, "failed direct result must fall back to subprocess");
+
+    const message = flushMessage(mockPi.execCalls[0]);
+    assert.ok(message.includes(FLUSH_PROMPT), "fallback flush message should contain FLUSH_PROMPT");
+    assert.ok(message.includes("--- Conversation ---"));
+    assert.ok(message.includes("[USER]"));
+    assert.ok(message.includes("msg 0"));
+  });
+
+  it("falls back to subprocess when direct throws without propagating on compact", async () => {
+    const config = defaultConfig({ reviewTransport: "direct" });
+    setupSessionFlush(
+      mockPi.pi,
+      mockStore,
+      null,
+      config,
+      null,
+      null,
+      makeDirectDeps("throw"),
+    );
+
+    await primeFlushReady(mockPi.handlers);
+    await emit(mockPi.handlers, "session_before_compact", { signal: undefined }, defaultFlushCtx());
+
+    assert.equal(directCalls.length, 1);
+    assert.equal(mockPi.execCalls.length, 1, "thrown direct error must fall back to subprocess");
+  });
+
+  it("falls back to subprocess when direct throws without propagating on shutdown", async () => {
+    const config = defaultConfig({ reviewTransport: "direct" });
+    setupSessionFlush(
+      mockPi.pi,
+      mockStore,
+      null,
+      config,
+      null,
+      null,
+      makeDirectDeps("throw"),
+    );
+
+    await primeFlushReady(mockPi.handlers);
+    await emitShutdownAndAwaitFlush(mockPi, mockPi.handlers, defaultFlushCtx());
+    assert.equal(directCalls.length, 1);
+    assert.equal(mockPi.execCalls.length, 1, "shutdown flush must survive direct throw");
+  });
+
+  it("skips direct transport when reviewTransport is subprocess", async () => {
+    const config = defaultConfig({ reviewTransport: "subprocess" });
+    setupSessionFlush(
+      mockPi.pi,
+      mockStore,
+      null,
+      config,
+      null,
+      null,
+      makeDirectDeps({ ok: true, appliedCount: 99 }),
+    );
+
+    await primeFlushReady(mockPi.handlers);
+    await emit(mockPi.handlers, "session_before_compact", { signal: undefined }, defaultFlushCtx());
+
+    assert.equal(directCalls.length, 0, "subprocess transport must not invoke direct completion");
+    assert.equal(mockPi.execCalls.length, 1);
+  });
+});
+

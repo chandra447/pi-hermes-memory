@@ -5,7 +5,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { completeSimple, type Message, type SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DIRECT_REVIEW_SYSTEM_PROMPT } from "../constants.js";
 import { MemoryStore } from "../store/memory-store.js";
 import type { DatabaseManager } from "../store/db.js";
 import type { MemoryCategory, MemoryConfig, MemoryResult, ThinkingLevel } from "../types.js";
@@ -31,11 +30,19 @@ export interface DirectReviewResult {
   error?: string;
 }
 
-export interface RunDirectBackgroundReviewOptions {
+export interface RunDirectMemoryCompletionOptions {
   userPrompt: string;
+  systemPrompt: string;
   config: Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride">;
   timeoutMs?: number;
   signal?: AbortSignal;
+}
+
+/** Shared transport gate: review/flush/consolidation/correction all default to
+ * the in-process direct completion path and fall back to a `pi -p` subprocess
+ * only on failure, unless the user forces `reviewTransport: "subprocess"`. */
+export function usesDirectTransport(config: Pick<MemoryConfig, "reviewTransport">): boolean {
+  return (config.reviewTransport ?? "direct") === "direct";
 }
 
 type ReviewLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride">;
@@ -290,11 +297,11 @@ function responseText(content: unknown): string {
     .join("\n");
 }
 
-export async function runDirectBackgroundReview(
+export async function runDirectMemoryCompletion(
   ctx: Pick<ExtensionContext, "model" | "modelRegistry">,
   store: MemoryStore,
   projectStore: MemoryStore | null,
-  options: RunDirectBackgroundReviewOptions,
+  options: RunDirectMemoryCompletionOptions,
   dbManager: DatabaseManager | null = null,
   projectName?: string | null,
 ): Promise<DirectReviewResult> {
@@ -330,7 +337,7 @@ export async function runDirectBackgroundReview(
   try {
     const response = await completeSimple(
       model,
-      { systemPrompt: DIRECT_REVIEW_SYSTEM_PROMPT, messages: [userMessage] },
+      { systemPrompt: options.systemPrompt, messages: [userMessage] },
       buildDirectReviewCompletionOptions(
         model,
         { apiKey: auth.apiKey, headers: auth.headers, env: auth.env },

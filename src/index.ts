@@ -210,7 +210,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── 6. Setup session-end flush ──
-  setupSessionFlush(pi, store, projectStore, config);
+  setupSessionFlush(pi, store, projectStore, config, dbManager, projectName);
 
   // ── 7. Setup auto-consolidation (inject consolidator into stores) ──
   store.setConsolidator(async (target, signal) => {
@@ -222,7 +222,7 @@ export default function (pi: ExtensionAPI) {
       return triggerConsolidation(pi, projectStore, target, signal, config.consolidationTimeoutMs, toolTarget, config);
     });
   }
-  registerConsolidateCommand(pi, store, config.consolidationTimeoutMs, projectStore, projectName, config);
+  registerConsolidateCommand(pi, store, config.consolidationTimeoutMs, projectStore, projectName, config, dbManager);
 
   // ── 8. Setup correction detection ──
   setupCorrectionDetector(pi, store, projectStore, config, dbManager, projectName);

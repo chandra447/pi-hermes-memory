@@ -17,11 +17,13 @@ import {
   CORRECTION_WEAK_PATTERNS,
   CORRECTION_NEGATIVE_PATTERNS,
   CORRECTION_DIRECTIVE_WORDS,
+  DIRECT_CORRECTION_SYSTEM_PROMPT,
   ENTRY_DELIMITER,
 } from "../constants.js";
 import type { MemoryConfig } from "../types.js";
 import { getMessageText } from "../types.js";
 import { execChildPrompt } from "./pi-child-process.js";
+import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
 
 /**
  * Extract the directive part from a correction message.
@@ -123,14 +125,16 @@ export function setupCorrectionDetector(
   store: MemoryStore,
   projectStore: MemoryStore | null,
   config: MemoryConfig,
-  _dbManager: DatabaseManager | null = null,
+  dbManager: DatabaseManager | null = null,
   projectName?: string | null,
+  deps: { runDirectMemoryCompletion?: typeof runDirectMemoryCompletion } = {},
 ): void {
   if (!config.correctionDetection) return;
 
   let pendingCorrection = false;
   let turnsSinceLastCorrection = 3; // Start at threshold so first correction can fire immediately
   let correctionInProgress = false;
+  const runDirect = deps.runDirectMemoryCompletion ?? runDirectMemoryCompletion;
 
   // Flag on message_end (user role)
   pi.on("message_end", async (event, _ctx) => {
@@ -178,9 +182,7 @@ export function setupCorrectionDetector(
       const currentUser = store.getUserEntries().join(ENTRY_DELIMITER);
       const currentProject = projectStore ? projectStore.getMemoryEntries().join(ENTRY_DELIMITER) : null;
 
-      const prompt = [
-        CORRECTION_SAVE_PROMPT,
-        "",
+      const promptBody = [
         "--- Current Memory ---",
         currentMemory || "(empty)",
         "",
@@ -189,29 +191,65 @@ export function setupCorrectionDetector(
       ];
 
       if (currentProject !== null) {
-        prompt.push(
+        promptBody.push(
           "",
           "--- Current Project Memory ---",
           currentProject || "(empty)",
         );
       }
 
-      prompt.push(
+      promptBody.push(
         "",
         "--- Recent Conversation ---",
         recentParts.join("\n\n"),
       );
 
-      const result = await execChildPrompt(pi, prompt.join("\n"), config, {
-        signal: ctx.signal,
-        timeoutMs: 30000,
-      });
+      let savedViaLlm = false;
 
-      if (result.code === 0 && result.stdout) {
-        const output = result.stdout.trim();
-        if (output && !output.toLowerCase().includes("nothing to save")) {
-          ctx.ui.notify("🔧 Correction detected — memory updated", "info");
+      const runSubprocessCorrection = async (): Promise<void> => {
+        const subprocessPrompt = [CORRECTION_SAVE_PROMPT, "", ...promptBody].join("\n");
+        const result = await execChildPrompt(pi, subprocessPrompt, config, {
+          signal: ctx.signal,
+          timeoutMs: 30000,
+        });
+        if (result.code === 0 && result.stdout) {
+          const output = result.stdout.trim();
+          savedViaLlm = !!output && !output.toLowerCase().includes("nothing to save");
         }
+      };
+
+      let handledDirect = false;
+      if (usesDirectTransport(config)) {
+        try {
+          const directResult = await runDirect(
+            ctx,
+            store,
+            projectStore,
+            {
+              systemPrompt: DIRECT_CORRECTION_SYSTEM_PROMPT,
+              userPrompt: promptBody.join("\n"),
+              config,
+              timeoutMs: 30000,
+              signal: ctx.signal,
+            },
+            dbManager,
+            projectName,
+          );
+          if (directResult.ok) {
+            savedViaLlm = directResult.appliedCount > 0;
+            handledDirect = true;
+          }
+        } catch {
+          // Fall through to subprocess below.
+        }
+      }
+
+      if (!handledDirect) {
+        await runSubprocessCorrection();
+      }
+
+      if (savedViaLlm) {
+        ctx.ui.notify("🔧 Correction detected — memory updated", "info");
       }
 
       // Also save as a failure memory for learning

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -93,21 +93,113 @@ export function inheritedExtensionArgs(argv: string[] = process.argv.slice(2)): 
   return args;
 }
 
-export function detectClaudeOAuthAdapterPaths(ownExtensionPath = OWN_EXTENSION_PATH): string[] {
-  const candidates = new Set<string>();
-  if (ownExtensionPath) {
-    const packageRoot = dirname(dirname(ownExtensionPath));
-    candidates.add(join(dirname(packageRoot), "pi-claude-oauth-adapter", "extensions", "index.ts"));
+// Provider-auth-adapter packages (e.g. Anthropic/xAI/Codex OAuth) inject
+// subscription billing headers via pi.registerProvider(). --no-extensions
+// strips these from child `pi -p` subprocesses, which silently rebills
+// subscription usage as pay-as-you-go "extra usage" instead (see issue #94).
+//
+// pi has no runtime API to enumerate loaded extensions or map a registered
+// provider back to its extension file, so we can't ask pi "what adapter is
+// active" directly. Instead we mirror pi's OWN static package-discovery
+// convention (package.json -> "pi": { "extensions": [...] }, the same field
+// pi-hermes-memory's own package.json declares) and match sibling package
+// names against a naming convention, so a future xai-oauth-adapter or
+// pi-codex-oauth-adapter is picked up automatically without a code change
+// here — no code execution, just JSON reads of sibling package.json files.
+const AUTH_ADAPTER_NAME_PATTERNS: readonly RegExp[] = [
+  /(^|[-/])oauth-adapter$/,
+  /(^|[-/])auth-adapter$/,
+];
+
+function isAuthAdapterPackageName(name: string): boolean {
+  return AUTH_ADAPTER_NAME_PATTERNS.some((pattern) => pattern.test(name));
+}
+
+// Read a sibling package's "pi": { "extensions": [...] } manifest field —
+// the same field pi's own loader reads — and resolve declared paths
+// relative to that package's directory. Mirrors loader.js#resolveExtensionEntries.
+function readPackageExtensionEntries(packageDir: string): string[] {
+  const packageJsonPath = join(packageDir, "package.json");
+  if (!existsSync(packageJsonPath)) return [];
+
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
+  } catch {
+    return [];
   }
-  candidates.add(join(AGENT_ROOT, "npm", "node_modules", "pi-claude-oauth-adapter", "extensions", "index.ts"));
-  return [...candidates].filter((candidate) => existsSync(candidate));
+
+  const declaredExtensions = (manifest as { pi?: { extensions?: unknown } } | null)?.pi?.extensions;
+  if (!Array.isArray(declaredExtensions)) return [];
+
+  const entries: string[] = [];
+  for (const relativePath of declaredExtensions) {
+    if (typeof relativePath !== "string") continue;
+    const resolved = resolve(packageDir, relativePath);
+    if (existsSync(resolved)) entries.push(resolved);
+  }
+  return entries;
+}
+
+function scanRootForAuthAdapters(root: string): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return [];
+  }
+
+  const detected: string[] = [];
+  for (const entry of entries) {
+    if (entry.startsWith("@")) {
+      // Scoped org, e.g. @xai/pi-oauth-adapter — one extra level, no deeper.
+      const scopeDir = join(root, entry);
+      let scopedPackages: string[];
+      try {
+        scopedPackages = readdirSync(scopeDir);
+      } catch {
+        continue;
+      }
+      for (const scopedName of scopedPackages) {
+        if (!isAuthAdapterPackageName(scopedName)) continue;
+        detected.push(...readPackageExtensionEntries(join(scopeDir, scopedName)));
+      }
+      continue;
+    }
+
+    if (!isAuthAdapterPackageName(entry)) continue;
+    detected.push(...readPackageExtensionEntries(join(root, entry)));
+  }
+  return detected;
+}
+
+// `roots` is overridable so tests can point this at fixture directories
+// instead of the real sibling-packages trees. Two roots are scanned by
+// default: packages installed alongside pi-hermes-memory's own package
+// (the common npm-managed-extensions layout), and AGENT_ROOT's npm
+// directory (covers pi-hermes-memory being loaded from elsewhere, e.g. a
+// local dev checkout via -e, while the adapter is still npm-managed).
+export function detectAuthAdapterExtensionPaths(roots?: string[]): string[] {
+  const searchRoots = roots ?? [
+    OWN_EXTENSION_PATH ? resolve(dirname(dirname(OWN_EXTENSION_PATH)), "..") : "",
+    join(AGENT_ROOT, "npm", "node_modules"),
+  ].filter((root) => root.length > 0);
+
+  const seenRoots: string[] = [];
+  const detected: string[] = [];
+  for (const root of searchRoots) {
+    if (seenRoots.includes(root)) continue;
+    seenRoots.push(root);
+    detected.push(...scanRootForAuthAdapters(root));
+  }
+  return detected;
 }
 
 function childExtensionPaths(config: ChildLlmConfig): string[] {
   const candidates = [
     OWN_EXTENSION_PATH,
     ...(config.childExtensionPaths ?? []),
-    ...detectClaudeOAuthAdapterPaths(),
+    ...detectAuthAdapterExtensionPaths(),
   ];
   const seen = new Set<string>();
   const paths: string[] = [];
