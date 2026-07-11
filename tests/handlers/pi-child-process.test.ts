@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -10,13 +11,14 @@ import {
   execChildPrompt,
   inheritedExtensionArgs,
   resolveChildPiInvocation,
+  resolveWatchedChildPiInvocation,
 } from "../../src/handlers/pi-child-process.js";
 
 function logicalChildArgs(call: { cmd: string; args: string[] }): string[] {
-  const expected = resolveChildPiInvocation(call.cmd === "pi" ? call.args : call.args.slice(1));
-  assert.strictEqual(call.cmd, expected.command);
-  assert.deepStrictEqual(call.args, expected.args);
-  return call.cmd === "pi" ? call.args : call.args.slice(1);
+  const underlying = { command: call.args[2], args: call.args.slice(3) };
+  const expected = resolveWatchedChildPiInvocation(underlying, 30000);
+  assert.deepStrictEqual(call, { cmd: expected.command, args: expected.args });
+  return underlying.command === "pi" ? underlying.args : underlying.args.slice(1);
 }
 
 // Compute the expected OWN_EXTENSION_PATH same logic as pi-child-process.ts
@@ -314,6 +316,92 @@ describe("resolveChildPiInvocation", () => {
 });
 
 describe("execChildPrompt", () => {
+  it("runs child Pi behind a hard process-tree watchdog", async () => {
+    const calls: Array<{ cmd: string; args: string[]; timeout?: number }> = [];
+    await execChildPrompt({
+      exec: async (cmd: string, args: string[], options: { timeout?: number }) => {
+        calls.push({ cmd, args, timeout: options.timeout });
+        return { code: 0, stdout: "ok", stderr: "", killed: false };
+      },
+    } as any, "bounded child", {}, { timeoutMs: 30000 });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].cmd, process.execPath);
+    assert.match(calls[0].args[0].replaceAll("\\", "/"), /child-process-watchdog\.mjs$/);
+    assert.equal(calls[0].args[1], "30000");
+    assert.equal(calls[0].args[2], "pi");
+    assert.equal(calls[0].timeout, 35000);
+  });
+
+  it("hard-kills a child that ignores graceful timeout termination", async () => {
+    const watchdogPath = fileURLToPath(
+      new URL("../../src/handlers/child-process-watchdog.mjs", import.meta.url),
+    );
+    const startedAt = Date.now();
+    const result = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+      const child = spawn(process.execPath, [
+        watchdogPath,
+        "100",
+        process.execPath,
+        "-e",
+        "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)",
+      ], { stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+      child.on("close", (code) => resolve({ code, stderr }));
+    });
+
+    assert.equal(result.code, 124);
+    assert.match(result.stderr, /timed out after 100ms/i);
+    assert.ok(Date.now() - startedAt < 3000, "watchdog must enforce a bounded hard stop");
+  });
+
+  it("hard-kills descendants in the timed-out child process group", {
+    skip: process.platform === "win32" ? "uses taskkill /T on Windows" : false,
+  }, async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pi-watchdog-tree-"));
+    const pidPath = path.join(directory, "descendant.pid");
+    const watchdogPath = fileURLToPath(
+      new URL("../../src/handlers/child-process-watchdog.mjs", import.meta.url),
+    );
+    const descendant = "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)";
+    const parent = [
+      "const {spawn}=require('node:child_process');",
+      "const fs=require('node:fs');",
+      `const child=spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});`,
+      `fs.writeFileSync(${JSON.stringify(pidPath)},String(child.pid));`,
+      "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);",
+    ].join("");
+
+    try {
+      const code = await new Promise<number | null>((resolve) => {
+        const child = spawn(process.execPath, [
+          watchdogPath,
+          "100",
+          process.execPath,
+          "-e",
+          parent,
+        ], { stdio: "ignore" });
+        child.on("close", resolve);
+      });
+      assert.equal(code, 124);
+      const descendantPid = Number(await fs.readFile(pidPath, "utf-8"));
+      const deadline = Date.now() + 1000;
+      while (Date.now() < deadline) {
+        try {
+          process.kill(descendantPid, 0);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+          throw error;
+        }
+      }
+      assert.fail("watchdog left a descendant process alive");
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a sensitive prompt out of argv and removes its mode-0600 temporary file", async () => {
     const secret = "PRIVATE-MEMORY-CONTENT";
     let promptPath = "";
@@ -503,11 +591,11 @@ describe("execChildPrompt", () => {
       assert.strictEqual(calls.length, 2);
       assert.strictEqual(calls[0].cmd, process.execPath);
       assert.strictEqual(calls[1].cmd, process.execPath);
-      assert.match(calls[0].args[0].replace(/\\/g, "/"), /\/cli\.js$/);
-      assert.match(calls[1].args[0].replace(/\\/g, "/"), /\/cli\.js$/);
+      assert.match(calls[0].args[3].replace(/\\/g, "/"), /\/cli\.js$/);
+      assert.match(calls[1].args[3].replace(/\\/g, "/"), /\/cli\.js$/);
       const promptReference = calls[0].args.at(-1)!;
       assert.match(promptReference, /^@/);
-      assert.deepStrictEqual(calls.map((call) => call.args.slice(1)), [
+      assert.deepStrictEqual(calls.map(logicalChildArgs), [
         ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, promptReference],
         ["-p", "--no-session", ...EXT_ARGS, promptReference],
       ]);

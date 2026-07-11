@@ -87,7 +87,7 @@ function describeConsolidationFailure(
   timeoutMs: number,
 ): string {
   const stderr = result.stderr?.trim();
-  const terminated = result.killed || result.code === 143;
+  const terminated = result.killed || result.code === 124 || result.code === 143;
 
   if (terminated) {
     return `Consolidation subprocess was terminated (likely timeout or cancellation). Timeout: ${timeoutMs}ms. Consider increasing consolidationTimeoutMs if this is a manual run.`;

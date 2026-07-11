@@ -13,6 +13,7 @@ interface PiExecResult {
   code: number;
   stdout?: string;
   stderr?: string;
+  killed?: boolean;
 }
 
 interface ExecChildPromptOptions {
@@ -31,6 +32,10 @@ const DEFAULT_EXEC_CHILD_PROMPT_DEPENDENCIES: ExecChildPromptDependencies = {
   },
 };
 
+const WATCHDOG_EXIT_GRACE_MS = 5000;
+const CHILD_PROCESS_WATCHDOG_PATH = fileURLToPath(
+  new URL("./child-process-watchdog.mjs", import.meta.url),
+);
 export interface ChildPiInvocation {
   command: string;
   args: string[];
@@ -299,6 +304,21 @@ export function resolveChildPiInvocation(
   };
 }
 
+export function resolveWatchedChildPiInvocation(
+  invocation: ChildPiInvocation,
+  timeoutMs: number,
+): ChildPiInvocation {
+  return {
+    command: process.execPath,
+    args: [
+      CHILD_PROCESS_WATCHDOG_PATH,
+      String(timeoutMs),
+      invocation.command,
+      ...invocation.args,
+    ],
+  };
+}
+
 function shouldRetryWithoutOverridesFromText(text: string | undefined): boolean {
   if (!text) return false;
   return OVERRIDE_FAILURE_SUBJECT.test(text) && OVERRIDE_FAILURE_REASON.test(text);
@@ -333,14 +353,17 @@ export async function execChildPrompt(
 ): Promise<PiExecResult> {
   const execOptions = {
     signal: options.signal,
-    timeout: options.timeoutMs,
+    timeout: options.timeoutMs + WATCHDOG_EXIT_GRACE_MS,
   };
   const temporaryPrompt = await writePromptToTemporaryFile(prompt);
   const promptReference = `@${temporaryPrompt.filePath}`;
 
   try {
     try {
-      const invocation = resolveChildPiInvocation(buildChildPiPromptArgs(promptReference, config));
+      const invocation = resolveWatchedChildPiInvocation(
+        resolveChildPiInvocation(buildChildPiPromptArgs(promptReference, config)),
+        options.timeoutMs,
+      );
       const result = await pi.exec(invocation.command, invocation.args, execOptions) as PiExecResult;
       if (
         result.code === 0 ||
@@ -360,7 +383,10 @@ export async function execChildPrompt(
       }
     }
 
-    const retryInvocation = resolveChildPiInvocation(basePromptArgs(promptReference, config));
+    const retryInvocation = resolveWatchedChildPiInvocation(
+      resolveChildPiInvocation(basePromptArgs(promptReference, config)),
+      options.timeoutMs,
+    );
     return await pi.exec(retryInvocation.command, retryInvocation.args, execOptions) as PiExecResult;
   } finally {
     try { await dependencies.removeTemporaryDirectory(temporaryPrompt.dir); } catch {}
