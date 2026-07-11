@@ -25,6 +25,10 @@ export interface BackgroundReviewOptions {
 export interface BackgroundReviewDeps {
   runDirectReview?: typeof runDirectMemoryCompletion;
   execChildPrompt?: typeof execChildPrompt;
+  /** Test-only hook: called once runReview() has fully settled (after the
+   * fire-and-forget review work completes and reviewInProgress resets),
+   * since production callers never await runReview() directly. */
+  onReviewSettled?: () => void;
 }
 
 export interface ReviewPromptInput {
@@ -120,6 +124,7 @@ export function setupBackgroundReview(
   const projectName = options.projectName ?? null;
   const runDirectReview = options.deps?.runDirectReview ?? runDirectMemoryCompletion;
   const execChild = options.deps?.execChildPrompt ?? execChildPrompt;
+  const onReviewSettled = options.deps?.onReviewSettled;
 
   let turnsSinceReview = 0;
   let toolCallsSinceReview = 0;
@@ -190,6 +195,7 @@ export function setupBackgroundReview(
 
     const finishReview = () => {
       reviewInProgress = false;
+      onReviewSettled?.();
     };
 
     const notifyIfSaved = (saved: boolean) => {

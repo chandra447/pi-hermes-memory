@@ -1,13 +1,16 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   buildDirectReviewUserPrompt,
   buildSubprocessReviewPrompt,
   setupBackgroundReview,
+  type BackgroundReviewDeps,
 } from "../../src/handlers/background-review.js";
 import { resolveChildPiInvocation } from "../../src/handlers/pi-child-process.js";
 import type { DirectReviewResult } from "../../src/handlers/review-memory-ops.js";
+import type { MemoryConfig } from "../../src/types.js";
 
 // ─── Mock infrastructure ───
 
@@ -20,6 +23,28 @@ let handlers: Record<string, Function[]>;
 let execCalls: any[];
 let directCalls: any[];
 let notifyCalls: any[];
+
+// The turn_end handler intentionally does not await its review work
+// (fire-and-forget, so background review never blocks interactive chat —
+// see #10 in CHANGELOG.md). Tests can't just await fireTurnEnd(), so setup()
+// below wires the production-side onReviewSettled test hook (fired once
+// runReview() and its .finally() cleanup fully complete, regardless of
+// outcome) instead of racing exec-call timing or a fixed sleep.
+let reviewSettledSignal: PromiseWithResolvers<void>;
+
+function resetReviewSettledSignal(): void {
+  reviewSettledSignal = Promise.withResolvers<void>();
+}
+
+function setup(
+  pi: ExtensionAPI,
+  config: MemoryConfig = defaultConfig as MemoryConfig,
+  extraDeps: BackgroundReviewDeps = {},
+): void {
+  setupBackgroundReview(pi, mockStore, null, config, {
+    deps: { onReviewSettled: () => reviewSettledSignal.resolve(), ...extraDeps },
+  });
+}
 
 function captureExecArgs(args: any[]): any[] {
   const [command, childArgs, options] = args;
@@ -126,9 +151,12 @@ function fireTurnEnd(branch: any[] = makeBranch(10), ctxOverrides: Record<string
   return ctx;
 }
 
-// Allow async handlers to settle
-async function settle(ms = 10) {
-  await new Promise((r) => setTimeout(r, ms));
+// Only for genuinely negative assertions (nothing should have happened),
+// where there is no positive side effect to await instead.
+async function settle(ms = 10): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  await promise;
 }
 
 function logicalChildArgs(index = execCalls.length - 1): string[] {
@@ -153,26 +181,25 @@ describe("setupBackgroundReview", () => {
     execCalls = [];
     directCalls = [];
     notifyCalls = [];
+    resetReviewSettledSignal();
   });
 
   function setupWithDirectDeps(
-    pi: ReturnType<typeof createMockPi>,
+    pi: ExtensionAPI,
     directResult: DirectReviewResult,
-    config = { ...defaultConfig, reviewTransport: "direct" as const },
-  ) {
-    setupBackgroundReview(pi, mockStore, null, config, {
-      deps: {
-        runDirectReview: async (...args: any[]) => {
-          directCalls.push(args);
-          return directResult;
-        },
+    config: MemoryConfig = { ...defaultConfig, reviewTransport: "direct" as const } as MemoryConfig,
+  ): void {
+    setup(pi, config, {
+      runDirectReview: async (...args: any[]) => {
+        directCalls.push(args);
+        return directResult;
       },
     });
   }
 
   it("increments user turn count on message_end for user messages", async () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, defaultConfig);
+    setup(pi, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -184,7 +211,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd();
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     // exec should have been called since we have 3 user turns and 10 turn_end events
     assert.ok(execCalls.length > 0, "exec should be called with 3 user turns and 10 turn_end events");
@@ -192,7 +219,7 @@ describe("setupBackgroundReview", () => {
 
   it("triggers review at nudgeInterval (10) turns", async () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, defaultConfig);
+    setup(pi, defaultConfig);
 
     // Register 3 user messages first
     fireMessageEnd("user");
@@ -207,7 +234,7 @@ describe("setupBackgroundReview", () => {
 
     // 10th turn_end triggers review
     fireTurnEnd();
-    await settle();
+    await reviewSettledSignal.promise;
 
     assert.strictEqual(execCalls.length, 1, "exec should be called once at turn 10");
     // Verify it calls pi.exec with review prompt
@@ -221,7 +248,7 @@ describe("setupBackgroundReview", () => {
 
   it("passes child LLM override args to the review subprocess", async () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, {
+    setup(pi, {
       ...defaultConfig,
       llmModelOverride: "openrouter/deepseek/deepseek-v4-flash",
       llmThinkingOverride: "minimal",
@@ -234,7 +261,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd();
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     const cmdArgs = logicalChildArgs(0);
     assert.deepStrictEqual(
@@ -246,7 +273,7 @@ describe("setupBackgroundReview", () => {
   it("does NOT trigger review when reviewEnabled is false", async () => {
     const config = { ...defaultConfig, reviewEnabled: false };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, config);
+    setup(pi, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -262,7 +289,7 @@ describe("setupBackgroundReview", () => {
 
   it("does NOT trigger review with fewer than 3 user turns", async () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, defaultConfig);
+    setup(pi, defaultConfig);
 
     // Only 2 user messages
     fireMessageEnd("user");
@@ -293,7 +320,7 @@ describe("setupBackgroundReview", () => {
       registerCommand: () => {},
     } as any;
 
-    setupBackgroundReview(slowPi, mockStore, null, defaultConfig);
+    setup(slowPi, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -322,7 +349,7 @@ describe("setupBackgroundReview", () => {
 
   it("does NOT trigger for short conversations (< 4 message parts)", async () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, defaultConfig);
+    setup(pi, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -344,7 +371,7 @@ describe("setupBackgroundReview", () => {
 
   it("uses the full conversation by default", async () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, defaultConfig);
+    setup(pi, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -353,7 +380,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd(makeBranch(10));
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     const prompt = reviewPrompt();
     assert.ok(prompt.includes("Message number 0"), "default should include older messages");
@@ -363,7 +390,7 @@ describe("setupBackgroundReview", () => {
   it("limits background review to recent messages when configured", async () => {
     const config = { ...defaultConfig, reviewRecentMessages: 3 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, config);
+    setup(pi, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -372,7 +399,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd(makeBranch(10));
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     const prompt = reviewPrompt();
     assert.ok(!prompt.includes("Message number 6"), "window should exclude older messages");
@@ -384,7 +411,7 @@ describe("setupBackgroundReview", () => {
   it("does not use the flush recent-message limit for background review", async () => {
     const config = { ...defaultConfig, flushRecentMessages: 2 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, config);
+    setup(pi, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -393,7 +420,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd(makeBranch(10));
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     assert.ok(reviewPrompt().includes("Message number 0"), "flush limit must not affect review");
   });
@@ -401,7 +428,7 @@ describe("setupBackgroundReview", () => {
   it("keeps the short conversation guard based on the full conversation", async () => {
     const config = { ...defaultConfig, reviewRecentMessages: 2 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, config);
+    setup(pi, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -410,7 +437,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd(makeBranch(4));
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     assert.strictEqual(execCalls.length, 1, "full conversation has enough parts to review");
     const prompt = reviewPrompt();
@@ -422,7 +449,7 @@ describe("setupBackgroundReview", () => {
 
   it("resets turn counter after review triggers", async () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, defaultConfig);
+    setup(pi, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -432,22 +459,23 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd();
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     assert.strictEqual(execCalls.length, 1, "first review triggered");
 
     // Fire 10 more turns — should trigger again (counter was reset)
+    resetReviewSettledSignal();
     for (let i = 0; i < 10; i++) {
       fireTurnEnd();
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     assert.strictEqual(execCalls.length, 2, "second review should trigger after counter reset");
   });
 
   it("shows notification only when review saves something", async () => {
     const pi = createMockPi({ code: 0, stdout: "Saved new memory about user preferences", stderr: "" });
-    setupBackgroundReview(pi, mockStore, null, defaultConfig);
+    setup(pi, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -456,7 +484,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd();
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     // 10 diagnostic notifications + 1 auto-review notification
     const reviewNotify = notifyCalls.find(n => n.msg.includes("Memory auto-reviewed"));
@@ -466,9 +494,10 @@ describe("setupBackgroundReview", () => {
     handlers = {};
     execCalls = [];
     notifyCalls = [];
+    resetReviewSettledSignal();
 
     const nothingPi = createMockPi({ code: 0, stdout: "Nothing to save.", stderr: "" });
-    setupBackgroundReview(nothingPi, mockStore, null, defaultConfig);
+    setup(nothingPi, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -477,7 +506,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd();
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     const reviewNotify2 = notifyCalls.find(n => n.msg.includes("Memory auto-reviewed"));
     assert.strictEqual(reviewNotify2, undefined, "no 'Memory auto-reviewed' notification for 'nothing to save'");
@@ -497,7 +526,7 @@ describe("setupBackgroundReview", () => {
       registerCommand: () => {},
     } as any;
 
-    setupBackgroundReview(crashPi, mockStore, null, defaultConfig);
+    setup(crashPi, defaultConfig);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -507,7 +536,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd();
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     assert.strictEqual(execCalls.length, 1, "exec was attempted");
     // If we get here without an unhandled rejection, the error was caught
@@ -516,7 +545,7 @@ describe("setupBackgroundReview", () => {
 
   it("assistant message_end does NOT increment user turn count", async () => {
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, defaultConfig);
+    setup(pi, defaultConfig);
 
     // Only assistant messages — userTurnCount stays 0
     fireMessageEnd("assistant");
@@ -536,7 +565,7 @@ describe("setupBackgroundReview", () => {
   it("triggers on tool call count threshold even with low turn count", async () => {
     const config = { ...defaultConfig, nudgeToolCalls: 5 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, config);
+    setup(pi, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -564,7 +593,7 @@ describe("setupBackgroundReview", () => {
     // Only 2 turn_end events (below turn threshold of 10)
     fireTurnEnd(branchWithToolCalls);
     fireTurnEnd(branchWithToolCalls);
-    await settle();
+    await reviewSettledSignal.promise;
 
     assert.ok(execCalls.length >= 1, "exec should be called due to tool call threshold");
   });
@@ -572,7 +601,7 @@ describe("setupBackgroundReview", () => {
   it("triggers when both thresholds are met", async () => {
     const config = { ...defaultConfig, nudgeToolCalls: 5 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, config);
+    setup(pi, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -597,7 +626,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd(branchWithToolCalls);
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     assert.ok(execCalls.length >= 1, "exec should be called when either threshold is met");
   });
@@ -605,7 +634,7 @@ describe("setupBackgroundReview", () => {
   it("resets both counters after review", async () => {
     const config = { ...defaultConfig, nudgeToolCalls: 3 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, config);
+    setup(pi, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -629,21 +658,22 @@ describe("setupBackgroundReview", () => {
 
     // Trigger first review via tool calls
     fireTurnEnd(branchWithToolCalls);
-    await settle();
+    await reviewSettledSignal.promise;
     assert.strictEqual(execCalls.length, 1, "first review triggered");
 
     // Trigger second review via turn count
+    resetReviewSettledSignal();
     for (let i = 0; i < 10; i++) {
       fireTurnEnd(makeBranch(10));
     }
-    await settle();
+    await reviewSettledSignal.promise;
     assert.strictEqual(execCalls.length, 2, "second review should trigger after counter reset");
   });
 
   it("does not trigger when neither threshold is met", async () => {
     const config = { ...defaultConfig, nudgeToolCalls: 15 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, config);
+    setup(pi, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -676,7 +706,7 @@ describe("setupBackgroundReview", () => {
   it("ignores text blocks when counting tool calls", async () => {
     const config = { ...defaultConfig, nudgeToolCalls: 3 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, config);
+    setup(pi, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -710,7 +740,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd();
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     assert.strictEqual(directCalls.length, 1, "direct review should run once");
     assert.strictEqual(execCalls.length, 0, "subprocess should not run on successful direct review");
@@ -732,7 +762,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd();
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     assert.strictEqual(directCalls.length, 1, "direct review should be attempted first");
     assert.strictEqual(execCalls.length, 1, "subprocess should run as fallback");
@@ -752,7 +782,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd();
     }
-    await settle();
+    await reviewSettledSignal.promise;
 
     const reviewNotify = notifyCalls.find((n) => n.msg.includes("Memory auto-reviewed"));
     assert.strictEqual(reviewNotify, undefined, "empty direct review should not notify");
@@ -780,7 +810,7 @@ describe("setupBackgroundReview", () => {
   it("falls back gracefully if getBranch throws", async () => {
     const config = { ...defaultConfig, nudgeToolCalls: 3 };
     const pi = createMockPi();
-    setupBackgroundReview(pi, mockStore, null, config);
+    setup(pi, config);
 
     fireMessageEnd("user");
     fireMessageEnd("user");
