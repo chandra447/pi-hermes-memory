@@ -300,7 +300,7 @@ describe("setupCorrectionDetector handler", () => {
     return ctx;
   }
 
-  async function settle(ms = 10) {
+  async function settle(ms = 30) {
     await new Promise((r) => setTimeout(r, ms));
   }
 

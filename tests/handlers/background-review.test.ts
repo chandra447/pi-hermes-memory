@@ -1,5 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
 import {
   buildDirectReviewUserPrompt,
   buildSubprocessReviewPrompt,
@@ -20,6 +21,16 @@ let execCalls: any[];
 let directCalls: any[];
 let notifyCalls: any[];
 
+function captureExecArgs(args: any[]): any[] {
+  const [command, childArgs, options] = args;
+  const capturedArgs = [...childArgs];
+  const promptReference = capturedArgs.at(-1);
+  if (typeof promptReference === "string" && promptReference.startsWith("@")) {
+    capturedArgs[capturedArgs.length - 1] = readFileSync(promptReference.slice(1), "utf-8");
+  }
+  return [command, capturedArgs, options];
+}
+
 function createMockPi(execReturn?: { code: number; stdout: string; stderr: string }) {
   const defaultReturn = { code: 0, stdout: "Saved memory", stderr: "" };
   const ret = execReturn ?? defaultReturn;
@@ -30,7 +41,7 @@ function createMockPi(execReturn?: { code: number; stdout: string; stderr: strin
       handlers[event].push(handler);
     },
     exec: async (...args: any[]) => {
-      execCalls.push(args);
+      execCalls.push(captureExecArgs(args));
       return ret;
     },
     registerTool: () => {},
@@ -159,7 +170,7 @@ describe("setupBackgroundReview", () => {
     });
   }
 
-  it("increments user turn count on message_end for user messages", () => {
+  it("increments user turn count on message_end for user messages", async () => {
     const pi = createMockPi();
     setupBackgroundReview(pi, mockStore, null, defaultConfig);
 
@@ -173,6 +184,7 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd();
     }
+    await settle();
 
     // exec should have been called since we have 3 user turns and 10 turn_end events
     assert.ok(execCalls.length > 0, "exec should be called with 3 user turns and 10 turn_end events");
@@ -273,7 +285,7 @@ describe("setupBackgroundReview", () => {
         handlers[event].push(handler);
       },
       exec: async (...args: any[]) => {
-        execCalls.push(args);
+        execCalls.push(captureExecArgs(args));
         await new Promise<void>((r) => { resolveExec = r; });
         return { code: 0, stdout: "Saved", stderr: "" };
       },
@@ -478,7 +490,7 @@ describe("setupBackgroundReview", () => {
         handlers[event].push(handler);
       },
       exec: async (...args: any[]) => {
-        execCalls.push(args);
+        execCalls.push(captureExecArgs(args));
         throw new Error("exec crashed");
       },
       registerTool: () => {},

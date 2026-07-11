@@ -1,5 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { setupSessionFlush } from "../../src/handlers/session-flush.js";
 import { resolveChildPiInvocation } from "../../src/handlers/pi-child-process.js";
 import { FLUSH_PROMPT } from "../../src/constants.js";
@@ -18,7 +19,13 @@ function createMockPi() {
       handlers[event].push(handler);
     },
     async exec(...args: any[]) {
-      execCalls.push({ args });
+      const [command, childArgs, options] = args;
+      const capturedArgs = [...childArgs];
+      const promptReference = capturedArgs.at(-1);
+      if (typeof promptReference === "string" && promptReference.startsWith("@")) {
+        capturedArgs[capturedArgs.length - 1] = readFileSync(promptReference.slice(1), "utf-8");
+      }
+      execCalls.push({ args: [command, capturedArgs, options] });
       return { code: 0, stdout: "", stderr: "" };
     },
     registerTool() {},

@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -175,6 +177,18 @@ function shouldRetryWithoutOverridesForError(error: unknown): boolean {
   return shouldRetryWithoutOverridesFromText(String(error));
 }
 
+async function writePromptToTemporaryFile(prompt: string): Promise<{ dir: string; filePath: string }> {
+  const dir = await fs.mkdtemp(join(os.tmpdir(), "pi-hermes-prompt-"));
+  const filePath = join(dir, "prompt.md");
+  try {
+    await fs.writeFile(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
+    return { dir, filePath };
+  } catch (error) {
+    await fs.rm(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 export async function execChildPrompt(
   pi: Pick<ExtensionAPI, "exec">,
   prompt: string,
@@ -185,28 +199,34 @@ export async function execChildPrompt(
     signal: options.signal,
     timeout: options.timeoutMs,
   };
+  const temporaryPrompt = await writePromptToTemporaryFile(prompt);
+  const promptReference = `@${temporaryPrompt.filePath}`;
 
   try {
-    const invocation = resolveChildPiInvocation(buildChildPiPromptArgs(prompt, config));
-    const result = await pi.exec(invocation.command, invocation.args, execOptions) as PiExecResult;
-    if (
-      result.code === 0 ||
-      !options.retryWithoutOverrides ||
-      !hasChildLlmOverrides(config) ||
-      !shouldRetryWithoutOverrides(result)
-    ) {
-      return result;
+    try {
+      const invocation = resolveChildPiInvocation(buildChildPiPromptArgs(promptReference, config));
+      const result = await pi.exec(invocation.command, invocation.args, execOptions) as PiExecResult;
+      if (
+        result.code === 0 ||
+        !options.retryWithoutOverrides ||
+        !hasChildLlmOverrides(config) ||
+        !shouldRetryWithoutOverrides(result)
+      ) {
+        return result;
+      }
+    } catch (error) {
+      if (
+        !options.retryWithoutOverrides ||
+        !hasChildLlmOverrides(config) ||
+        !shouldRetryWithoutOverridesForError(error)
+      ) {
+        throw error;
+      }
     }
-  } catch (error) {
-    if (
-      !options.retryWithoutOverrides ||
-      !hasChildLlmOverrides(config) ||
-      !shouldRetryWithoutOverridesForError(error)
-    ) {
-      throw error;
-    }
-  }
 
-  const retryInvocation = resolveChildPiInvocation(basePromptArgs(prompt));
-  return pi.exec(retryInvocation.command, retryInvocation.args, execOptions) as Promise<PiExecResult>;
+    const retryInvocation = resolveChildPiInvocation(basePromptArgs(promptReference));
+    return await pi.exec(retryInvocation.command, retryInvocation.args, execOptions) as PiExecResult;
+  } finally {
+    await fs.rm(temporaryPrompt.dir, { recursive: true, force: true });
+  }
 }

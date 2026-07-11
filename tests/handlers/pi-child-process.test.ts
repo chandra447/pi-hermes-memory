@@ -1,4 +1,6 @@
 import { fileURLToPath } from "node:url";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -107,6 +109,47 @@ describe("resolveChildPiInvocation", () => {
 });
 
 describe("execChildPrompt", () => {
+  it("keeps a sensitive prompt out of argv and removes its mode-0600 temporary file", async () => {
+    const secret = "PRIVATE-MEMORY-CONTENT";
+    let promptPath = "";
+    const pi = {
+      exec: async (_cmd: string, args: string[]) => {
+        assert.ok(args.every((arg) => !arg.includes(secret)), "child argv must not contain prompt content");
+        const promptArg = args.at(-1)!;
+        assert.match(promptArg, /^@/);
+        promptPath = promptArg.slice(1);
+        assert.equal(await fs.readFile(promptPath, "utf-8"), secret);
+        assert.equal((await fs.stat(promptPath)).mode & 0o777, 0o600);
+        return { code: 0, stdout: "ok", stderr: "" };
+      },
+    };
+
+    const result = await execChildPrompt(pi as any, secret, {}, { timeoutMs: 30000 });
+
+    assert.equal(result.code, 0);
+    await assert.rejects(fs.access(promptPath), { code: "ENOENT" });
+    await assert.rejects(fs.access(path.dirname(promptPath)), { code: "ENOENT" });
+  });
+
+  it("removes the temporary prompt file when child execution throws", async () => {
+    let promptPath = "";
+    const pi = {
+      exec: async (_cmd: string, args: string[]) => {
+        promptPath = args.at(-1)!.slice(1);
+        assert.equal(await fs.readFile(promptPath, "utf-8"), "secret failure prompt");
+        throw new Error("child failed");
+      },
+    };
+
+    await assert.rejects(
+      execChildPrompt(pi as any, "secret failure prompt", {}, { timeoutMs: 30000 }),
+      /child failed/,
+    );
+
+    assert.ok(promptPath.startsWith(os.tmpdir()));
+    await assert.rejects(fs.access(promptPath), { code: "ENOENT" });
+  });
+
   it("retries once without overrides when requested and the override subprocess fails for model resolution reasons", async () => {
     const calls: Array<{ cmd: string; args: string[] }> = [];
     const pi = {
@@ -127,10 +170,13 @@ describe("execChildPrompt", () => {
     });
 
     assert.strictEqual(result.code, 0);
-    assert.deepStrictEqual(calls.map(logicalChildArgs), [
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
+    const logicalCalls = calls.map(logicalChildArgs);
+    const promptReference = logicalCalls[0].at(-1)!;
+    assert.match(promptReference, /^@/);
+    assert.deepStrictEqual(logicalCalls, [
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, promptReference],
       // Retry path (basePromptArgs) also passes --no-extensions + own path.
-      ["-p", "--no-session", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", ...EXT_ARGS, promptReference],
     ]);
   });
 
@@ -162,9 +208,11 @@ describe("execChildPrompt", () => {
       assert.strictEqual(calls[1].cmd, process.execPath);
       assert.match(calls[0].args[0].replace(/\\/g, "/"), /\/cli\.js$/);
       assert.match(calls[1].args[0].replace(/\\/g, "/"), /\/cli\.js$/);
+      const promptReference = calls[0].args.at(-1)!;
+      assert.match(promptReference, /^@/);
       assert.deepStrictEqual(calls.map((call) => call.args.slice(1)), [
-        ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
-        ["-p", "--no-session", ...EXT_ARGS, "hello"],
+        ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, promptReference],
+        ["-p", "--no-session", ...EXT_ARGS, promptReference],
       ]);
     } finally {
       if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
