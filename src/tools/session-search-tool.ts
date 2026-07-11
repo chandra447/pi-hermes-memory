@@ -161,7 +161,11 @@ Returns bounded conversation snippets with session dates and project context. La
       query: Type.String({ description: 'Search query. Use natural language or specific terms.' }),
       project: Type.Optional(Type.String({ description: 'Filter by project name (optional).' })),
       role: Type.Optional(StringEnum(['user', 'assistant'] as const, { description: 'Filter by message role (optional).' })),
-      limit: Type.Optional(Type.Number({ description: 'Maximum results to return (default: 10, max: 20).' })),
+      limit: Type.Optional(Type.Number({
+        description: 'Maximum results to return (default: 10, min: 1, max: 20).',
+        minimum: 1,
+        maximum: 20,
+      })),
       snippetChars: Type.Optional(Type.Number({
         description: `Maximum characters per result snippet (default: ${DEFAULT_LEGACY_SNIPPET_CHARS}, max: ${MAX_LEGACY_SNIPPET_CHARS}).`,
         minimum: 100,
@@ -172,7 +176,8 @@ Returns bounded conversation snippets with session dates and project context. La
       const query = args.query;
       const project = args.project;
       const role = args.role;
-      const limit = Math.min(args.limit || 10, 20);
+      const requestedLimit = Number.isFinite(args.limit) ? Math.floor(args.limit!) : 10;
+      const limit = Math.min(Math.max(requestedLimit, 1), 20);
       const snippetChars = Math.min(
         Math.max(Math.floor(args.snippetChars ?? DEFAULT_LEGACY_SNIPPET_CHARS), 100),
         MAX_LEGACY_SNIPPET_CHARS,
@@ -192,8 +197,15 @@ Returns bounded conversation snippets with session dates and project context. La
       const results = searchSessions(dbManager, query, { project, role, limit });
 
       if (results.length === 0) {
-        const result: SearchResult = { success: true, count: 0, message: `No results found for "${query}". Try a different search term or broader query.` };
-        return { content: [{ type: 'text' as const, text: result.message! }], details: result };
+        const output = capLegacyOutput('No results found. Try a different search term or broader query.');
+        const result: SearchResult = {
+          success: true,
+          count: 0,
+          message: output.text,
+          outputChars: output.text.length,
+          outputTruncated: output.truncated,
+        };
+        return { content: [{ type: 'text' as const, text: output.text }], details: result };
       }
 
       const blocks: string[] = [`Found ${results.length} results for "${query}":`];
