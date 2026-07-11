@@ -131,7 +131,14 @@ export class AtomicLockCoordinator {
             && observedIncarnation !== null
             && owner.incarnation === observedIncarnation;
           const unknownIncarnation = alive && (owner.incarnation === null || observedIncarnation === null);
-          if (!sameIncarnation && !unknownIncarnation) {
+          // A lease is reclaimable once it has been held for longer than staleMs,
+          // regardless of whether the owning process is still alive — it may be
+          // making no progress (blocked I/O, wedged, suspended) rather than dead.
+          // This is the sole backstop for that case: liveness/incarnation checks
+          // alone cannot distinguish "alive and working" from "alive and stuck".
+          // staleMs <= 0 disables time-based takeover (liveness checks only).
+          const stale = options.staleMs > 0 && now - owner.acquired_at >= options.staleMs;
+          if (stale || (!sameIncarnation && !unknownIncarnation)) {
             db.prepare(`
               UPDATE locks
               SET token = ?, pid = ?, incarnation = ?, acquired_at = ?
@@ -155,6 +162,26 @@ export class AtomicLockCoordinator {
       token,
       release: () => this.release(key, token),
     };
+  }
+
+  /**
+   * Fencing check for destructive operations that lack their own independent
+   * compare-and-swap (e.g. a plain fs.renameSync with no content/inode
+   * verification). A lease can be legitimately stolen from a stale-but-alive
+   * holder (see tryAcquire); a holder resuming after being stuck must verify
+   * it is still the current owner immediately before publishing, or abort.
+   * This narrows — it cannot fully close — the check-then-act race, since
+   * synchronous work between this call and the actual write is not atomic
+   * with it.
+   */
+  isCurrentOwner(key: string, token: string): boolean {
+    const db = this.open();
+    try {
+      const row = db.prepare('SELECT token FROM locks WHERE lock_key = ?').get(key) as { token: string } | undefined;
+      return row?.token === token;
+    } finally {
+      db.close();
+    }
   }
 
   release(key: string, token: string): void {

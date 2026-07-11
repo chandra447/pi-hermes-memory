@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import Database from 'better-sqlite3';
 import { AtomicLockCoordinator } from '../../src/store/atomic-lock-coordinator.js';
 
 describe('AtomicLockCoordinator', () => {
@@ -104,6 +105,101 @@ describe('AtomicLockCoordinator', () => {
 
       lease.release();
       assert.ok(contender.tryAcquire('shared', { staleMs: 0 }));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reclaims an alive unknown-incarnation owner after staleMs elapses', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-lock-test-'));
+    try {
+      const dbPath = path.join(tmpDir, 'locks.sqlite');
+      const owner = new AtomicLockCoordinator(dbPath, {
+        pid: process.pid,
+        probeIncarnation: () => null,
+      });
+      const lease = owner.tryAcquire('shared', { staleMs: 60_000 });
+      assert.ok(lease);
+
+      const staleMs = 50;
+      const lockDb = new Database(dbPath);
+      try {
+        lockDb.prepare('UPDATE locks SET acquired_at = ? WHERE lock_key = ?').run(Date.now() - staleMs - 10, 'shared');
+      } finally {
+        lockDb.close();
+      }
+
+      const contender = new AtomicLockCoordinator(dbPath, {
+        pid: process.pid,
+        incarnation: 'known-later',
+        probeIncarnation: () => 'known-later',
+      });
+      const stolen = contender.tryAcquire('shared', { staleMs });
+      assert.ok(stolen);
+      stolen.release();
+      lease.release();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not reclaim a live unknown-incarnation owner when staleMs is disabled', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-lock-test-'));
+    try {
+      const dbPath = path.join(tmpDir, 'locks.sqlite');
+      const owner = new AtomicLockCoordinator(dbPath, {
+        pid: process.pid,
+        probeIncarnation: () => null,
+      });
+      const lease = owner.tryAcquire('shared', { staleMs: 60_000 });
+      assert.ok(lease);
+
+      const contender = new AtomicLockCoordinator(dbPath, {
+        pid: process.pid,
+        incarnation: 'known-later',
+        probeIncarnation: () => 'known-later',
+      });
+      assert.strictEqual(contender.tryAcquire('shared', { staleMs: 0 }), null);
+
+      lease.release();
+      assert.ok(contender.tryAcquire('shared', { staleMs: 0 }));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fences stale original tokens after a staleMs takeover', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-lock-test-'));
+    try {
+      const dbPath = path.join(tmpDir, 'locks.sqlite');
+      const owner = new AtomicLockCoordinator(dbPath, {
+        pid: process.pid,
+        probeIncarnation: () => null,
+      });
+      const original = owner.tryAcquire('shared', { staleMs: 60_000 });
+      assert.ok(original);
+      const originalToken = original.token;
+
+      const staleMs = 50;
+      const lockDb = new Database(dbPath);
+      try {
+        lockDb.prepare('UPDATE locks SET acquired_at = ? WHERE lock_key = ?').run(Date.now() - staleMs - 10, 'shared');
+      } finally {
+        lockDb.close();
+      }
+
+      const contender = new AtomicLockCoordinator(dbPath, {
+        pid: process.pid,
+        incarnation: 'successor',
+        probeIncarnation: () => 'successor',
+      });
+      const successor = contender.tryAcquire('shared', { staleMs });
+      assert.ok(successor);
+
+      assert.strictEqual(owner.isCurrentOwner('shared', originalToken), false);
+      assert.strictEqual(contender.isCurrentOwner('shared', successor.token), true);
+
+      successor.release();
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
