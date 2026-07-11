@@ -290,18 +290,11 @@ describe("setupCorrectionDetector handler", () => {
     }
   }
 
-  function fireTurnEnd(branch: any[] = []) {
+  function fireTurnEnd(branch: any[] = []): Promise<unknown> {
     const h = handlers["turn_end"];
     if (!h) throw new Error("No turn_end handler registered");
     const ctx = makeCtx(branch);
-    for (const fn of h) {
-      fn({}, ctx);
-    }
-    return ctx;
-  }
-
-  async function settle(ms = 30) {
-    await new Promise((r) => setTimeout(r, ms));
+    return Promise.all(h.map((fn) => fn({}, ctx)));
   }
 
   beforeEach(() => {
@@ -327,8 +320,7 @@ describe("setupCorrectionDetector handler", () => {
     ];
 
     fireMessageEnd("user", "don't do that");
-    fireTurnEnd(branch);
-    await settle();
+    await fireTurnEnd(branch);
 
     assert.ok(execCalls.length >= 1, "pi.exec should be called on correction");
   });
@@ -346,8 +338,7 @@ describe("setupCorrectionDetector handler", () => {
     ];
 
     fireMessageEnd("user", "don't do that");
-    fireTurnEnd(branch);
-    await settle();
+    await fireTurnEnd(branch);
 
     const cmdArgs = logicalChildArgs(execCalls[0]);
     assert.deepStrictEqual(
@@ -361,8 +352,7 @@ describe("setupCorrectionDetector handler", () => {
     setupCorrectionDetector(pi, mockStore, null, config);
 
     fireMessageEnd("user", "looks good");
-    fireTurnEnd([]);
-    await settle();
+    await fireTurnEnd([]);
 
     assert.strictEqual(execCalls.length, 0, "pi.exec should NOT be called for normal messages");
   });
@@ -373,16 +363,14 @@ describe("setupCorrectionDetector handler", () => {
 
     // First correction
     fireMessageEnd("user", "don't do that");
-    fireTurnEnd([]);
-    await settle();
+    await fireTurnEnd([]);
 
     const firstCallCount = execCalls.length;
     assert.ok(firstCallCount >= 1, "first correction should trigger");
 
     // Second correction within 3 turns — should be rate-limited
     fireMessageEnd("user", "not like that");
-    fireTurnEnd([]);
-    await settle();
+    await fireTurnEnd([]);
 
     assert.strictEqual(execCalls.length, firstCallCount, "second correction should be rate-limited");
   });
@@ -402,8 +390,7 @@ describe("setupCorrectionDetector handler", () => {
     ];
 
     fireMessageEnd("user", "no, use pnpm instead");
-    fireTurnEnd(branch);
-    await settle();
+    await fireTurnEnd(branch);
 
     const failures = getMemories(dbManager, { target: 'failure' });
     assert.strictEqual(failures.length, 1);
@@ -429,8 +416,7 @@ describe("setupCorrectionDetector handler", () => {
     ];
 
     fireMessageEnd("user", "no, use pnpm in this repo");
-    fireTurnEnd(branch);
-    await settle();
+    await fireTurnEnd(branch);
 
     const projectFailures = getMemories(dbManager, { target: 'failure', project: 'project-a' });
     assert.strictEqual(projectFailures.length, 1);
@@ -464,8 +450,7 @@ describe("setupCorrectionDetector handler", () => {
     ];
 
     fireMessageEnd("user", "no, use yarn instead");
-    fireTurnEnd(branch);
-    await settle();
+    await fireTurnEnd(branch);
 
     assert.ok(execCalls.length >= 1, 'correction review should still run');
     assert.strictEqual(addFailureCalls, 1, 'Markdown correction save should still happen');
