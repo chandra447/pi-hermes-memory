@@ -320,7 +320,7 @@ describe('DatabaseManager', () => {
       const lockDbPath = path.join(path.dirname(canonicalDbPath), '.pi-hermes-locks.sqlite');
       const lockKey = `recovery:${canonicalDbPath}`;
       const coordinator = new AtomicLockCoordinator(lockDbPath);
-      const lease = coordinator.tryAcquire(lockKey, { staleMs: 1 });
+      const lease = coordinator.tryAcquire(lockKey, { staleMs: 10_000 });
       assert.ok(lease);
       spawn(process.execPath, [
         '-e',
@@ -335,7 +335,7 @@ describe('DatabaseManager', () => {
         lease.token,
       ], { stdio: 'ignore' });
 
-      dbManager = new DatabaseManager(tmpDir, { recoveryLockWaitMs: 1000, recoveryLockPollMs: 10, recoveryLockStaleMs: 1 });
+      dbManager = new DatabaseManager(tmpDir, { recoveryLockWaitMs: 1000, recoveryLockPollMs: 10, recoveryLockStaleMs: 10_000 });
       const started = Date.now();
       const result = dbManager.recoverFromCorruption(corruptSqliteError());
 
@@ -362,6 +362,48 @@ describe('DatabaseManager', () => {
       const db = dbManager.getDb();
 
       assertQuickCheckOk(db as InstanceType<typeof Database>);
+    });
+
+    it('aborts destructive recovery rename when the recovery lease was stolen mid-flight', () => {
+      dbManager.close();
+      fs.writeFileSync(path.join(tmpDir, 'sessions.db'), 'not a sqlite database');
+      dbManager = new DatabaseManager(tmpDir, { recoveryLockStaleMs: 60_000 });
+
+      type MoveDatabaseFilesToBackup = (this: DatabaseManager, backupBase: string) => unknown;
+      const prototype = DatabaseManager.prototype as unknown as {
+        moveDatabaseFilesToBackup: MoveDatabaseFilesToBackup;
+      };
+      const originalMove = prototype.moveDatabaseFilesToBackup;
+      let moveCalls = 0;
+      prototype.moveDatabaseFilesToBackup = function (this: DatabaseManager, backupBase: string) {
+        moveCalls++;
+        if (moveCalls === 1) {
+          const canonicalDbPath = fs.realpathSync(path.join(tmpDir, 'sessions.db'));
+          const lockDbPath = path.join(path.dirname(canonicalDbPath), '.pi-hermes-locks.sqlite');
+          const lockKey = `recovery:${canonicalDbPath}`;
+          const lockDb = new Database(lockDbPath);
+          try {
+            lockDb.prepare('UPDATE locks SET acquired_at = ? WHERE lock_key = ?').run(Date.now() - 100_000, lockKey);
+          } finally {
+            lockDb.close();
+          }
+          const thief = new AtomicLockCoordinator(lockDbPath);
+          const stolen = thief.tryAcquire(lockKey, { staleMs: 50 });
+          assert.ok(stolen);
+          stolen.release();
+        }
+        return originalMove.call(this, backupBase);
+      };
+
+      try {
+        assert.throws(
+          () => dbManager.getDb(),
+          /SQLite recovery lease lost/,
+        );
+        assert.strictEqual(moveCalls, 1);
+      } finally {
+        prototype.moveDatabaseFilesToBackup = originalMove;
+      }
     });
 
     it('serializes recovery through symlinked database aliases', { skip: process.platform === 'win32' }, () => {

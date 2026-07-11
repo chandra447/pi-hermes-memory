@@ -143,6 +143,7 @@ export class DatabaseManager {
   private readonly recoveryOptions: ResolvedDatabaseRecoveryOptions;
   private lastRecovery: DatabaseRecoveryResult | null = null;
   private openGuard: (() => void) | null = null;
+  private activeRecoveryLease: { coordinator: AtomicLockCoordinator; key: string; token: string } | null = null;
 
   constructor(memoryDir: string, recoveryOptions: DatabaseRecoveryOptions = {}) {
     this.displayDbPath = path.join(memoryDir, 'sessions.db');
@@ -377,6 +378,7 @@ export class DatabaseManager {
         continue;
       }
 
+      this.activeRecoveryLease = { coordinator, key: lockKey, token: lease.token };
       try {
         if (this.currentDatabaseIsHealthy()) {
           try {
@@ -402,6 +404,7 @@ export class DatabaseManager {
           throw error;
         }
       } finally {
+        this.activeRecoveryLease = null;
         lease.release();
       }
     }
@@ -771,6 +774,7 @@ export class DatabaseManager {
   }
 
   private moveDatabaseFilesToBackup(backupBase: string): MovedDatabaseFile[] {
+    this.assertStillRecoveryOwner();
     const moved: MovedDatabaseFile[] = [];
     for (const suffix of DATABASE_FILE_SUFFIXES) {
       const original = `${this.dbPath}${suffix}`;
@@ -782,6 +786,21 @@ export class DatabaseManager {
       moved.push({ original, backup });
     }
     return moved;
+  }
+
+  /**
+   * Verifies this instance still holds the recovery lease immediately before
+   * a destructive rename that has no independent compare-and-swap of its
+   * own (unlike the Markdown mutation path, which re-checks a content
+   * fingerprint at publish time). If the lease was reclaimed as stale while
+   * this call was in flight, abort rather than race the new owner.
+   */
+  private assertStillRecoveryOwner(): void {
+    const active = this.activeRecoveryLease;
+    if (!active) return;
+    if (!active.coordinator.isCurrentOwner(active.key, active.token)) {
+      throw new Error(`SQLite recovery lease lost for ${this.displayDbPath}; another process took over`);
+    }
   }
 
   private restoreMovedDatabaseFiles(moved: MovedDatabaseFile[]): void {
