@@ -21,6 +21,16 @@ interface ExecChildPromptOptions {
   retryWithoutOverrides?: boolean;
 }
 
+interface ExecChildPromptDependencies {
+  removeTemporaryDirectory: (dir: string) => Promise<void>;
+}
+
+const DEFAULT_EXEC_CHILD_PROMPT_DEPENDENCIES: ExecChildPromptDependencies = {
+  removeTemporaryDirectory: async (dir) => {
+    await fs.rm(dir, { recursive: true, force: true });
+  },
+};
+
 export interface ChildPiInvocation {
   command: string;
   args: string[];
@@ -83,14 +93,6 @@ export function inheritedExtensionArgs(argv: string[] = process.argv.slice(2)): 
   return args;
 }
 
-function inheritedExtensionPaths(argv: string[]): string[] {
-  return inheritedExtensionArgs(argv).flatMap((arg, index, args) => {
-    if (arg === "-e" || arg === "--extension") return args[index + 1] ? [args[index + 1]] : [];
-    if (arg.startsWith("--extension=")) return [arg.slice("--extension=".length)];
-    return [];
-  });
-}
-
 export function detectClaudeOAuthAdapterPaths(ownExtensionPath = OWN_EXTENSION_PATH): string[] {
   const candidates = new Set<string>();
   if (ownExtensionPath) {
@@ -101,11 +103,10 @@ export function detectClaudeOAuthAdapterPaths(ownExtensionPath = OWN_EXTENSION_P
   return [...candidates].filter((candidate) => existsSync(candidate));
 }
 
-function childExtensionPaths(config: ChildLlmConfig, argv: string[]): string[] {
+function childExtensionPaths(config: ChildLlmConfig): string[] {
   const candidates = [
     OWN_EXTENSION_PATH,
     ...(config.childExtensionPaths ?? []),
-    ...inheritedExtensionPaths(argv),
     ...detectClaudeOAuthAdapterPaths(),
   ];
   const seen = new Set<string>();
@@ -121,11 +122,11 @@ function childExtensionPaths(config: ChildLlmConfig, argv: string[]): string[] {
   return paths;
 }
 
-function appendOwnExtensionArgs(args: string[], config: ChildLlmConfig, argv: string[]): void {
+function appendOwnExtensionArgs(args: string[], config: ChildLlmConfig): void {
   // Skip all packages from settings.json (--no-extensions) — the subprocess
   // loads only Hermes and explicitly required provider adapters.
   args.push("--no-extensions");
-  for (const extensionPath of childExtensionPaths(config, argv)) {
+  for (const extensionPath of childExtensionPaths(config)) {
     args.push("-e", extensionPath);
   }
 }
@@ -133,7 +134,7 @@ function appendOwnExtensionArgs(args: string[], config: ChildLlmConfig, argv: st
 export function buildChildPiPromptArgs(
   prompt: string,
   config: ChildLlmConfig,
-  argv: string[] = process.argv.slice(2),
+  _argv: string[] = process.argv.slice(2),
 ): string[] {
   const args = ["-p", "--no-session"];
   const model = normalizedModelOverride(config);
@@ -141,7 +142,7 @@ export function buildChildPiPromptArgs(
 
   if (model) args.push("--model", model);
   if (thinking) args.push("--thinking", thinking);
-  appendOwnExtensionArgs(args, config, argv);
+  appendOwnExtensionArgs(args, config);
   args.push(prompt);
 
   return args;
@@ -151,7 +152,7 @@ function basePromptArgs(prompt: string, config: ChildLlmConfig): string[] {
   // Always use --no-extensions + own path so the retry also avoids loading
   // all settings.json packages — matching the primary code path.
   const args = ["-p", "--no-session"];
-  appendOwnExtensionArgs(args, config, process.argv.slice(2));
+  appendOwnExtensionArgs(args, config);
   args.push(prompt);
   return args;
 }
@@ -226,7 +227,7 @@ async function writePromptToTemporaryFile(prompt: string): Promise<{ dir: string
     await fs.writeFile(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
     return { dir, filePath };
   } catch (error) {
-    await fs.rm(dir, { recursive: true, force: true });
+    try { await fs.rm(dir, { recursive: true, force: true }); } catch {}
     throw error;
   }
 }
@@ -236,6 +237,7 @@ export async function execChildPrompt(
   prompt: string,
   config: ChildLlmConfig,
   options: ExecChildPromptOptions,
+  dependencies: ExecChildPromptDependencies = DEFAULT_EXEC_CHILD_PROMPT_DEPENDENCIES,
 ): Promise<PiExecResult> {
   const execOptions = {
     signal: options.signal,
@@ -269,6 +271,6 @@ export async function execChildPrompt(
     const retryInvocation = resolveChildPiInvocation(basePromptArgs(promptReference, config));
     return await pi.exec(retryInvocation.command, retryInvocation.args, execOptions) as PiExecResult;
   } finally {
-    await fs.rm(temporaryPrompt.dir, { recursive: true, force: true });
+    try { await dependencies.removeTemporaryDirectory(temporaryPrompt.dir); } catch {}
   }
 }

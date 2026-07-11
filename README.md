@@ -471,7 +471,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.pi/agent/sessions/` |
 | `llmModelOverride` | unset | Optional model override for background review (direct and subprocess), correction save, session flush, and consolidation |
 | `llmThinkingOverride` | unset | Optional thinking override for those LLM calls; valid values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. If `llmModelOverride` is set and this is omitted, review/child calls default to `off` |
-| `childExtensionPaths` | unset | Extra extension entry paths required by isolated child Pi processes, such as provider auth adapters; the installed `pi-claude-oauth-adapter` is detected automatically |
+| `childExtensionPaths` | unset | Trusted provider/auth adapter entry paths explicitly allowed in isolated child Pi processes; the installed `pi-claude-oauth-adapter` is detected automatically |
 | `nudgeInterval` | `10` | Turns between auto-reviews |
 | `nudgeToolCalls` | `15` | Tool calls between auto-reviews (OR with turns) |
 | `reviewRecentMessages` | `0` | Recent messages included in background review (`0` = all) |

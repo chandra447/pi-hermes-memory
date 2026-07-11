@@ -4,6 +4,7 @@
 
 import { describe, it, beforeEach, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -14,6 +15,16 @@ import { ENTRY_DELIMITER } from "../../src/constants.js";
 // ─── Mock infrastructure ───
 
 let execCalls: any[];
+
+function captureExecArgs(args: any[]): any[] {
+  const [command, childArgs, options] = args;
+  const capturedArgs = [...childArgs];
+  const promptReference = capturedArgs.at(-1);
+  if (typeof promptReference === "string" && promptReference.startsWith("@")) {
+    capturedArgs[capturedArgs.length - 1] = readFileSync(promptReference.slice(1), "utf-8");
+  }
+  return [command, capturedArgs, options];
+}
 
 function logicalChildArgs(call: any[]): string[] {
   const [cmd, args] = call;
@@ -34,7 +45,7 @@ function createMockPi(execReturn?: { code: number; stdout: string; stderr: strin
   return {
     on: () => {},
     exec: async (...args: any[]) => {
-      execCalls.push(args);
+      execCalls.push(captureExecArgs(args));
       return ret;
     },
     registerTool: () => {},
@@ -148,7 +159,7 @@ describe("triggerConsolidation", () => {
     const pi = {
       on: () => {},
       exec: async (...args: any[]) => {
-        execCalls.push(args);
+        execCalls.push(captureExecArgs(args));
         if (execCalls.length === 1) {
           return { code: 1, stdout: "", stderr: "model not found" };
         }
@@ -189,7 +200,7 @@ describe("triggerConsolidation", () => {
     const pi = {
       on: () => {},
       exec: async (...args: any[]) => {
-        execCalls.push(args);
+        execCalls.push(captureExecArgs(args));
         return { code: 1, stdout: "", stderr: "memory tool returned no changes" };
       },
       registerTool: () => {},
@@ -238,7 +249,7 @@ describe("registerConsolidateCommand", () => {
     const pi = {
       on: () => {},
       exec: async (...args: any[]) => {
-        execCalls.push(args);
+        execCalls.push(captureExecArgs(args));
         return { code: 0, stdout: "Done", stderr: "" };
       },
       registerTool: () => {},
@@ -282,7 +293,7 @@ describe("registerConsolidateCommand", () => {
     const pi = {
       on: () => {},
       exec: async (...args: any[]) => {
-        execCalls.push(args);
+        execCalls.push(captureExecArgs(args));
         return { code: 0, stdout: "Done", stderr: "" };
       },
       registerTool: () => {},
@@ -308,7 +319,7 @@ describe("registerConsolidateCommand", () => {
     const pi = {
       on: () => {},
       exec: async (...args: any[]) => {
-        execCalls.push(args);
+        execCalls.push(captureExecArgs(args));
         return { code: 0, stdout: "Done", stderr: "" };
       },
       registerTool: () => {},

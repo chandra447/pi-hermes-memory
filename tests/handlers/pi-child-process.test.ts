@@ -72,7 +72,7 @@ describe("buildChildPiPromptArgs", () => {
     );
   });
 
-  it("preserves existing configured and inherited extensions without duplicating Hermes", async () => {
+  it("passes configured extensions but excludes unrelated inherited extensions", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-child-extensions-"));
     const configured = path.join(dir, "configured.ts");
     const inherited = path.join(dir, "inherited.ts");
@@ -87,7 +87,6 @@ describe("buildChildPiPromptArgs", () => {
           "-p", "--no-session", "--no-extensions",
           "-e", OWN_EXTENSION_PATH,
           "-e", configured,
-          "-e", inherited,
           "hello",
         ],
       );
@@ -193,6 +192,38 @@ describe("execChildPrompt", () => {
     await assert.rejects(fs.access(promptPath), { code: "ENOENT" });
   });
 
+  it("returns a successful child result when temporary cleanup fails", async () => {
+    let cleanupCalls = 0;
+    let promptDirectory = "";
+    const pi = {
+      exec: async (_cmd: string, args: string[]) => {
+        promptDirectory = path.dirname(args.at(-1)!.slice(1));
+        return { code: 0, stdout: "completed", stderr: "" };
+      },
+    };
+
+    try {
+      const result = await execChildPrompt(
+        pi as any,
+        "cleanup failure prompt",
+        {},
+        { timeoutMs: 30000 },
+        {
+          removeTemporaryDirectory: async () => {
+            cleanupCalls++;
+            throw new Error("cleanup denied");
+          },
+        },
+      );
+
+      assert.equal(result.code, 0);
+      assert.equal(result.stdout, "completed");
+      assert.equal(cleanupCalls, 1);
+    } finally {
+      if (promptDirectory) await fs.rm(promptDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("passes configured auth adapters to both override attempts", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-child-auth-"));
     const adapterPath = path.join(dir, "adapter.ts");
@@ -219,6 +250,36 @@ describe("execChildPrompt", () => {
         assert.equal(args[index - 1], "-e");
       }
     } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes unrelated inherited extensions from primary and retry attempts", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-child-untrusted-"));
+    const inherited = path.join(dir, "unrelated-extension.ts");
+    await fs.writeFile(inherited, "export default () => {};");
+    const originalArgv = process.argv;
+    const calls: string[][] = [];
+    process.argv = [originalArgv[0], originalArgv[1], "-e", inherited];
+    try {
+      await execChildPrompt({
+        exec: async (_cmd: string, args: string[]) => {
+          calls.push(args);
+          return calls.length === 1
+            ? { code: 1, stderr: "model not found" }
+            : { code: 0, stdout: "ok" };
+        },
+      } as any, "private review", {
+        llmModelOverride: "missing/model",
+      }, { timeoutMs: 30000, retryWithoutOverrides: true });
+
+      assert.equal(calls.length, 2);
+      for (const args of calls) {
+        assert.equal(args.includes(inherited), false);
+        assert.ok(args.includes("--no-extensions"));
+      }
+    } finally {
+      process.argv = originalArgv;
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
