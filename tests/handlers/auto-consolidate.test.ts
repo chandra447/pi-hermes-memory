@@ -64,8 +64,8 @@ after(async () => {
 
 function logicalChildArgs(call: any[]): string[] {
   const [cmd, args] = call;
-  const underlying = { command: args[2], args: args.slice(3) };
-  const expected = resolveWatchedChildPiInvocation(underlying, Number(args[1]));
+  const underlying = { command: args[3], args: args.slice(4) };
+  const expected = resolveWatchedChildPiInvocation(underlying, Number(args[1]), args[2]);
   assert.deepStrictEqual({ command: cmd, args }, expected);
   return underlying.command === "pi" ? underlying.args : underlying.args.slice(1);
 }

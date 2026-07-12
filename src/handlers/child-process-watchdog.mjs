@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 
-const [timeoutValue, command, ...args] = process.argv.slice(2);
+const [timeoutValue, cancellationPath, command, ...args] = process.argv.slice(2);
 const timeoutMs = Number(timeoutValue);
 
-if (!command || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+if (!cancellationPath || !command || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
   process.stderr.write("pi-hermes-memory watchdog: invalid invocation\n");
   process.exit(2);
 }
@@ -17,6 +18,7 @@ child.stdout?.pipe(process.stdout);
 child.stderr?.pipe(process.stderr);
 
 let timedOut = false;
+let cancelled = false;
 let terminating = false;
 let forceTimer;
 
@@ -52,22 +54,34 @@ const timeout = setTimeout(() => {
 }, timeoutMs);
 timeout.unref();
 
+const cancellationPoll = cancellationPath === "-" ? undefined : setInterval(() => {
+  if (!existsSync(cancellationPath)) return;
+  cancelled = true;
+  process.stderr.write("[pi-hermes-memory] child cancellation requested; terminating process tree\n");
+  terminateTree();
+}, 25);
+cancellationPoll?.unref();
+
 for (const signal of ["SIGTERM", "SIGINT"]) {
   process.on(signal, terminateTree);
 }
 
 child.once("error", (error) => {
   clearTimeout(timeout);
+  if (cancellationPoll) clearInterval(cancellationPoll);
   if (forceTimer) clearTimeout(forceTimer);
   process.stderr.write(`pi-hermes-memory watchdog: ${error.message}\n`);
-  process.exitCode = timedOut ? 124 : 127;
+  process.exitCode = timedOut ? 124 : cancelled ? 143 : 127;
 });
 
 child.once("close", (code, signal) => {
   clearTimeout(timeout);
+  if (cancellationPoll) clearInterval(cancellationPoll);
   if (forceTimer) clearTimeout(forceTimer);
   if (timedOut) {
     process.exitCode = 124;
+  } else if (cancelled) {
+    process.exitCode = 143;
   } else if (typeof code === "number") {
     process.exitCode = code;
   } else {

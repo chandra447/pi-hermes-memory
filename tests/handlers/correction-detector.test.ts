@@ -13,7 +13,7 @@ import { getMemories } from "../../src/store/sqlite-memory-store.js";
 import { MemoryStore } from "../../src/store/memory-store.js";
 import { registerMemoryTool } from "../../src/tools/memory-tool.js";
 import { isCorrection, setupCorrectionDetector } from "../../src/handlers/correction-detector.js";
-import { resolveChildPiInvocation } from "../../src/handlers/pi-child-process.js";
+import { resolveWatchedChildPiInvocation } from "../../src/handlers/pi-child-process.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { MemoryConfig } from "../../src/types.js";
 
@@ -284,11 +284,11 @@ describe("setupCorrectionDetector handler", () => {
 
   function logicalChildArgs(call: any[]): string[] {
     const [cmd, args] = call;
-    const logicalArgs = cmd === "pi" ? args : args.slice(1);
-    const expected = resolveChildPiInvocation(logicalArgs);
+    const underlying = { command: args[3], args: args.slice(4) };
+    const expected = resolveWatchedChildPiInvocation(underlying, Number(args[1]), args[2]);
     assert.strictEqual(cmd, expected.command);
     assert.deepStrictEqual(args, expected.args);
-    return logicalArgs;
+    return underlying.command === "pi" ? underlying.args : underlying.args.slice(1);
   }
 
   const mockStore = {
