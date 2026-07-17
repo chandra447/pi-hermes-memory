@@ -69,6 +69,7 @@ class DatabaseCorruptionError extends Error {
   }
 }
 
+export const SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
 
 const DATABASE_FILE_SUFFIXES: readonly DatabaseFileSuffix[] = ['', '-wal', '-shm'];
@@ -297,6 +298,7 @@ export class DatabaseManager {
     // Enable WAL mode + FK enforcement for each connection. Keep SQLite's
     // default WAL autocheckpoint size; a very aggressive checkpoint cadence
     // increases the chance that abrupt VM/host shutdown catches a checkpoint.
+    db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     db.exec('PRAGMA journal_mode = WAL');
     db.exec(`PRAGMA wal_autocheckpoint = ${SQLITE_WAL_AUTOCHECKPOINT_PAGES}`);
     db.exec('PRAGMA journal_size_limit = 5242880');
