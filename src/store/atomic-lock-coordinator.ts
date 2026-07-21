@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
+import { loadBetterSqlite3 } from './sqlite-native.js';
 
 type StatementLike = {
   run: (...args: unknown[]) => unknown;
@@ -39,8 +40,7 @@ function loadDatabaseCtor(): DatabaseCtor {
     const bunSqlite = require('bun:sqlite') as { Database: DatabaseCtor };
     return bunSqlite.Database;
   }
-  const mod = require('better-sqlite3') as { default?: DatabaseCtor } | DatabaseCtor;
-  return (mod as { default?: DatabaseCtor }).default ?? (mod as DatabaseCtor);
+  return loadBetterSqlite3({ requireImpl: require }) as DatabaseCtor;
 }
 
 const Database = loadDatabaseCtor();

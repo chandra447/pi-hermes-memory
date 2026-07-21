@@ -2,10 +2,27 @@ import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import Database from "better-sqlite3";
 import { AtomicLockCoordinator, type AtomicLockLease } from "./store/atomic-lock-coordinator.js";
 import { canonicalStoragePathSync } from "./store/canonical-storage-path.js";
+import { loadBetterSqlite3 } from "./store/sqlite-native.js";
 
+type MigrationDatabase = {
+  exec: (sql: string) => void;
+  prepare: (sql: string) => { get: (...args: unknown[]) => unknown; run: (...args: unknown[]) => unknown };
+  close: () => void;
+  pragma: (query: string, options?: { simple?: boolean }) => unknown;
+  backup: (
+    destination: string,
+    options?: { progress?: () => void },
+  ) => Promise<void> | void;
+};
+
+type MigrationDatabaseCtor = new (
+  dbPath: string,
+  options?: { readonly?: boolean; fileMustExist?: boolean; timeout?: number },
+) => MigrationDatabase;
+
+const Database = loadBetterSqlite3() as MigrationDatabaseCtor;
 const DATABASE_FILES = ["sessions.db", "sessions.db-wal", "sessions.db-shm"] as const;
 const DATABASE_MIGRATION_PENDING_FILE = ".sessions-db-migration-pending";
 

@@ -122,6 +122,23 @@ Or test locally without installing:
 pi -e /path/to/pi-hermes-memory/src/index.ts
 ```
 
+### Homebrew / Node ABI mismatches
+
+`better-sqlite3` is a native addon. If Pi is installed via Homebrew and the extension was compiled for a different Node ABI, session search may warn:
+
+```text
+was compiled against a different Node.js version using NODE_MODULE_VERSION ...
+```
+
+The extension attempts one automatic `npm rebuild better-sqlite3` against the Node that is running Pi. If that still fails:
+
+```bash
+cd ~/.pi/agent/npm/node_modules/better-sqlite3
+npm rebuild better-sqlite3
+```
+
+Or install Pi with npm so the host runtime and extension install share one Node toolchain.
+
 ## Two-Tier Memory Architecture
 
 The extension stores memory at two levels:
