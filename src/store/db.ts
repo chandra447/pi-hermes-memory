@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { SCHEMA_SQL } from './schema.js';
 import { AtomicLockCoordinator } from './atomic-lock-coordinator.js';
 import { canonicalStoragePathSync } from './canonical-storage-path.js';
+import { loadBetterSqlite3 } from './sqlite-native.js';
 
 type StatementLike = {
   run: (...args: any[]) => any;
@@ -127,12 +128,7 @@ function loadDatabaseCtor(): DatabaseCtor {
     return createBunCompatDatabaseCtor(require);
   }
 
-  try {
-    const mod = require('better-sqlite3') as { default?: DatabaseCtor } | DatabaseCtor;
-    return (mod as { default?: DatabaseCtor }).default ?? (mod as DatabaseCtor);
-  } catch (err) {
-    throw err;
-  }
+  return loadBetterSqlite3({ requireImpl: require }) as DatabaseCtor;
 }
 
 const Database = loadDatabaseCtor();
