@@ -587,6 +587,46 @@ export class MemoryStore {
     this.fileFingerprints[filePath] = state.fingerprint;
   }
 
+  /**
+   * Reload target state from disk (source of truth), refresh success metadata,
+   * and always notify the mutation observer so SQLite stays aligned even when
+   * the mutation itself failed or an external editor raced the write.
+   */
+  private async finalizeTargetMutation(
+    target: "memory" | "user" | "failure",
+    storagePath: string,
+    result: MemoryResult,
+  ): Promise<MemoryResult> {
+    const state = await this.readFileState(storagePath);
+    this.setEntries(target, [...new Set(state.entries)]);
+    this.fileFingerprints[storagePath] = state.fingerprint;
+
+    let finalized = result;
+    if (result.success) {
+      finalized = {
+        ...result,
+        ...this.successResponse(target, result.message),
+      };
+      if (result.evicted_entries) finalized.evicted_entries = result.evicted_entries;
+      if (result.evicted_count !== undefined) finalized.evicted_count = result.evicted_count;
+      if (result.matches) finalized.matches = result.matches;
+      if (result.entries) finalized.entries = result.entries;
+    }
+
+    if (!this.mutationObserver) return finalized;
+
+    const warning = await this.mutationObserver(target, [...state.entries]);
+    if (!warning || !finalized.success) return finalized;
+
+    const warnings = [...(finalized.warnings ?? []), warning];
+    return {
+      ...finalized,
+      message: finalized.message ? `${finalized.message} Warning: ${warning}` : warning,
+      warning,
+      warnings,
+    };
+  }
+
   private async runTargetMutation(
     target: "memory" | "user" | "failure",
     mutation: () => Promise<MemoryResult>,
@@ -596,35 +636,32 @@ export class MemoryStore {
       for (let attempt = 0; ; attempt++) {
         try {
           const result = await mutation();
-          if (result.success && this.mutationObserver) {
-            const filePath = storagePath;
-            const state = await this.readFileState(filePath);
-            this.setEntries(target, [...new Set(state.entries)]);
-            this.fileFingerprints[filePath] = state.fingerprint;
-            const warning = await this.mutationObserver(target, [...state.entries]);
-            if (warning) {
-              const warnings = [...(result.warnings ?? []), warning];
-              return {
-                ...result,
-                message: result.message ? `${result.message} Warning: ${warning}` : warning,
-                warning,
-                warnings,
-              };
+          if (result.success) {
+            // saveToDisk stamps fileFingerprints on success. If an editor
+            // truncates/replaces the file after publish returns, refuse the
+            // phantom success and retry against disk truth.
+            const expectedFingerprint = this.fileFingerprints[storagePath];
+            if (expectedFingerprint !== undefined) {
+              const state = await this.readFileState(storagePath);
+              if (state.fingerprint !== expectedFingerprint) {
+                this.setEntries(target, [...new Set(state.entries)]);
+                this.fileFingerprints[storagePath] = state.fingerprint;
+                throw new ExternalMemoryWriteConflict();
+              }
             }
           }
-          return result;
+          return await this.finalizeTargetMutation(target, storagePath, result);
         } catch (error) {
-          const filePath = storagePath;
-          delete this.fileFingerprints[filePath];
-          const state = await this.readFileState(filePath);
+          delete this.fileFingerprints[storagePath];
+          const state = await this.readFileState(storagePath);
           this.setEntries(target, [...new Set(state.entries)]);
-          this.fileFingerprints[filePath] = state.fingerprint;
+          this.fileFingerprints[storagePath] = state.fingerprint;
           if (!(error instanceof ExternalMemoryWriteConflict)) throw error;
           if (attempt >= MAX_EXTERNAL_WRITE_RETRIES) {
-            return {
+            return await this.finalizeTargetMutation(target, storagePath, {
               success: false,
-              error: "Memory file changed repeatedly during this update. No external changes were overwritten.",
-            };
+              error: "Memory file changed repeatedly during this update. No external changes were overwritten. If you edited the file manually, re-run the memory tool or /memory-sync-markdown after the file is stable.",
+            });
           }
         }
       }
@@ -718,7 +755,18 @@ export class MemoryStore {
       }
 
       try { await this.unlinkPublishedTempLink(tmpPath); } catch { /* ignore */ }
-      this.fileFingerprints[filePath] = this.fingerprint(content);
+
+      // Re-read after publish. An external truncate/cp can land between the
+      // link/rename and returning success; treat that as a write conflict so
+      // the caller retries against disk truth instead of reporting phantom state.
+      const publishedFingerprint = this.fingerprint(content);
+      this.fileFingerprints[filePath] = publishedFingerprint;
+      const publishedState = await this.readFileState(filePath);
+      if (publishedState.fingerprint !== publishedFingerprint) {
+        this.setEntries(target, [...new Set(publishedState.entries)]);
+        this.fileFingerprints[filePath] = publishedState.fingerprint;
+        throw new ExternalMemoryWriteConflict();
+      }
     } catch (err) {
       try { await fs.unlink(tmpPath); } catch { /* ignore */ }
       throw err;

@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import Database from 'better-sqlite3';
-import { DatabaseManager, SQLITE_WAL_AUTOCHECKPOINT_PAGES } from '../../src/store/db.js';
+import { DatabaseManager, SQLITE_BUSY_TIMEOUT_MS, SQLITE_WAL_AUTOCHECKPOINT_PAGES } from '../../src/store/db.js';
 import { AtomicLockCoordinator } from '../../src/store/atomic-lock-coordinator.js';
 
 describe('DatabaseManager', () => {
@@ -89,6 +89,49 @@ describe('DatabaseManager', () => {
       const db1 = dbManager.getDb();
       const db2 = dbManager.getDb();
       assert.strictEqual(db1, db2);
+    });
+
+    it('waits for a concurrent writer instead of failing immediately', async () => {
+      const db = dbManager.getDb();
+      const child = spawn(process.execPath, [
+        '-e',
+        `const Database = require('better-sqlite3');
+         const db = new Database(process.argv[1]);
+         db.exec('BEGIN IMMEDIATE');
+         process.stdout.write('locked');
+         setTimeout(() => { db.exec('COMMIT'); db.close(); }, 100);`,
+        path.join(tmpDir, 'sessions.db'),
+      ], { stdio: ['ignore', 'pipe', 'inherit'] });
+
+      const childExit = new Promise<number | null>((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', (code) => resolve(code));
+      });
+      const childReady = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('child did not lock database in time')), 5000);
+        child.once('error', (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+        child.once('exit', (code) => {
+          clearTimeout(timer);
+          reject(new Error(`child exited before locking database (code ${code})`));
+        });
+        child.stdout?.once('data', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+
+      await childReady;
+      db.prepare(`
+        INSERT INTO extension_metadata (key, value)
+        VALUES ('concurrent-writer', 'waited')
+      `).run();
+      await childExit;
+
+      const timeout = db.prepare('PRAGMA busy_timeout').get() as { timeout: number };
+      assert.strictEqual(timeout.timeout, SQLITE_BUSY_TIMEOUT_MS);
     });
 
     it('should create parent directory if it does not exist', () => {
