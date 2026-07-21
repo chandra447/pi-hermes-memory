@@ -70,7 +70,7 @@ If memory conflicts with current evidence, prefer current evidence and mention t
 Procedural skills:
 - Use the skill_manage tool during normal work when a task reveals a reusable how-to workflow, or when the user asks you to remember how to do something later.
 - Always pass scope explicitly on create: scope="global" for portable procedures, scope="project" for workflows tied to this repo's paths, scripts, architecture, deploy steps, or conventions.
-- Prefer structured fields for create/update: when_to_use, procedure_steps, pitfalls, verification_steps. Use patch to improve a specific section of an existing skill, update for a full rewrite, and view to inspect existing skills before changing them.
+- Prefer structured fields for create/update/patch: when_to_use, procedure_steps, pitfalls, verification_steps. Use patch with the matching structured field for one section, update for a full rewrite, and view before changing an existing skill.
 - Do not create skills for one-off task state, generic summaries, or overly file-specific notes that will create noisy future matches.
 
 Do not use memory_search for generic questions, one-off examples, or explanations where durable memory would not help.
@@ -92,7 +92,7 @@ Memory write targets: user for preferences/profile; memory for global notes and 
 
 memory_search filters: target searches user/global/failure memories; project filters project-scoped memories; category filters categorized failure/lesson memories only.
 
-Use the skill_manage tool during normal work for reusable procedures. On create, scope is required: global for transferable workflows, project for repo-specific ones. Prefer structured fields for create/update, patch for focused changes, and update for full rewrites. Skip one-off or overly narrow skills.
+Use the skill_manage tool during normal work for reusable procedures. On create, scope is required: global for transferable workflows, project for repo-specific ones. Prefer structured fields for create/update/patch, patch for one section, and update for full rewrites. Skip one-off or overly narrow skills.
 
 Use category only for categorized failure/lesson searches. Do not use memory_search for generic questions, one-off examples, or explanations where durable memory would not help.
 
@@ -315,20 +315,21 @@ SCOPE:
 - 'global': transferable procedures that can be reused across repositories
 - 'project': procedures tied to this repo's paths, scripts, architecture, deploy flow, or conventions
 
-WHEN TO UPDATE A SKILL (use 'patch'):
-- You discover a better approach for an existing skill
-- A pitfall or edge case not covered by the skill
-- A step in the procedure changed
+WHEN TO UPDATE A SKILL:
+- Prefer 'patch' for one section when you can pass structured fields
+- Prefer 'update' for multi-section rewrites or when patch formatting would be unstable
+- Use patch when you discover a better approach, pitfall, or changed step in one section
 
 SKILL FORMAT:
 - name: short, descriptive (e.g., "debug-typescript-errors")
 - description: one-line summary of when to use it
 - body: structured with sections — ## When to Use, ## Procedure, ## Pitfalls, ## Verification
-- Prefer structured create/update fields over raw markdown when possible:
+- Prefer structured fields over raw markdown when possible:
   - when_to_use: trigger conditions and boundaries
   - procedure_steps: ordered concrete steps
   - pitfalls: caveats or failure modes
   - verification_steps: checks that prove success
+- For patch, pass section plus the matching structured field (section="Procedure" + procedure_steps, etc.). Do not pass JSON array/object strings as content.
 
 ONE-SHOT EXAMPLE:
 {
