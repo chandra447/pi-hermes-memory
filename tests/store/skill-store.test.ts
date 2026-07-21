@@ -351,6 +351,63 @@ describe("SkillStore", { concurrency: 1 }, () => {
       assert.ok(doc!.body.includes("Run the tests"));
       assert.strictEqual(doc!.version, 2);
     });
+
+    it("coerces JSON string arrays into ordered Procedure steps", async () => {
+      const store = await makeStore();
+      const created = await store.create("test", "desc", "## Procedure\n1. Old\n\n## Pitfalls\n- Keep me");
+
+      const result = await store.patch(
+        created.skillId!,
+        "Procedure",
+        JSON.stringify(["First step", "Second step"]),
+      );
+      assert.ok(result.success, `patch failed: ${result.error}`);
+
+      const doc = await store.loadSkill(created.skillId!);
+      assert.match(doc!.body, /## Procedure\n1\. First step\n2\. Second step/);
+      assert.match(doc!.body, /## Pitfalls\n- Keep me/);
+      assert.doesNotMatch(doc!.body, /\[\"First step\"/);
+    });
+
+    it("rejects JSON object patch payloads", async () => {
+      const store = await makeStore();
+      const created = await store.create("test", "desc", "## Procedure\n1. Keep");
+
+      const result = await store.patch(created.skillId!, "Procedure", '{"steps":["a"]}');
+      assert.equal(result.success, false);
+      assert.match(result.error ?? "", /JSON object/i);
+
+      const doc = await store.loadSkill(created.skillId!);
+      assert.match(doc!.body, /1\. Keep/);
+      assert.equal(doc!.version, 1);
+    });
+
+    it("rejects empty patch content", async () => {
+      const store = await makeStore();
+      const created = await store.create("test", "desc", "## Procedure\n1. Keep");
+
+      const result = await store.patch(created.skillId!, "Procedure", "   ");
+      assert.equal(result.success, false);
+      assert.match(result.error ?? "", /required for patch/i);
+      assert.equal((await store.loadSkill(created.skillId!))!.version, 1);
+    });
+
+    it("rejects patch content that injects section headers", async () => {
+      const store = await makeStore();
+      const created = await store.create("test", "desc", "## Procedure\n1. Keep\n\n## Pitfalls\n- Keep");
+
+      const result = await store.patch(
+        created.skillId!,
+        "Procedure",
+        "1. New\n\n## Pitfalls\n- Injected duplicate",
+      );
+      assert.equal(result.success, false);
+      assert.match(result.error ?? "", /section headers/i);
+
+      const doc = await store.loadSkill(created.skillId!);
+      assert.equal(doc!.version, 1);
+      assert.equal(doc!.body.match(/## Pitfalls/g)?.length, 1);
+    });
   });
 
   describe("edit()", () => {

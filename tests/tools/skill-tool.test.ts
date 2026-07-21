@@ -235,7 +235,7 @@ describe("registerSkillTool", () => {
     await cleanup();
   });
 
-  it("patch requires skill_id, section, content", async () => {
+  it("patch requires skill_id, section, and content or structured fields", async () => {
     let captured: any;
     const mockPi = {
       registerTool: (def: any) => { captured = def; },
@@ -252,6 +252,91 @@ describe("registerSkillTool", () => {
 
     result = await captured.execute("tc-1", { action: "patch", skill_id: "global:test", section: "Procedure" }, undefined, undefined, undefined);
     assert.strictEqual(JSON.parse(result.content[0].text).success, false);
+
+    await cleanup();
+  });
+
+  it("patch accepts structured procedure_steps for a section update", async () => {
+    let captured: any;
+    const mockPi = {
+      registerTool: (def: any) => { captured = def; },
+    } as any;
+
+    const store = await makeStore();
+    const created = await store.create(
+      "patch-me",
+      "desc",
+      "## Procedure\n1. Old way\n\n## Pitfalls\n- Keep me\n\n## Verification\n1. Still works",
+    );
+    registerSkillTool(mockPi, store);
+
+    const result = await captured.execute("tc-1", {
+      action: "patch",
+      skill_id: created.skillId,
+      section: "Procedure",
+      procedure_steps: ["Do the new first step", "Do the new second step"],
+    }, undefined, undefined, undefined);
+
+    const parsed = JSON.parse(result.content[0].text);
+    assert.strictEqual(parsed.success, true);
+
+    const doc = await store.loadSkill(created.skillId!);
+    assert.match(doc!.body, /## Procedure\n1\. Do the new first step\n2\. Do the new second step/);
+    assert.match(doc!.body, /## Pitfalls\n- Keep me/);
+    assert.match(doc!.body, /## Verification\n1\. Still works/);
+    assert.doesNotMatch(doc!.body, /Old way/);
+
+    await cleanup();
+  });
+
+  it("patch rejects JSON object content strings", async () => {
+    let captured: any;
+    const mockPi = {
+      registerTool: (def: any) => { captured = def; },
+    } as any;
+
+    const store = await makeStore();
+    const created = await store.create("patch-me", "desc", "## Procedure\n1. Keep");
+    registerSkillTool(mockPi, store);
+
+    const result = await captured.execute("tc-1", {
+      action: "patch",
+      skill_id: created.skillId,
+      section: "Procedure",
+      content: '{"steps":["bad"]}',
+    }, undefined, undefined, undefined);
+
+    const parsed = JSON.parse(result.content[0].text);
+    assert.strictEqual(parsed.success, false);
+    assert.match(parsed.error, /JSON object/i);
+    assert.equal((await store.loadSkill(created.skillId!))!.version, 1);
+
+    await cleanup();
+  });
+
+  it("patch coerces JSON array content strings into Markdown lists", async () => {
+    let captured: any;
+    const mockPi = {
+      registerTool: (def: any) => { captured = def; },
+    } as any;
+
+    const store = await makeStore();
+    const created = await store.create("patch-me", "desc", "## Pitfalls\n- old");
+    registerSkillTool(mockPi, store);
+
+    const result = await captured.execute("tc-1", {
+      action: "patch",
+      skill_id: created.skillId,
+      section: "Pitfalls",
+      content: '["Do not skip verification", "Do not wipe other sections"]',
+    }, undefined, undefined, undefined);
+
+    const parsed = JSON.parse(result.content[0].text);
+    assert.strictEqual(parsed.success, true);
+
+    const doc = await store.loadSkill(created.skillId!);
+    assert.match(doc!.body, /## Pitfalls\n- Do not skip verification\n- Do not wipe other sections/);
+    assert.doesNotMatch(doc!.body, /\[\"Do not skip verification\"/);
 
     await cleanup();
   });

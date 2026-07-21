@@ -46,6 +46,111 @@ export interface LegacySkillMigrationResult {
   warnings: string[];
 }
 
+const LIST_SECTIONS = new Set(["procedure", "pitfalls", "verification"]);
+
+function normalizeSectionName(section: string): string {
+  return section.replace(/^#+\s*/, "").trim();
+}
+
+function isExactSectionHeader(line: string, section: string): boolean {
+  const heading = line.trim().match(/^##\s+(.+?)\s*$/);
+  if (!heading) return false;
+  return heading[1].trim().toLowerCase() === section.trim().toLowerCase();
+}
+
+function looksLikeJsonArray(content: string): boolean {
+  const trimmed = content.trim();
+  return trimmed.startsWith("[") && trimmed.endsWith("]");
+}
+
+function looksLikeJsonObject(content: string): boolean {
+  const trimmed = content.trim();
+  return trimmed.startsWith("{") && trimmed.endsWith("}");
+}
+
+function formatPatchList(section: string, items: string[]): string {
+  const cleaned = items.map((item) => item.trim()).filter(Boolean);
+  if (cleaned.length === 0) return "";
+  const key = section.trim().toLowerCase();
+  if (key === "pitfalls") {
+    return cleaned.map((item) => `- ${item.replace(/^[-*]\s+/, "")}`).join("\n");
+  }
+  // Procedure / Verification default to ordered steps.
+  return cleaned
+    .map((item, index) => `${index + 1}. ${item.replace(/^\d+\.\s+/, "").replace(/^[-*]\s+/, "")}`)
+    .join("\n");
+}
+
+/**
+ * Normalize/validate free-form patch content so LLM format drift cannot wipe
+ * or splice skill sections. Coerces JSON string arrays into Markdown lists for
+ * list-shaped sections and rejects empty / object / header-injecting payloads.
+ */
+export function normalizeSkillPatchContent(
+  section: string,
+  rawContent: string,
+): { content: string } | { error: string } {
+  const sectionName = normalizeSectionName(section);
+  if (!sectionName) {
+    return { error: "section is required for patch." };
+  }
+
+  let content = typeof rawContent === "string" ? rawContent.trim() : "";
+  if (!content) {
+    return {
+      error: "New content is required for patch. Prefer structured fields (procedure_steps, pitfalls, verification_steps, when_to_use) over free-form content.",
+    };
+  }
+
+  if (looksLikeJsonObject(content)) {
+    return {
+      error: "Patch content looks like a JSON object. Provide Markdown section body or a string array via structured fields.",
+    };
+  }
+
+  if (looksLikeJsonArray(content)) {
+    try {
+      const parsed: unknown = JSON.parse(content);
+      if (!Array.isArray(parsed)) {
+        return { error: "Patch content looks like JSON but is not a string array." };
+      }
+      const items = parsed
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (items.length === 0) {
+        return { error: "Patch content JSON array must contain non-empty strings." };
+      }
+      const key = sectionName.toLowerCase();
+      if (key === "when to use") {
+        content = items.join("\n\n");
+      } else if (LIST_SECTIONS.has(key)) {
+        content = formatPatchList(sectionName, items);
+      } else {
+        content = items.map((item) => `- ${item}`).join("\n");
+      }
+    } catch {
+      return {
+        error: "Patch content looks like a JSON array but could not be parsed. Use Markdown or structured string[] fields.",
+      };
+    }
+  }
+
+  // Reject payloads that would inject extra ## sections mid-body.
+  if (/^#{1,6}\s+\S/m.test(content)) {
+    return {
+      error: "Patch content must not include Markdown section headers (## ...). Patch only the body of the target section.",
+    };
+  }
+
+  if (!content.trim()) {
+    return { error: "New content is required for patch." };
+  }
+
+  return { content: content.trim() };
+}
+
+
 export class SkillStore {
   private globalSkillsDir: string;
   private projectSkillsDir: string | null;
@@ -352,34 +457,47 @@ export class SkillStore {
   }
 
   async patch(skillId: string, section: string, newContent: string): Promise<SkillResult> {
-    newContent = newContent.trim();
-    if (!newContent) return { success: false, error: "New content is required for patch." };
+    const sectionName = normalizeSectionName(section);
+    if (!sectionName) return { success: false, error: "section is required for patch." };
 
-    const scanError = scanContent(newContent);
+    const normalized = normalizeSkillPatchContent(sectionName, newContent);
+    if ("error" in normalized) return { success: false, error: normalized.error };
+    const content = normalized.content;
+
+    const scanError = scanContent(content);
     if (scanError) return { success: false, error: scanError };
 
     const doc = await this.loadSkill(skillId);
     if (!doc) return { success: false, error: `Skill '${skillId}' not found.` };
 
-    const sectionHeader = `## ${section}`;
+    const sectionHeader = `## ${sectionName}`;
     const lines = doc.body.split("\n");
     let found = false;
     const result: string[] = [];
 
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].startsWith(sectionHeader)) {
+      if (isExactSectionHeader(lines[i], sectionName)) {
         result.push(sectionHeader);
-        result.push(newContent);
+        // Preserve multi-line body as discrete lines so later headers stay exact.
+        for (const bodyLine of content.split("\n")) {
+          result.push(bodyLine);
+        }
         found = true;
         i++;
-        while (i < lines.length && !lines[i].startsWith("## ")) i++;
+        while (i < lines.length && !lines[i].trim().startsWith("## ")) i++;
         if (i < lines.length) result.push(lines[i]);
       } else {
         result.push(lines[i]);
       }
     }
 
-    if (!found) result.push("", sectionHeader, newContent);
+    if (!found) {
+      if (result.length > 0 && result[result.length - 1] !== "") result.push("");
+      result.push(sectionHeader);
+      for (const bodyLine of content.split("\n")) {
+        result.push(bodyLine);
+      }
+    }
 
     await this.atomicWrite(doc.path, formatFrontmatter({
       name: doc.name,
@@ -393,7 +511,7 @@ export class SkillStore {
 
     return {
       success: true,
-      message: `Skill '${doc.displayName || doc.name}' section '${section}' updated.`,
+      message: `Skill '${doc.displayName || doc.name}' section '${sectionName}' updated.`,
       fileName: doc.fileName,
       skillId: doc.skillId,
       scope: doc.scope,
