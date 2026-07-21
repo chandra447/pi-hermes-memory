@@ -305,11 +305,17 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.loadFromDisk();
 
       const entry = `${TEST_MARKER} section divider${ENTRY_DELIMITER}continued`;
-      const result = await await store.add("memory", entry);
+      const result = await store.add("memory", entry);
       await settle();
 
+      // Embedded delimiters are not escaped. After the write is published we
+      // re-read disk as source of truth, so the single logical add surfaces as
+      // two entries (and usage/entry_count match the split file).
       assert.ok(result.success);
-      assert.equal(result.entry_count, 1);
+      assert.equal(result.entry_count, 2);
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /section divider/);
+      assert.match(raw, /continued/);
     });
 
     it("handles unicode content", async () => {
@@ -1555,6 +1561,128 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.equal(outcome, "completed");
       assert.equal(userResult.success, true);
       assert.match(await readRaw(userPath), /independent user writer/);
+    });
+
+    it("reloads truncated disk before add and reports disk-backed usage", async () => {
+      const store = new MemoryStore(makeConfig({ memoryCharLimit: 5000 }));
+      await store.loadFromDisk();
+      for (let i = 0; i < 5; i++) {
+        await store.add("memory", `${TEST_MARKER} seed-${i}-${"x".repeat(40)}`);
+      }
+      assert.ok((await fs.stat(memoryPath)).size > 0);
+
+      await writeRaw(memoryPath, "");
+      const result = await store.add("memory", `${TEST_MARKER} after-truncate`);
+
+      assert.equal(result.success, true);
+      assert.equal(result.entry_count, 1);
+      assert.match(result.usage ?? "", /^1% — \d+\/5000 chars$/);
+      assert.equal(await readRaw(memoryPath), `${TEST_MARKER} after-truncate <!-- created=${new Date().toISOString().split("T")[0]}, last=${new Date().toISOString().split("T")[0]} -->`);
+    });
+
+    it("retries when an external truncate lands immediately after publish", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} existing`);
+
+      const originalSave = (store as any).saveToDisk.bind(store);
+      let injected = false;
+      (store as any).saveToDisk = async (target: "memory") => {
+        await originalSave(target);
+        if (!injected) {
+          injected = true;
+          await writeRaw(memoryPath, "");
+        }
+      };
+
+      const observed: number[] = [];
+      store.setMutationObserver(async (_target, entries) => {
+        observed.push(entries.length);
+        return null;
+      });
+
+      const result = await store.add("memory", `${TEST_MARKER} post-race`);
+
+      assert.equal(result.success, true);
+      assert.equal(injected, true);
+      assert.equal(result.entry_count, 1);
+      assert.match(await readRaw(memoryPath), /post-race/);
+      assert.doesNotMatch(await readRaw(memoryPath), /existing/);
+      assert.deepEqual(observed.at(-1), 1);
+    });
+
+    it("reconciles the mutation observer from disk even when add fails", async () => {
+      const store = new MemoryStore(makeConfig({ memoryCharLimit: 300, autoConsolidate: false }));
+      await store.loadFromDisk();
+      for (let i = 0; i < 20; i++) {
+        const fill = await store.add("memory", `${TEST_MARKER} fill-${i}-${"x".repeat(50)}`);
+        if (!fill.success) break;
+      }
+      assert.ok((store as any).memoryEntries.length >= 2, "expected the store to be near capacity");
+
+      const staleEntries = [...(store as any).memoryEntries];
+      await writeRaw(memoryPath, "");
+
+      const originalSync = (store as any).syncTargetFromDiskIfChanged.bind(store);
+      let restaleOnce = true;
+      (store as any).syncTargetFromDiskIfChanged = async (target: "memory") => {
+        await originalSync(target);
+        if (restaleOnce) {
+          restaleOnce = false;
+          (store as any).setEntries("memory", staleEntries);
+        }
+      };
+
+      const observed: number[] = [];
+      store.setMutationObserver(async (_target, entries) => {
+        observed.push(entries.length);
+        return null;
+      });
+
+      const result = await store.add("memory", `${TEST_MARKER} nope`);
+
+      assert.equal(result.success, false);
+      assert.match(result.error ?? "", /would exceed the limit/);
+      assert.equal(await readRaw(memoryPath), "");
+      assert.deepEqual((store as any).memoryEntries, []);
+      assert.deepEqual(observed, [0]);
+    });
+
+    it("reconciles observer after exhausted external-write retries", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} existing`);
+
+      const originalRead = (store as any).readFileState.bind(store);
+      const canonicalMemoryPath = await fs.realpath(memoryPath);
+      let lieCounter = 0;
+      (store as any).readFileState = async (filePath: string) => {
+        const state = await originalRead(filePath);
+        // Rotate MEMORY.md fingerprint on every read so saveToDisk always
+        // mismatches the fingerprint stamped by the previous sync/retry.
+        if (filePath === canonicalMemoryPath) {
+          lieCounter += 1;
+          return { ...state, fingerprint: `mismatch-${lieCounter}-${state.fingerprint}` };
+        }
+        return state;
+      };
+
+      const observed: string[][] = [];
+      store.setMutationObserver(async (_target, entries) => {
+        observed.push([...entries]);
+        return null;
+      });
+
+      const result = await store.add("memory", `${TEST_MARKER} local add`);
+
+      assert.equal(result.success, false);
+      assert.match(result.error ?? "", /changed repeatedly/);
+      assert.match(result.error ?? "", /memory-sync-markdown/);
+      assert.ok(observed.length >= 1);
+      // Finalize reads through the spy; use the unspy path for disk truth.
+      const diskEntries = (await originalRead(canonicalMemoryPath)).entries;
+      assert.deepEqual(observed[observed.length - 1], diskEntries);
+      assert.deepEqual((store as any).memoryEntries, diskEntries);
     });
 
   });

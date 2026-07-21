@@ -69,6 +69,7 @@ class DatabaseCorruptionError extends Error {
   }
 }
 
+export const SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
 
 const DATABASE_FILE_SUFFIXES: readonly DatabaseFileSuffix[] = ['', '-wal', '-shm'];
@@ -294,6 +295,9 @@ export class DatabaseManager {
   }
 
   private configureConnection(db: DatabaseLike): void {
+    // Wait briefly for concurrent writers across Pi processes instead of failing
+    // immediately with SQLITE_BUSY. Connection-local; applies before WAL/schema.
+    db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     // Enable WAL mode + FK enforcement for each connection. Keep SQLite's
     // default WAL autocheckpoint size; a very aggressive checkpoint cadence
     // increases the chance that abrupt VM/host shutdown catches a checkpoint.
