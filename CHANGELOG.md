@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-07-21
+
+### Fixed
+
+- **Silent memory data loss after external `MEMORY.md` edits** ([#112](https://github.com/chandra447/pi-hermes-memory/issues/112), [#113](https://github.com/chandra447/pi-hermes-memory/pull/113)): manual truncate/`cp` races could return `success: true` with stale usage while the live Markdown file was empty and the SQLite search mirror was wiped. Mutations now treat disk as source of truth, refresh usage/entry counts from disk, retry post-publish fingerprint mismatches, and always reconcile SQLite via the existing mutation observer (including failed writes). Exhausted external-write conflicts point at `/memory-sync-markdown`.
+- **Immediate `database is locked` under concurrent Pi writers** ([#110](https://github.com/chandra447/pi-hermes-memory/pull/110), [#113](https://github.com/chandra447/pi-hermes-memory/pull/113)): `DatabaseManager` now sets `PRAGMA busy_timeout = 5000` so short overlapping writers serialize instead of failing immediately.
+- **Homebrew Pi `better-sqlite3` ABI mismatch** ([#111](https://github.com/chandra447/pi-hermes-memory/issues/111), [#114](https://github.com/chandra447/pi-hermes-memory/pull/114)): when the native addon was compiled for a different Node ABI than the runtime hosting Pi, load failures are detected, one automatic `npm rebuild better-sqlite3` is attempted against the current Node, and remaining failures return a clear recovery path (including brew/npm guidance).
+- **`skill_manage` patch content format corruption** ([#107](https://github.com/chandra447/pi-hermes-memory/issues/107), [#115](https://github.com/chandra447/pi-hermes-memory/pull/115)): free-form LLM patch payloads (JSON arrays/objects, empty bodies, injected `##` headers) could wipe or splice skill sections. Patch now accepts structured section fields (`procedure_steps` / `pitfalls` / `verification_steps` / `when_to_use`), coerces JSON string arrays into Markdown lists, and rejects unsafe payloads. Prompts steer structured patch and prefer `update` for multi-section rewrites.
+
 ## [0.8.1] - 2026-07-14
 
 ### Fixed
