@@ -2,9 +2,12 @@ import { DatabaseManager } from './db.js';
 import {
   buildFallbackFts5Query,
   buildNaturalLanguageFallbackQuery,
+  collectNaturalLanguageSearchTerms,
+  collectSignificantSearchTerms,
   isFts5QueryError,
   normalizeFts5Query,
   normalizeNaturalLanguageFts5Query,
+  passesTermHitFilter,
 } from './fts-query.js';
 import { normalizeMemoryLookupText } from './memory-lookup.js';
 import type { MemoryCategory } from '../types.js';
@@ -681,6 +684,10 @@ export function removeExactSyncedMemories(
 
 /**
  * Search memories using FTS5.
+ *
+ * Ranking: BM25 (lower is better) primary, last_referenced secondary.
+ * OR fallback is tightened: only significant terms, and post-filtered by
+ * term-hit ratio so a single common word cannot surface unrelated long memories.
  */
 export function searchMemories(
   dbManager: DatabaseManager,
@@ -694,22 +701,22 @@ export function searchMemories(
   const db = dbManager.getDb();
   const { project, target, category, limit = 10 } = options;
 
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-
-  // FTS5 match via subquery with escaped query
+  // FTS5 match via JOIN with BM25 ranking
   const normalizedQuery = normalizeFts5Query(query);
-  if (normalizedQuery.length === 0) {
-    return [];
-  }
 
+  const significantTerms = collectSignificantSearchTerms(query);
   let ftsParseError = false;
 
-  const runSearch = (matchQuery: string): SqliteMemoryEntry[] => {
+  const runSearch = (
+    matchQuery: string,
+    searchOpts: { filterTerms?: string[]; fetchMultiplier?: number } = {}
+  ): SqliteMemoryEntry[] => {
     const conditions: string[] = [];
     const params: unknown[] = [];
+    const filterTerms = searchOpts.filterTerms ?? [];
+    const fetchMultiplier = searchOpts.fetchMultiplier ?? 1;
 
-    conditions.push('m.id IN (SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?)');
+    conditions.push('memory_fts MATCH ?');
     params.push(matchQuery);
 
     if (project !== undefined) {
@@ -732,17 +739,31 @@ export function searchMemories(
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    // Over-fetch when we will post-filter OR hits by term coverage.
+    const fetchLimit = Math.min(Math.max(limit * fetchMultiplier, limit), 100);
 
     const sql = `
-      SELECT ${MEMORY_SELECT_COLUMNS}
+      SELECT
+        m.id,
+        m.project,
+        m.target,
+        m.category,
+        m.content,
+        m.failure_reason,
+        m.tool_state,
+        m.corrected_to,
+        m.created,
+        m.last_referenced,
+        bm25(memory_fts) AS rank_score
       FROM memories m
+      JOIN memory_fts ON memory_fts.rowid = m.id
       ${whereClause}
-      ORDER BY m.last_referenced DESC
+      ORDER BY rank_score ASC, m.last_referenced DESC
       LIMIT ?
     `;
 
     try {
-      const rows = db.prepare(sql).all(...params, limit) as Array<{
+      const rows = db.prepare(sql).all(...params, fetchLimit) as Array<{
         id: number;
         project: string | null;
         target: string;
@@ -753,9 +774,14 @@ export function searchMemories(
         corrected_to: string | null;
         created: string;
         last_referenced: string;
+        rank_score: number;
       }>;
 
-      return rows.map(mapRow);
+      let mapped = rows.map(mapRow);
+      if (filterTerms.length > 0) {
+        mapped = mapped.filter((entry) => passesTermHitFilter(entry.content, filterTerms));
+      }
+      return mapped.slice(0, limit);
     } catch (err) {
       if (isFts5QueryError(err)) {
         ftsParseError = true;
@@ -765,29 +791,118 @@ export function searchMemories(
     }
   };
 
-  const exactResults = runSearch(normalizedQuery);
-  if (exactResults.length > 0) {
-    return exactResults;
-  }
+  // Substring safety net for terms FTS cannot tokenize — CJK runs under
+  // unicode61 ("名字" never MATCHes inside "用户的名字是鸣人") — with the same
+  // term-coverage post-filter as the OR fallback so single casual mentions
+  // don't slip back in. Recency-ordered; only reached when every FTS attempt
+  // came up empty.
+  const runLikeSearch = (terms: string[]): SqliteMemoryEntry[] => {
+    if (terms.length === 0) {
+      return [];
+    }
+    const conditions: string[] = [];
+    const params: unknown[] = [];
 
-  // A query with uppercase operator words (e.g. "DO NOT USE FIND /") passes
-  // through as raw FTS5 syntax; when that fails to parse, retry it as natural
-  // language instead of silently returning nothing. Valid operator queries
-  // that legitimately match nothing keep their exact semantics.
-  if (ftsParseError) {
+    const likeConditions = terms.map(() => `m.content LIKE ? ESCAPE '\\'`);
+    conditions.push(`(${likeConditions.join(' OR ')})`);
+    for (const term of terms) {
+      params.push(`%${term.replace(/[\\%_]/g, '\\$&')}%`);
+    }
+
+    if (project !== undefined) {
+      if (project === null) {
+        conditions.push('m.project IS NULL');
+      } else {
+        conditions.push('m.project = ?');
+        params.push(project);
+      }
+    }
+    if (target) {
+      conditions.push('m.target = ?');
+      params.push(target);
+    }
+    if (category) {
+      conditions.push('m.category = ?');
+      params.push(category);
+    }
+
+    const sql = `
+      SELECT
+        m.id,
+        m.project,
+        m.target,
+        m.category,
+        m.content,
+        m.failure_reason,
+        m.tool_state,
+        m.corrected_to,
+        m.created,
+        m.last_referenced
+      FROM memories m
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY m.last_referenced DESC
+      LIMIT ?
+    `;
+
+    const rows = db.prepare(sql).all(...params, Math.min(limit * 4, 100)) as Array<{
+      id: number;
+      project: string | null;
+      target: string;
+      category: string | null;
+      content: string;
+      failure_reason: string | null;
+      tool_state: string | null;
+      corrected_to: string | null;
+      created: string;
+      last_referenced: string;
+    }>;
+
+    return rows
+      .map(mapRow)
+      .filter((entry) => passesTermHitFilter(entry.content, terms))
+      .slice(0, limit);
+  };
+
+  // Natural-language recovery, shared by two degraded cases:
+  // - the raw operator query failed to parse (e.g. "DO NOT USE FIND /"), or
+  // - the stopword list ate every term (normalizedQuery is empty), where
+  //   returning nothing would make a memory unreachable by its own words.
+  // AND over the recovered terms first; then the OR fallback with the same
+  // BM25 ordering and term-coverage post-filter as the regular fallback path,
+  // so ranking does not depend on how the query was spelled; LIKE last.
+  const runNaturalLanguageRecovery = (): SqliteMemoryEntry[] => {
     const nlQuery = normalizeNaturalLanguageFts5Query(query);
     if (nlQuery.length === 0 || nlQuery === normalizedQuery) {
       return [];
     }
+    const nlTerms = collectNaturalLanguageSearchTerms(query);
     const nlResults = runSearch(nlQuery);
     if (nlResults.length > 0) {
       return nlResults;
     }
     const nlFallback = buildNaturalLanguageFallbackQuery(query);
     if (nlFallback && nlFallback !== nlQuery) {
-      return runSearch(nlFallback);
+      const orResults = runSearch(nlFallback, { filterTerms: nlTerms, fetchMultiplier: 4 });
+      if (orResults.length > 0) {
+        return orResults;
+      }
     }
-    return nlResults;
+    return runLikeSearch(nlTerms);
+  };
+
+  if (normalizedQuery.length === 0) {
+    return runNaturalLanguageRecovery();
+  }
+
+  const exactResults = runSearch(normalizedQuery);
+  if (exactResults.length > 0) {
+    return exactResults;
+  }
+
+  // Valid operator queries that legitimately match nothing keep their exact
+  // semantics; recovery only triggers on a parse error.
+  if (ftsParseError) {
+    return runNaturalLanguageRecovery();
   }
 
   const fallbackQuery = buildFallbackFts5Query(query);
@@ -795,7 +910,12 @@ export function searchMemories(
     return exactResults;
   }
 
-  return runSearch(fallbackQuery);
+  const fallbackResults = runSearch(fallbackQuery, { filterTerms: significantTerms, fetchMultiplier: 4 });
+  if (fallbackResults.length > 0) {
+    return fallbackResults;
+  }
+
+  return runLikeSearch(significantTerms);
 }
 
 /**

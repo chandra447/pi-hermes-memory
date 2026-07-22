@@ -430,6 +430,62 @@ describe('sqlite-memory-store', () => {
       const results = searchMemories(dbManager, 'AND OR NOT');
       assert.strictEqual(results.length, 0);
     });
+
+    it('should keep all-stopword queries reachable for memories genuinely about those terms', () => {
+      // "memory", "search", "related", "context" are all stopwords, but a
+      // memory legitimately about memory search must stay findable by its own
+      // words: recovery requires coverage of enough query terms, not just one.
+      const results = searchMemories(dbManager, 'memory search related context');
+      assert.ok(results.length > 0);
+      assert.ok(results.some((r) => r.content.includes('memory search')));
+    });
+
+    it('should not return single casual mentions for all-stopword queries', () => {
+      addMemory(dbManager, 'WebVPN download steps for aTrust client, long note that casually mentions memory once');
+
+      const results = searchMemories(dbManager, 'memory search related context');
+      assert.ok(results.every((r) => !r.content.includes('WebVPN')));
+    });
+
+    it('should resolve CJK queries via the substring safety net under unicode61', () => {
+      // unicode61 tokenizes a CJK run as one token, so "名字" can never FTS-MATCH
+      // inside "用户的名字是鸣人"; the LIKE net with term-coverage filter catches it.
+      addMemory(dbManager, '用户的名字是鸣人', 'user');
+
+      const results = searchMemories(dbManager, '名字 鸣人', { target: 'user' });
+      assert.ok(results.length > 0);
+      assert.ok(results.some((r) => r.content.includes('鸣人')));
+    });
+
+    it('should let an old dense match outrank a fresh diluted match (BM25 before recency)', () => {
+      addMemory(dbManager, 'vitest watch config for the monorepo test runner');
+      addMemory(dbManager, 'vitest appears once here: long deployment note about docker compose, kubernetes manifests, s3 buckets, watch out for config drift in staging and many more unrelated words');
+      dbManager.getDb().prepare(
+        "UPDATE memories SET last_referenced = '2025-01-01T00:00:00Z' WHERE content LIKE 'vitest watch config%'"
+      ).run();
+
+      const results = searchMemories(dbManager, 'vitest watch config');
+      assert.ok(results.length >= 2);
+      assert.ok(results[0].content.startsWith('vitest watch config'));
+    });
+
+    it('should rank denser BM25 matches above merely recent long notes', () => {
+      addMemory(dbManager, 'long note casually mentions memory tooling and unrelated deployment');
+      addMemory(dbManager, 'pnpm workspace monorepo install script');
+
+      const results = searchMemories(dbManager, 'pnpm workspace');
+      assert.ok(results.length > 0);
+      assert.ok(results[0].content.includes('pnpm'));
+    });
+
+    it('should require multiple significant terms when using OR fallback', () => {
+      addMemory(dbManager, 'user prefers dark mode UI theme');
+      addMemory(dbManager, 'Naruto likes ramen');
+
+      const results = searchMemories(dbManager, 'name identity Naruto', { target: 'user' });
+      assert.ok(results.every((r) => r.content.includes('Naruto') || r.content.includes('name')));
+      assert.ok(!results.some((r) => r.content.includes('dark mode')));
+    });
   });
 
   describe('getMemories', () => {
