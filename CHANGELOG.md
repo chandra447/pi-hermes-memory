@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`memory_search` noise from OR fallback + recency ranking**: natural-language agent queries such as "memory search related context" previously expanded to OR of stopwords and returned long unrelated notes ordered by `last_referenced`. Search now ranks by FTS5 BM25 (then recency), drops EN/ZH stopwords, requires significant-term coverage on OR fallback, and returns empty for all-stopword NL instead of matching casual "memory" mentions. `session_search` LIKE fallback uses the same significant-term filter while still supporting escaped punctuation substrings (e.g. `%`).
+
 ## [0.8.2] - 2026-07-21
 
 ### Fixed
@@ -186,6 +192,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 **Procedural Skills (`skill` tool)**
+
 - New `skill` tool with actions: `create`, `view`, `patch`, `edit`, `delete`
 - Skills stored as SKILL.md files in `~/.pi/agent/memory/skills/`
 - Progressive disclosure — skill index (name + description only) injected into system prompt, full content loaded on demand via `skill view`
@@ -195,6 +202,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `/memory-skills` command to list all agent-created skills
 
 **Auto-Consolidation**
+
 - When `add()` would exceed the character limit, automatically trigger consolidation instead of returning an error
 - Consolidation spawns a one-shot `pi.exec()` process that merges related entries and removes outdated ones
 - Parent process reloads from disk after consolidation to stay in sync with changes
@@ -202,6 +210,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable via `autoConsolidate` setting (default: `true`)
 
 **Correction Detection**
+
 - Detect user corrections in real-time and trigger immediate memory save
 - Two-pass pattern filter:
   - **Strong patterns** (always trigger): "don't do that", "I said...", "please don't...", "that's not what I..."
@@ -211,12 +220,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable via `correctionDetection` setting (default: `true`)
 
 **Tool-Call-Aware Nudge**
+
 - Background review now triggers based on tool call count OR turn count, whichever comes first
 - Counts `toolCall` blocks from the session branch at `turn_end` time
 - Default: triggers at 15 tool calls (configurable via `nudgeToolCalls`)
 - Both turn and tool-call counters reset after each review
 
 **Updated Background Review Prompt**
+
 - `COMBINED_REVIEW_PROMPT` now explicitly references the `skill` tool
 - Tells the agent to use `create` for new skills and `patch` for updating existing ones
 - Single review pass can save both memories and skills
@@ -232,7 +243,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 New settings in `~/.pi/agent/hermes-memory-config.json`:
 
 | Setting | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `autoConsolidate` | `true` | Auto-merge when memory hits capacity |
 | `correctionDetection` | `true` | Detect user corrections and save immediately |
 | `nudgeToolCalls` | `15` | Tool calls before background review triggers |
@@ -245,6 +256,7 @@ New settings in `~/.pi/agent/hermes-memory-config.json`:
 ### Files Changed
 
 **New files (7 source + 6 test):**
+
 - `src/store/skill-store.ts` — SkillStore class with CRUD, frontmatter parsing, progressive disclosure
 - `src/tools/skill-tool.ts` — `skill` LLM tool registration and execute
 - `src/handlers/auto-consolidate.ts` — Consolidation trigger and `/memory-consolidate` command
@@ -258,6 +270,7 @@ New settings in `~/.pi/agent/hermes-memory-config.json`:
 - `tests/tools/skill-tool.test.ts`
 
 **Modified files (8):**
+
 - `src/index.ts` — Wire all new handlers, tools, commands, and system prompt injection
 - `src/types.ts` — New interfaces (`ConsolidationResult`, `SkillIndex`, `SkillDocument`, `SkillResult`) + config fields
 - `src/constants.ts` — New prompts (`CONSOLIDATION_PROMPT`, `CORRECTION_SAVE_PROMPT`, `SKILL_TOOL_DESCRIPTION`), correction patterns, updated `COMBINED_REVIEW_PROMPT`
