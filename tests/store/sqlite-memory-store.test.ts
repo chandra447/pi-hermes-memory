@@ -421,6 +421,29 @@ describe('sqlite-memory-store', () => {
       const results = searchMemories(dbManager, 'AND OR NOT');
       assert.strictEqual(results.length, 0);
     });
+
+    it('should ignore all-stopword natural-language queries', () => {
+      const results = searchMemories(dbManager, 'memory search related context');
+      assert.strictEqual(results.length, 0);
+    });
+
+    it('should rank denser BM25 matches above merely recent long notes', () => {
+      addMemory(dbManager, 'long note casually mentions memory tooling and unrelated deployment');
+      addMemory(dbManager, 'pnpm workspace monorepo install script');
+
+      const results = searchMemories(dbManager, 'pnpm workspace');
+      assert.ok(results.length > 0);
+      assert.ok(results[0].content.includes('pnpm'));
+    });
+
+    it('should require multiple significant terms when using OR fallback', () => {
+      addMemory(dbManager, 'user prefers dark mode UI theme');
+      addMemory(dbManager, 'Naruto likes ramen');
+
+      const results = searchMemories(dbManager, 'name identity Naruto', { target: 'user' });
+      assert.ok(results.every((r) => r.content.includes('Naruto') || r.content.includes('name')));
+      assert.ok(!results.some((r) => r.content.includes('dark mode')));
+    });
   });
 
   describe('getMemories', () => {

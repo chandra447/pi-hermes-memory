@@ -1,5 +1,11 @@
 import { DatabaseManager } from './db.js';
-import { buildFallbackFts5Query, isFts5QueryError, normalizeFts5Query } from './fts-query.js';
+import {
+  buildFallbackFts5Query,
+  collectSignificantSearchTerms,
+  isFts5QueryError,
+  normalizeFts5Query,
+  passesTermHitFilter,
+} from './fts-query.js';
 import { normalizeMemoryLookupText } from './memory-lookup.js';
 import type { MemoryCategory } from '../types.js';
 
@@ -675,6 +681,10 @@ export function removeExactSyncedMemories(
 
 /**
  * Search memories using FTS5.
+ *
+ * Ranking: BM25 (lower is better) primary, last_referenced secondary.
+ * OR fallback is tightened: only significant terms, and post-filtered by
+ * term-hit ratio so a single common word cannot surface unrelated long memories.
  */
 export function searchMemories(
   dbManager: DatabaseManager,
@@ -688,20 +698,24 @@ export function searchMemories(
   const db = dbManager.getDb();
   const { project, target, category, limit = 10 } = options;
 
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-
-  // FTS5 match via subquery with escaped query
+  // FTS5 match via JOIN with BM25 ranking
   const normalizedQuery = normalizeFts5Query(query);
   if (normalizedQuery.length === 0) {
     return [];
   }
 
-  const runSearch = (matchQuery: string): SqliteMemoryEntry[] => {
+  const significantTerms = collectSignificantSearchTerms(query);
+
+  const runSearch = (
+    matchQuery: string,
+    searchOpts: { requireTermHitFilter?: boolean; fetchMultiplier?: number } = {}
+  ): SqliteMemoryEntry[] => {
     const conditions: string[] = [];
     const params: unknown[] = [];
+    const requireTermHitFilter = searchOpts.requireTermHitFilter ?? false;
+    const fetchMultiplier = searchOpts.fetchMultiplier ?? 1;
 
-    conditions.push('m.id IN (SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?)');
+    conditions.push('memory_fts MATCH ?');
     params.push(matchQuery);
 
     if (project !== undefined) {
@@ -724,17 +738,31 @@ export function searchMemories(
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    // Over-fetch when we will post-filter OR hits by term coverage.
+    const fetchLimit = Math.min(Math.max(limit * fetchMultiplier, limit), 100);
 
     const sql = `
-      SELECT ${MEMORY_SELECT_COLUMNS}
+      SELECT
+        m.id,
+        m.project,
+        m.target,
+        m.category,
+        m.content,
+        m.failure_reason,
+        m.tool_state,
+        m.corrected_to,
+        m.created,
+        m.last_referenced,
+        bm25(memory_fts) AS rank_score
       FROM memories m
+      JOIN memory_fts ON memory_fts.rowid = m.id
       ${whereClause}
-      ORDER BY m.last_referenced DESC
+      ORDER BY rank_score ASC, m.last_referenced DESC
       LIMIT ?
     `;
 
     try {
-      const rows = db.prepare(sql).all(...params, limit) as Array<{
+      const rows = db.prepare(sql).all(...params, fetchLimit) as Array<{
         id: number;
         project: string | null;
         target: string;
@@ -745,9 +773,14 @@ export function searchMemories(
         corrected_to: string | null;
         created: string;
         last_referenced: string;
+        rank_score: number;
       }>;
 
-      return rows.map(mapRow);
+      let mapped = rows.map(mapRow);
+      if (requireTermHitFilter && significantTerms.length > 0) {
+        mapped = mapped.filter((entry) => passesTermHitFilter(entry.content, significantTerms));
+      }
+      return mapped.slice(0, limit);
     } catch (err) {
       if (isFts5QueryError(err)) {
         return [];
@@ -766,7 +799,7 @@ export function searchMemories(
     return exactResults;
   }
 
-  return runSearch(fallbackQuery);
+  return runSearch(fallbackQuery, { requireTermHitFilter: true, fetchMultiplier: 4 });
 }
 
 /**
