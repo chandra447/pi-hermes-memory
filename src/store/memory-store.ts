@@ -141,8 +141,13 @@ export class MemoryStore {
 
   // ─── CRUD ───
 
-  async add(target: "memory" | "user" | "failure", content: string, signal?: AbortSignal): Promise<MemoryResult> {
-    return this.addWithConsolidation(target, content, signal, 1, "Entry added.");
+  async add(
+    target: "memory" | "user" | "failure",
+    content: string,
+    signal?: AbortSignal,
+    options: { dryRun?: boolean } = {},
+  ): Promise<MemoryResult> {
+    return this.addWithConsolidation(target, content, signal, 1, "Entry added.", undefined, options.dryRun);
   }
 
   async addFailure(content: string, options: {
@@ -151,10 +156,11 @@ export class MemoryStore {
     toolState?: string;
     correctedTo?: string;
     project?: string;
+    dryRun?: boolean;
   }): Promise<MemoryResult> {
     const failureText = this.buildFailureMemoryText(content, options);
     return this.addWithConsolidation(
-      "failure", failureText, undefined, 1, "Failure memory saved: " + options.category, options.project,
+      "failure", failureText, undefined, 1, "Failure memory saved: " + options.category, options.project, options.dryRun,
     );
   }
 
@@ -177,6 +183,7 @@ export class MemoryStore {
     signal?: AbortSignal,
     addedMessage = "Entry added.",
     project?: string,
+    dryRun = false,
   ): Promise<MemoryResult> {
     content = content.trim();
     if (!content) return { success: false, error: "Content cannot be empty." };
@@ -208,10 +215,31 @@ export class MemoryStore {
       const strategy = this.memoryOverflowStrategy();
 
       if (strategy === "fifo-evict") {
+        // In dryRun mode, surface what would be evicted without writing.
+        if (dryRun) {
+          const remaining = [...entries];
+          const evictedEntries: string[] = [];
+          while ([...remaining, encoded].join(ENTRY_DELIMITER).length > limit && remaining.length > 0) {
+            const evicted = remaining.shift()!;
+            evictedEntries.push(this.stripMetadata(evicted));
+          }
+          return {
+            ...this.successResponse(target, `[DRY RUN] Would add (${target === "failure" ? "failure" : "memory"}) entry; would evict ${evictedEntries.length} older ${evictedEntries.length === 1 ? "entry" : "entries"} to stay within the limit.`),
+            evicted_entries: evictedEntries,
+            evicted_count: evictedEntries.length,
+          };
+        }
         return this.fifoEvictAndAdd(target, entries, encoded, content.length, limit);
       }
 
       return this.memoryFullError(target, content.length);
+    }
+
+    if (dryRun) {
+      return this.successResponse(
+        target,
+        `[DRY RUN] Would add (${target === "failure" ? "failure" : "memory"}) entry (${content.length} chars). Storage unchanged.`,
+      );
     }
 
     entries.push(encoded);
@@ -228,11 +256,15 @@ export class MemoryStore {
     retriesLeft: number,
     addedMessage: string,
     project?: string,
+    dryRun = false,
   ): Promise<MemoryResult> {
     const result = await this.runTargetMutation(
       target,
-      () => this._add(target, content, signal, addedMessage, project),
+      () => this._add(target, content, signal, addedMessage, project, dryRun),
     );
+    // In dryRun mode, never trigger consolidation — it would write to disk
+    // and silently change behavior. Just return the validation result.
+    if (dryRun) return result;
     if (
       result.success
       || retriesLeft <= 0
@@ -247,7 +279,7 @@ export class MemoryStore {
       const consolidation = await this.consolidator(target, signal);
       if (consolidation.consolidated) {
         await this.loadFromDisk();
-        return this.addWithConsolidation(target, content, signal, retriesLeft - 1, addedMessage, project);
+        return this.addWithConsolidation(target, content, signal, retriesLeft - 1, addedMessage, project, dryRun);
       }
     } catch {
     }
@@ -296,11 +328,11 @@ export class MemoryStore {
     };
   }
 
-  async replace(target: "memory" | "user" | "failure", oldText: string, newContent: string): Promise<MemoryResult> {
-    return this.runTargetMutation(target, () => this.replaceUnlocked(target, oldText, newContent));
+  async replace(target: "memory" | "user" | "failure", oldText: string, newContent: string, options: { dryRun?: boolean } = {}): Promise<MemoryResult> {
+    return this.runTargetMutation(target, () => this.replaceUnlocked(target, oldText, newContent, options.dryRun));
   }
 
-  private async replaceUnlocked(target: "memory" | "user" | "failure", oldText: string, newContent: string): Promise<MemoryResult> {
+  private async replaceUnlocked(target: "memory" | "user" | "failure", oldText: string, newContent: string, dryRun = false): Promise<MemoryResult> {
     oldText = normalizeMemoryLookupText(oldText);
     newContent = newContent.trim();
     if (!oldText) return { success: false, error: "old_text cannot be empty." };
@@ -338,17 +370,24 @@ export class MemoryStore {
       };
     }
 
+    if (dryRun) {
+      return this.successResponse(
+        target,
+        `[DRY RUN] Would replace ${matches.length} matching ${matches.length === 1 ? "entry" : "entries"}. Storage unchanged.`,
+      );
+    }
+
     this.setEntries(target, testEntries);
     await this.saveToDisk(target);
 
     return this.successResponse(target, "Entry replaced.");
   }
 
-  async remove(target: "memory" | "user" | "failure", oldText: string): Promise<MemoryResult> {
-    return this.runTargetMutation(target, () => this.removeUnlocked(target, oldText));
+  async remove(target: "memory" | "user" | "failure", oldText: string, options: { dryRun?: boolean } = {}): Promise<MemoryResult> {
+    return this.runTargetMutation(target, () => this.removeUnlocked(target, oldText, options.dryRun));
   }
 
-  private async removeUnlocked(target: "memory" | "user" | "failure", oldText: string): Promise<MemoryResult> {
+  private async removeUnlocked(target: "memory" | "user" | "failure", oldText: string, dryRun = false): Promise<MemoryResult> {
     oldText = normalizeMemoryLookupText(oldText);
     if (!oldText) return { success: false, error: "old_text cannot be empty." };
 
@@ -363,6 +402,13 @@ export class MemoryStore {
         error: `Multiple entries matched '${oldText}'. Be more specific.`,
         matches: matches.map((e) => this.stripMetadata(e).slice(0, 80) + (this.stripMetadata(e).length > 80 ? "..." : "")),
       };
+    }
+
+    if (dryRun) {
+      return this.successResponse(
+        target,
+        `[DRY RUN] Would remove ${matches.length} matching ${matches.length === 1 ? "entry" : "entries"}. Storage unchanged.`,
+      );
     }
 
     const matchedEntries = new Set(matches);

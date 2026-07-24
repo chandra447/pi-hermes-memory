@@ -261,9 +261,16 @@ export function registerMemoryTool(
       failure_reason: Type.Optional(
         Type.String({ description: "Why it failed (for failure category)" })
       ),
+      dry_run: Type.Optional(
+        Type.Boolean({
+          description:
+            "Validate the operation without writing to disk or SQLite. Returns the same success/error shape; storage unchanged. Use to verify a save before committing.",
+        })
+      ),
     }),
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const { action, target: rawTarget, content, old_text, category, failure_reason } = params;
+      const { action, target: rawTarget, content, old_text, category, failure_reason, dry_run } = params;
+      const dryRun = dry_run === true;
 
       // Route 'project' to projectStore using the normal MEMORY.md target.
       const target = rawTarget === "project" ? "memory" : rawTarget as "memory" | "user" | "failure";
@@ -304,13 +311,15 @@ export function registerMemoryTool(
             result = await store_.addFailure(content, {
               category: memoryCategory,
               failureReason: failure_reason,
+              dryRun,
             });
-            if (result.success && !syncHandled) {
+            // Dry-run: skip SQLite sync entirely (validation only, no side effects).
+            if (result.success && !syncHandled && !dryRun) {
               syncWarning = await syncAddToSqlite(rawTarget, content, memoryCategory, failure_reason, dbManager, projectName);
             }
           } else {
-            result = await store_.add(target, content, signal);
-            if (result.success && !syncHandled) {
+            result = await store_.add(target, content, signal, { dryRun });
+            if (result.success && !syncHandled && !dryRun) {
               await syncEvictionsFromSqlite(rawTarget, result.evicted_entries, dbManager, projectName);
               syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, projectName);
             }
@@ -346,8 +355,8 @@ export function registerMemoryTool(
               details: {},
             };
           }
-          result = await store_.replace(target, old_text, content);
-          if (result.success && !syncHandled) syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, projectName);
+          result = await store_.replace(target, old_text, content, { dryRun });
+          if (result.success && !syncHandled && !dryRun) syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, projectName);
           break;
 
         case "remove":
@@ -365,8 +374,8 @@ export function registerMemoryTool(
               details: {},
             };
           }
-          result = await store_.remove(target, old_text);
-          if (result.success && !syncHandled) syncWarning = await syncRemoveFromSqlite(rawTarget, old_text, dbManager, projectName);
+          result = await store_.remove(target, old_text, { dryRun });
+          if (result.success && !syncHandled && !dryRun) syncWarning = await syncRemoveFromSqlite(rawTarget, old_text, dbManager, projectName);
           break;
 
         default:

@@ -503,7 +503,7 @@ describe("registerMemoryTool", () => {
     registerMemoryTool(mockPi, mockStore, null);
     await capturedResult.execute("tc-1", { action: "replace", target: "memory", content: "new", old_text: "old" }, undefined as any, undefined as any, undefined as any);
 
-    assert.deepStrictEqual(replaceArgs, ["memory", "old", "new"], "should pass target, old_text, content to store.replace");
+    assert.deepStrictEqual(replaceArgs, ["memory", "old", "new", { dryRun: false }], "should pass target, old_text, content, options to store.replace");
   });
 
   it("execute delegates remove to store.remove", async () => {
@@ -526,6 +526,6 @@ describe("registerMemoryTool", () => {
     registerMemoryTool(mockPi, mockStore, null);
     await capturedResult.execute("tc-1", { action: "remove", target: "memory", old_text: "old entry" }, undefined as any, undefined as any, undefined as any);
 
-    assert.deepStrictEqual(removeArgs, ["memory", "old entry"], "should pass target, old_text to store.remove");
+    assert.deepStrictEqual(removeArgs, ["memory", "old entry", { dryRun: false }], "should pass target, old_text, options to store.remove");
   });
 });

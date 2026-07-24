@@ -701,7 +701,10 @@ export function searchMemories(
     const conditions: string[] = [];
     const params: unknown[] = [];
 
-    conditions.push('m.id IN (SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?)');
+    // Use JOIN (not IN-subquery) so we can order by the FTS5 bm25() score.
+    // Tie-break by last_referenced DESC so newer entries surface above older
+    // entries that happen to score identically (e.g., near-duplicate saves).
+    conditions.push('memory_fts MATCH ?');
     params.push(matchQuery);
 
     if (project !== undefined) {
@@ -726,10 +729,12 @@ export function searchMemories(
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const sql = `
-      SELECT ${MEMORY_SELECT_COLUMNS}
+      SELECT m.id, m.project, m.target, m.category, m.content,
+             m.failure_reason, m.tool_state, m.corrected_to, m.created, m.last_referenced
       FROM memories m
+      JOIN memory_fts ON memory_fts.rowid = m.id
       ${whereClause}
-      ORDER BY m.last_referenced DESC
+      ORDER BY bm25(memory_fts) ASC, m.last_referenced DESC
       LIMIT ?
     `;
 
@@ -895,6 +900,9 @@ export function getMemoryStats(dbManager: DatabaseManager): {
   total: number;
   byProject: { project: string | null; count: number }[];
   byTarget: { target: string; count: number }[];
+  byCategory: { category: string | null; count: number }[];
+  oldest: string | null;
+  newest: string | null;
 } {
   const db = dbManager.getDb();
 
@@ -914,5 +922,24 @@ export function getMemoryStats(dbManager: DatabaseManager): {
     ORDER BY count DESC
   `).all() as { target: string; count: number }[];
 
-  return { total, byProject, byTarget };
+  const byCategory = db.prepare(`
+    SELECT category, COUNT(*) as count
+    FROM memories
+    GROUP BY category
+    ORDER BY count DESC
+  `).all() as { category: string | null; count: number }[];
+
+  const dateRange = db.prepare(`
+    SELECT MIN(created) AS oldest, MAX(created) AS newest
+    FROM memories
+  `).get() as { oldest: string | null; newest: string | null };
+
+  return {
+    total,
+    byProject,
+    byTarget,
+    byCategory,
+    oldest: dateRange.oldest,
+    newest: dateRange.newest,
+  };
 }
