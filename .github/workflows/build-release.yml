@@ -1,0 +1,36 @@
+name: Build & Release pi-hermes-memory Android ARM64
+
+on:
+  workflow_dispatch: null
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-and-release:
+    name: android-arm64-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Build pi-hermes-memory Tarball
+        run: |
+          npm pack
+          VERSION=$(node -p "require('./package.json').version")
+          mv pi-hermes-memory-*.tgz "pi-hermes-memory-${VERSION}-android.1.tgz"
+      - name: Release Artifacts on GitHub
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: v0.9.0-android.1
+          name: "v0.9.0-android.1 (pi-hermes-memory Android ARM64 Patch)"
+          body: |
+            Patched pi-hermes-memory package for Android ARM64 (Termux).
+            Replaces `fs.link` with `fs.copyFile` to prevent EACCES permission denied errors on Android VFS.
+          files: |
+            pi-hermes-memory-*-android.1.tgz

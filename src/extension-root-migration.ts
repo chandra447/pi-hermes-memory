@@ -285,7 +285,7 @@ async function restoreDatabaseGeneration(names: string[], holdingRoot: string, s
     const held = path.join(holdingRoot, name);
     if (!await pathEntryExists(held)) continue;
     try {
-      await fs.link(held, path.join(sourceRoot, name));
+      await fs.copyFile(held, path.join(sourceRoot, name));
       await fs.unlink(held);
     } catch (error) {
       failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
@@ -375,7 +375,7 @@ async function publishDatabaseFile(source: string, target: string): Promise<void
     await fs.symlink(await fs.readlink(source), target);
     return;
   }
-  await fs.link(source, target);
+  await fs.copyFile(source, target);
 }
 
 async function migrateDatabaseGeneration(

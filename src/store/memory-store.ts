@@ -694,7 +694,7 @@ export class MemoryStore {
 
       if (expectedFingerprint === "missing") {
         try {
-          await fs.link(tmpPath, filePath);
+          await fs.copyFile(tmpPath, filePath);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "EEXIST") {
             throw new ExternalMemoryWriteConflict();
@@ -719,7 +719,7 @@ export class MemoryStore {
             throw new ExternalMemoryWriteConflict();
           }
 
-          await fs.link(tmpPath, filePath);
+          await fs.copyFile(tmpPath, filePath);
           published = true;
 
           const verifiedDisplacedState = await this.readFileState(recoveryPath);
@@ -777,7 +777,7 @@ export class MemoryStore {
 
   private async restoreDisplacedFile(displacedPath: string, filePath: string): Promise<void> {
     try {
-      await fs.link(displacedPath, filePath);
+      await fs.copyFile(displacedPath, filePath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
@@ -819,7 +819,7 @@ export class MemoryStore {
     }
 
     try {
-      await fs.link(conflictPath, filePath);
+      await fs.copyFile(conflictPath, filePath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
