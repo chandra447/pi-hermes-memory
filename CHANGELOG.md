@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Git worktrees each became their own project** ([#120](https://github.com/chandra447/pi-hermes-memory/issues/120)): project-scoped memory and skills were keyed off `path.basename(cwd)`, so running Pi in a linked worktree wrote to `projects-memory/<worktree-name>/`. Deleting the worktree after merging stranded that memory and those skills where the main checkout could never see them. Inside a Git repository the project name is now the *repository* root's basename — resolved from the worktree's `.git` pointer and its `commondir`, with no `git` subprocess — so every worktree and every subdirectory of a repository shares one identity. An existing `projects-memory/<cwd-basename>/` store still wins over a newly derived repository name, so upgrading never orphans memory written under the old identity.
+
 ## [0.8.3] - 2026-07-26
 
 ### Fixed
