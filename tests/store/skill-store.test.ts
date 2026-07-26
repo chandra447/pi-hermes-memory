@@ -13,8 +13,9 @@ let ROOT_DIR = "";
 let GLOBAL_SKILLS_DIR = "";
 let PROJECT_SKILLS_DIR = "";
 let LEGACY_SKILLS_DIR = "";
-let LEGACY_PI_GLOBAL_SKILLS_DIR = "";
+let EXTENSION_SKILLS_DIR = "";
 let MIGRATION_SENTINEL = "";
+let EXTENSION_MIGRATION_SENTINEL = "";
 
 async function makeStore(withProject = true): Promise<SkillStore> {
   return new SkillStore({
@@ -22,8 +23,9 @@ async function makeStore(withProject = true): Promise<SkillStore> {
     projectSkillsDir: withProject ? PROJECT_SKILLS_DIR : null,
     projectName: withProject ? "demo-project" : null,
     legacySkillsDir: LEGACY_SKILLS_DIR,
-    legacyPiGlobalSkillsDir: LEGACY_PI_GLOBAL_SKILLS_DIR,
+    legacyExtensionSkillsDir: EXTENSION_SKILLS_DIR,
     migrationSentinelPath: MIGRATION_SENTINEL,
+    extensionSkillsMigrationSentinelPath: EXTENSION_MIGRATION_SENTINEL,
   });
 }
 
@@ -36,7 +38,7 @@ async function cleanSlate(): Promise<void> {
   await fs.mkdir(GLOBAL_SKILLS_DIR, { recursive: true });
   await fs.mkdir(PROJECT_SKILLS_DIR, { recursive: true });
   await fs.mkdir(LEGACY_SKILLS_DIR, { recursive: true });
-  await fs.mkdir(LEGACY_PI_GLOBAL_SKILLS_DIR, { recursive: true });
+  await fs.mkdir(EXTENSION_SKILLS_DIR, { recursive: true });
 }
 
 async function readFile(filePath: string): Promise<string> {
@@ -49,8 +51,9 @@ describe("SkillStore", { concurrency: 1 }, () => {
     GLOBAL_SKILLS_DIR = path.join(ROOT_DIR, "global-skills");
     PROJECT_SKILLS_DIR = path.join(ROOT_DIR, "project-skills");
     LEGACY_SKILLS_DIR = path.join(ROOT_DIR, "legacy-skills");
-    LEGACY_PI_GLOBAL_SKILLS_DIR = path.join(ROOT_DIR, "legacy-pi-global-skills");
+    EXTENSION_SKILLS_DIR = path.join(ROOT_DIR, "extension-skills");
     MIGRATION_SENTINEL = path.join(ROOT_DIR, ".skill-migration");
+    EXTENSION_MIGRATION_SENTINEL = path.join(ROOT_DIR, ".skill-migration-to-pi-global");
   });
 
   after(async () => {
@@ -614,6 +617,48 @@ describe("SkillStore", { concurrency: 1 }, () => {
       const second = await store.migrateLegacySkills();
       assert.strictEqual(second.migrated, 0);
       await fs.access(MIGRATION_SENTINEL);
+    });
+
+    it("moves extension-owned global skills into Pi's global skills root", async () => {
+      const source = path.join(EXTENSION_SKILLS_DIR, "deploy-service");
+      await fs.mkdir(source, { recursive: true });
+      await fs.writeFile(path.join(source, "SKILL.md"), [
+        "---",
+        'name: "deploy-service"',
+        'display_name: "Deploy Service"',
+        'description: "Deploy the service"',
+        'version: "1"',
+        'created: "2026-01-01"',
+        'updated: "2026-01-02"',
+        "---",
+        "# Deploy",
+      ].join("\n"), "utf-8");
+
+      const result = await (await makeStore()).migrateLegacySkills();
+
+      assert.strictEqual(result.migrated, 1);
+      assert.ok((await readFile(path.join(GLOBAL_SKILLS_DIR, "deploy-service", "SKILL.md"))).includes("# Deploy"));
+      await assert.rejects(fs.access(EXTENSION_SKILLS_DIR));
+      await fs.access(EXTENSION_MIGRATION_SENTINEL);
+    });
+
+    it("leaves a shadowed skill in place and reports it instead of clobbering Pi's copy", async () => {
+      const source = path.join(EXTENSION_SKILLS_DIR, "swarm-decompose");
+      await fs.mkdir(source, { recursive: true });
+      await fs.writeFile(path.join(source, "SKILL.md"), "---\nname: \"swarm-decompose\"\n---\n# Ours", "utf-8");
+      const existing = path.join(GLOBAL_SKILLS_DIR, "swarm-decompose");
+      await fs.mkdir(existing, { recursive: true });
+      await fs.writeFile(path.join(existing, "SKILL.md"), "---\nname: \"swarm-decompose\"\n---\n# Theirs", "utf-8");
+
+      const result = await (await makeStore()).migrateLegacySkills();
+
+      assert.strictEqual(result.migrated, 0);
+      assert.strictEqual(result.skipped, 1);
+      assert.ok(result.warnings.some((warning) => warning.includes("swarm-decompose")));
+      assert.ok((await readFile(path.join(existing, "SKILL.md"))).includes("# Theirs"));
+      assert.ok((await readFile(path.join(source, "SKILL.md"))).includes("# Ours"));
+      // No sentinel: the user must resolve the shadowing, so this must retry.
+      await assert.rejects(fs.access(EXTENSION_MIGRATION_SENTINEL));
     });
   });
 

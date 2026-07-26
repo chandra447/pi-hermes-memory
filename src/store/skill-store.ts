@@ -27,8 +27,9 @@ interface SkillStoreOptions {
   projectSkillsDir?: string | null;
   projectName?: string | null;
   legacySkillsDir?: string;
-  legacyPiGlobalSkillsDir?: string;
+  legacyExtensionSkillsDir?: string;
   migrationSentinelPath?: string;
+  extensionSkillsMigrationSentinelPath?: string;
 }
 
 interface SkillLocation {
@@ -156,8 +157,9 @@ export class SkillStore {
   private projectSkillsDir: string | null;
   private projectName: string | null;
   private legacySkillsDir: string;
-  private legacyPiGlobalSkillsDir: string;
+  private legacyExtensionSkillsDir: string;
   private migrationSentinelPath: string;
+  private extensionSkillsMigrationSentinelPath: string;
 
   constructor(options: SkillStoreOptions = {}) {
     const agentRoot = AGENT_ROOT;
@@ -165,9 +167,12 @@ export class SkillStore {
     this.projectSkillsDir = options.projectSkillsDir ?? null;
     this.projectName = options.projectName ?? null;
     this.legacySkillsDir = options.legacySkillsDir ?? path.join(agentRoot, "memory", "skills");
-    this.legacyPiGlobalSkillsDir = options.legacyPiGlobalSkillsDir ?? path.join(agentRoot, "skills");
+    this.legacyExtensionSkillsDir = options.legacyExtensionSkillsDir
+      ?? path.join(agentRoot, "pi-hermes-memory", "skills");
     this.migrationSentinelPath = options.migrationSentinelPath
       ?? path.join(agentRoot, "pi-hermes-memory", ".skills-migrated-to-extension-storage");
+    this.extensionSkillsMigrationSentinelPath = options.extensionSkillsMigrationSentinelPath
+      ?? path.join(agentRoot, "pi-hermes-memory", ".skills-migrated-to-pi-global");
   }
 
   getGlobalSkillsDir(): string {
@@ -200,16 +205,19 @@ export class SkillStore {
     // Always normalize flat markdown files under the global skills root,
     // even when a previous migration sentinel already exists.
     await this.migrateFlatMarkdownInGlobalSkillsDir(result);
+    await this.migrateExtensionSkillsToGlobalRoot(result);
 
     if (await exists(this.migrationSentinelPath)) return result;
 
     await fs.mkdir(path.dirname(this.migrationSentinelPath), { recursive: true });
 
+    // Only this migration's own warnings may hold back its sentinel — a
+    // permanently shadowed skill reported above must not make it retry forever.
+    const warningsBefore = result.warnings.length;
     try {
       await this.migrateLegacyMarkdownSkills(result);
-      await this.migrateLegacyPiGlobalSkillDirs(result);
     } finally {
-      if (result.warnings.length === 0) {
+      if (result.warnings.length === warningsBefore) {
         await fs.writeFile(this.migrationSentinelPath, `${new Date().toISOString()}\n`, "utf-8");
       }
     }
@@ -307,44 +315,60 @@ export class SkillStore {
     }
   }
 
-  private async migrateLegacyPiGlobalSkillDirs(result: LegacySkillMigrationResult): Promise<void> {
-    if (path.resolve(this.legacyPiGlobalSkillsDir) === path.resolve(this.globalSkillsDir)) return;
-    if (!await exists(this.legacyPiGlobalSkillsDir)) return;
+  /**
+   * Move extension-managed global skills back into Pi's own global skills root.
+   *
+   * Pi keys skills by name, first-loaded wins, and `~/.pi/agent/skills/` is
+   * auto-discovered at higher precedence than anything an extension contributes
+   * via `resources_discover`. While global skills lived in a private directory,
+   * any name that also existed in Pi's root was permanently shadowed: the
+   * collision warning fired every session and `skill_manage` edits silently had
+   * no effect on the skill the agent actually loaded (#125, #126).
+   *
+   * Runs on every startup until it completes with no shadowed names, since a
+   * shadowed skill can only be resolved by the user renaming one of the two.
+   */
+  private async migrateExtensionSkillsToGlobalRoot(result: LegacySkillMigrationResult): Promise<void> {
+    if (path.resolve(this.legacyExtensionSkillsDir) === path.resolve(this.globalSkillsDir)) return;
+    if (await exists(this.extensionSkillsMigrationSentinelPath)) return;
+    if (!await exists(this.legacyExtensionSkillsDir)) return;
 
-    const entries = await fs.readdir(this.legacyPiGlobalSkillsDir, { withFileTypes: true });
+    const entries = await fs.readdir(this.legacyExtensionSkillsDir, { withFileTypes: true });
+    let shadowed = 0;
+
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
 
-      const sourceDir = path.join(this.legacyPiGlobalSkillsDir, entry.name);
-      const sourceSkill = path.join(sourceDir, "SKILL.md");
-      if (!await exists(sourceSkill)) continue;
+      const sourceDir = path.join(this.legacyExtensionSkillsDir, entry.name);
+      if (!await exists(path.join(sourceDir, "SKILL.md"))) continue;
 
       const targetDir = path.join(this.globalSkillsDir, entry.name);
-      const targetSkill = path.join(targetDir, "SKILL.md");
-      if (await exists(targetSkill)) {
+      if (await exists(path.join(targetDir, "SKILL.md"))) {
+        // Pi already loads the copy in its own root; ours was never reachable.
+        // Leave both in place rather than clobbering a skill we did not write.
+        shadowed++;
         result.skipped++;
+        result.warnings.push(
+          `${entry.name}: already exists at ${targetDir}; the copy at ${sourceDir} was never loaded by Pi. `
+          + `Rename or delete one of them, then restart Pi.`,
+        );
         continue;
       }
 
       try {
-        const raw = await fs.readFile(sourceSkill, "utf-8");
-        const parsed = parseFrontmatter(raw);
-        const hasExtensionManagedMeta = Boolean(parsed.meta.display_name)
-          && Boolean(parsed.meta.created)
-          && Boolean(parsed.meta.updated)
-          && /^\d+$/.test(parsed.meta.version ?? "");
-
-        if (!hasExtensionManagedMeta) {
-          result.skipped++;
-          continue;
-        }
-
         await fs.mkdir(path.dirname(targetDir), { recursive: true });
         await fs.rename(sourceDir, targetDir);
         result.migrated++;
       } catch (error) {
+        shadowed++;
         result.warnings.push(`${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
       }
+    }
+
+    if (shadowed === 0) {
+      await fs.mkdir(path.dirname(this.extensionSkillsMigrationSentinelPath), { recursive: true });
+      await fs.writeFile(this.extensionSkillsMigrationSentinelPath, `${new Date().toISOString()}\n`, "utf-8");
+      await fs.rm(this.legacyExtensionSkillsDir, { recursive: true, force: true });
     }
   }
 

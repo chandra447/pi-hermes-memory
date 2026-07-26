@@ -312,8 +312,8 @@ WHEN TO CREATE A SKILL:
 - When the user teaches you a specific workflow or procedure
 
 SCOPE:
-- 'global': transferable procedures that can be reused across repositories
-- 'project': procedures tied to this repo's paths, scripts, architecture, deploy flow, or conventions
+- 'global': transferable procedures that can be reused across repositories. Written to Pi's own global skills root, ~/.pi/agent/skills/<slug>/SKILL.md — the same directory Pi loads user skills from, so a name used there is already taken.
+- 'project': procedures tied to this repo's paths, scripts, architecture, deploy flow, or conventions. Written to ~/.pi/agent/projects-memory/<project>/skills/<slug>/SKILL.md.
 
 WHEN TO UPDATE A SKILL:
 - Prefer 'patch' for one section when you can pass structured fields
