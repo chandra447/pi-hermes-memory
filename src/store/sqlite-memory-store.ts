@@ -796,7 +796,13 @@ export function searchMemories(
   // term-coverage post-filter as the OR fallback so single casual mentions
   // don't slip back in. Recency-ordered; only reached when every FTS attempt
   // came up empty.
-  const runLikeSearch = (terms: string[]): SqliteMemoryEntry[] => {
+  //
+  // Restricted to terms containing non-ASCII characters: that is the whole
+  // reason the net exists, and running it for ordinary ASCII misses both costs
+  // a full table scan on every empty search and re-admits the loose substring
+  // hits the OR post-filter is there to reject.
+  const runLikeSearch = (candidateTerms: string[]): SqliteMemoryEntry[] => {
+    const terms = candidateTerms.filter((term) => /[^\u0000-\u007F]/.test(term));
     if (terms.length === 0) {
       return [];
     }
@@ -907,7 +913,9 @@ export function searchMemories(
 
   const fallbackQuery = buildFallbackFts5Query(query);
   if (!fallbackQuery || fallbackQuery === normalizedQuery) {
-    return exactResults;
+    // Single-term queries have no OR fallback, but a lone CJK term is exactly
+    // the case unicode61 cannot match — let it reach the substring net.
+    return runLikeSearch(significantTerms);
   }
 
   const fallbackResults = runSearch(fallbackQuery, { filterTerms: significantTerms, fetchMultiplier: 4 });

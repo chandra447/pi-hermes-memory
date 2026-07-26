@@ -386,6 +386,29 @@ describe('sqlite-memory-store', () => {
       assert.ok(results.some((r) => r.content.includes('find')));
     });
 
+    it('does not admit unrelated memories whose words merely contain a short query term', () => {
+      addMemory(dbManager, 'Never search whole filesystem from root. Do not run find /.', 'user');
+      addMemory(dbManager, 'deploy uses docker compose and kubernetes manifests');
+
+      // Recovery terms are DO / USE / FIND. A bare substring test counts "do"
+      // inside "docker" and "use" inside "uses", which clears the coverage
+      // threshold and surfaces a completely unrelated memory.
+      const results = searchMemories(dbManager, 'DO NOT USE FIND /', { target: 'memory' });
+
+      assert.deepStrictEqual(results.map((r) => r.content), []);
+    });
+
+    it('resolves a single CJK term that FTS cannot tokenize', () => {
+      addMemory(dbManager, '用户的名字是鸣人', 'user');
+
+      // unicode61 tokenizes the whole run as one token, so MATCH "名字" can
+      // never hit it, and a one-word query has no OR fallback to fall through.
+      const results = searchMemories(dbManager, '名字', { target: 'user' });
+
+      assert.ok(results.some((r) => r.content.includes('鸣人')));
+      assert.deepStrictEqual(searchMemories(dbManager, '名字', { target: 'memory' }), []);
+    });
+
     it('should preserve valid operator queries', () => {
       const results = searchMemories(dbManager, 'pnpm OR AEST');
       assert.ok(results.length >= 2);
