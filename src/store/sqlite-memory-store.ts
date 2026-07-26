@@ -1,5 +1,11 @@
 import { DatabaseManager } from './db.js';
-import { buildFallbackFts5Query, isFts5QueryError, normalizeFts5Query } from './fts-query.js';
+import {
+  buildFallbackFts5Query,
+  buildNaturalLanguageFallbackQuery,
+  isFts5QueryError,
+  normalizeFts5Query,
+  normalizeNaturalLanguageFts5Query,
+} from './fts-query.js';
 import { normalizeMemoryLookupText } from './memory-lookup.js';
 import type { MemoryCategory } from '../types.js';
 
@@ -697,6 +703,8 @@ export function searchMemories(
     return [];
   }
 
+  let ftsParseError = false;
+
   const runSearch = (matchQuery: string): SqliteMemoryEntry[] => {
     const conditions: string[] = [];
     const params: unknown[] = [];
@@ -750,6 +758,7 @@ export function searchMemories(
       return rows.map(mapRow);
     } catch (err) {
       if (isFts5QueryError(err)) {
+        ftsParseError = true;
         return [];
       }
       throw err;
@@ -759,6 +768,26 @@ export function searchMemories(
   const exactResults = runSearch(normalizedQuery);
   if (exactResults.length > 0) {
     return exactResults;
+  }
+
+  // A query with uppercase operator words (e.g. "DO NOT USE FIND /") passes
+  // through as raw FTS5 syntax; when that fails to parse, retry it as natural
+  // language instead of silently returning nothing. Valid operator queries
+  // that legitimately match nothing keep their exact semantics.
+  if (ftsParseError) {
+    const nlQuery = normalizeNaturalLanguageFts5Query(query);
+    if (nlQuery.length === 0 || nlQuery === normalizedQuery) {
+      return [];
+    }
+    const nlResults = runSearch(nlQuery);
+    if (nlResults.length > 0) {
+      return nlResults;
+    }
+    const nlFallback = buildNaturalLanguageFallbackQuery(query);
+    if (nlFallback && nlFallback !== nlQuery) {
+      return runSearch(nlFallback);
+    }
+    return nlResults;
   }
 
   const fallbackQuery = buildFallbackFts5Query(query);

@@ -136,6 +136,17 @@ describe('session-search', () => {
       assert.ok(results.every((r) => r.content.includes('memory search')));
     });
 
+    it('should recover natural-language queries with uppercase operator words and punctuation', () => {
+      indexSession(dbManager, createTestSession({ id: 'recovery-session', messages: [
+        { id: 'recovery-session-msg-1', role: 'assistant', content: 'Never search whole filesystem from root. Do not run find /.', timestamp: '2026-05-03T00:01:00Z' },
+      ] }));
+
+      const results = searchSessions(dbManager, 'DO NOT USE FIND /');
+
+      assert.ok(results.length > 0);
+      assert.ok(results.some((r) => r.content.includes('find')));
+    });
+
     it('should preserve valid operator queries', () => {
       indexSession(dbManager, createTestSession());
 

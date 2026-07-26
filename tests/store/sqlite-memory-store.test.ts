@@ -377,6 +377,15 @@ describe('sqlite-memory-store', () => {
       assert.ok(results.every((r) => r.content.includes('memory search')));
     });
 
+    it('should recover natural-language queries with uppercase operator words and punctuation', () => {
+      addMemory(dbManager, 'Never search whole filesystem from root. Do not run find /.', 'user');
+
+      const results = searchMemories(dbManager, 'DO NOT USE FIND /', { target: 'user' });
+
+      assert.ok(results.length > 0);
+      assert.ok(results.some((r) => r.content.includes('find')));
+    });
+
     it('should preserve valid operator queries', () => {
       const results = searchMemories(dbManager, 'pnpm OR AEST');
       assert.ok(results.length >= 2);

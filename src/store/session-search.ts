@@ -1,5 +1,12 @@
 import { DatabaseManager } from './db.js';
-import { buildFallbackFts5Query, hasExplicitFts5Operator, isFts5QueryError, normalizeFts5Query } from './fts-query.js';
+import {
+  buildFallbackFts5Query,
+  buildNaturalLanguageFallbackQuery,
+  hasExplicitFts5Operator,
+  isFts5QueryError,
+  normalizeFts5Query,
+  normalizeNaturalLanguageFts5Query,
+} from './fts-query.js';
 
 /**
  * Search result from session history.
@@ -93,6 +100,8 @@ export function searchSessions(
   const db = dbManager.getDb();
   const { limit = 10, project, role, since } = options;
 
+  let ftsParseError = false;
+
   const executeSearch = (match: SearchMatch): SessionSearchResult[] => {
     const conditions: string[] = [];
     const params: unknown[] = [];
@@ -160,6 +169,7 @@ export function searchSessions(
       return mapRows(rows);
     } catch (err) {
       if (match.type === 'fts' && isFts5QueryError(err)) {
+        ftsParseError = true;
         return [];
       }
       throw err;
@@ -178,7 +188,28 @@ export function searchSessions(
 
   const explicitOperatorQuery = hasExplicitFts5Operator(query);
   if (explicitOperatorQuery) {
-    return exactResults;
+    // Same recovery as searchMemories: only when the raw operator query fails
+    // to parse do we retry it as natural language; valid operator queries that
+    // match nothing keep their exact semantics.
+    if (!ftsParseError) {
+      return exactResults;
+    }
+    const nlQuery = normalizeNaturalLanguageFts5Query(query);
+    if (nlQuery.length > 0 && nlQuery !== normalizedQuery) {
+      const nlResults = executeSearch({ type: 'fts', query: nlQuery });
+      if (nlResults.length > 0) {
+        return nlResults;
+      }
+      const nlFallback = buildNaturalLanguageFallbackQuery(query);
+      if (nlFallback && nlFallback !== nlQuery) {
+        const nlFallbackResults = executeSearch({ type: 'fts', query: nlFallback });
+        if (nlFallbackResults.length > 0) {
+          return nlFallbackResults;
+        }
+      }
+    }
+    const likeTerms = collectLikeTerms(query);
+    return executeSearch({ type: 'like', terms: likeTerms });
   }
 
   const fallbackQuery = buildFallbackFts5Query(query);

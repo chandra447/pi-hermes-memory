@@ -63,6 +63,37 @@ export function buildFallbackFts5Query(query: string): string | null {
     .join(' OR ');
 }
 
+function quoteTerms(terms: string[], separator: string): string {
+  return terms.map((term) => `"${term.replace(/"/g, '""')}"`).join(separator);
+}
+
+/**
+ * Normalize a query as natural language even when it contains uppercase
+ * operator words. Queries like "DO NOT USE FIND /" are passed through as raw
+ * FTS5 syntax by normalizeFts5Query; when that raw form fails to parse, this
+ * produces the quoted-term form to retry with.
+ */
+export function normalizeNaturalLanguageFts5Query(query: string): string {
+  const trimmed = query.trim();
+  if (trimmed.length === 0) return '';
+
+  return quoteTerms(collectNaturalLanguageTerms(trimmed), ' ');
+}
+
+/**
+ * Build the broader OR fallback for the same recovery path, ignoring
+ * operator detection.
+ */
+export function buildNaturalLanguageFallbackQuery(query: string): string | null {
+  const trimmed = query.trim();
+  if (trimmed.length === 0) return null;
+
+  const terms = collectNaturalLanguageTerms(trimmed);
+  if (terms.length <= 1) return null;
+
+  return quoteTerms(terms, ' OR ');
+}
+
 export function isFts5QueryError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
