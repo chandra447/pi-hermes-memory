@@ -61,7 +61,7 @@ async function tryAcquireConsolidationLock(
   const storageIdentity = await store.getStorageIdentity(target);
   const root = consolidationLockRoot();
   await fs.mkdir(root, { recursive: true });
-  const coordinator = new AtomicLockCoordinator(path.join(root, "locks.sqlite"));
+  const coordinator = AtomicLockCoordinator.shared(path.join(root, "locks.sqlite"));
   const lease = coordinator.tryAcquire(
     consolidationLockKey(target, toolTarget, storageIdentity),
     { staleMs: Math.max(timeoutMs, 0) + CONSOLIDATION_LOCK_STALE_GRACE_MS },

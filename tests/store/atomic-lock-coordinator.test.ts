@@ -231,4 +231,48 @@ describe('AtomicLockCoordinator', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('recovers when a failed COMMIT leaves the cached connection mid-transaction', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-lock-poison-'));
+    const dbPath = path.join(tmpDir, 'locks.sqlite');
+    const coordinator = new AtomicLockCoordinator(dbPath);
+
+    try {
+      // Prime the cached connection, then break COMMIT *and* ROLLBACK on it so
+      // the transaction opened by tryAcquire stays open. Before the cached
+      // handle was discarded on ROLLBACK failure, the next BEGIN IMMEDIATE hit
+      // "cannot start a transaction within a transaction" for the rest of the
+      // process lifetime.
+      coordinator.tryAcquire('warmup', { staleMs: 60_000 })?.release();
+
+      const db = (coordinator as unknown as { cachedDb: { exec: (sql: string) => void } }).cachedDb;
+      const originalExec = db.exec.bind(db);
+      db.exec = (sql: string) => {
+        if (sql === 'COMMIT' || sql === 'ROLLBACK') throw new Error(`forced ${sql} failure`);
+        return originalExec(sql);
+      };
+
+      assert.throws(() => coordinator.tryAcquire('poisoned', { staleMs: 60_000 }), /forced COMMIT failure/);
+
+      const recovered = coordinator.tryAcquire('poisoned', { staleMs: 60_000 });
+      assert.ok(recovered, 'coordinator must reopen after a failed rollback');
+      recovered.release();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses one coordinator per database path so connections are not leaked', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-lock-shared-'));
+    try {
+      const dbPath = path.join(tmpDir, 'locks.sqlite');
+      const first = AtomicLockCoordinator.shared(dbPath);
+
+      assert.strictEqual(AtomicLockCoordinator.shared(dbPath), first);
+      assert.strictEqual(AtomicLockCoordinator.shared(path.join(tmpDir, '.', 'locks.sqlite')), first);
+      assert.notStrictEqual(AtomicLockCoordinator.shared(path.join(tmpDir, 'other.sqlite')), first);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

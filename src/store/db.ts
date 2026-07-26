@@ -365,7 +365,7 @@ export class DatabaseManager {
   }
 
   private recoverDatabaseFile(cause: unknown, verify: () => void): DatabaseRecoveryResult {
-    const coordinator = new AtomicLockCoordinator(path.join(path.dirname(this.dbPath), '.pi-hermes-locks.sqlite'));
+    const coordinator = AtomicLockCoordinator.shared(path.join(path.dirname(this.dbPath), '.pi-hermes-locks.sqlite'));
     const lockKey = `recovery:${this.dbPath}`;
     const deadline = Date.now() + Math.max(0, this.recoveryOptions.recoveryLockWaitMs);
 

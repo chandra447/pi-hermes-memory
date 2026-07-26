@@ -226,7 +226,7 @@ function isDatabaseCorruption(error: unknown): boolean {
 }
 
 async function acquireMigrationLease(legacyRoot: string, targetRoot: string): Promise<AtomicLockLease> {
-  const coordinator = new AtomicLockCoordinator(path.join(targetRoot, ".pi-hermes-locks.sqlite"));
+  const coordinator = AtomicLockCoordinator.shared(path.join(targetRoot, ".pi-hermes-locks.sqlite"));
   const sourceIdentity = canonicalStoragePathSync(path.join(legacyRoot, "sessions.db"));
   const targetIdentity = canonicalStoragePathSync(path.join(targetRoot, "sessions.db"));
   const key = `extension-root-migration:${sourceIdentity}:${targetIdentity}`;
