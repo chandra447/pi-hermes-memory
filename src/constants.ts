@@ -312,7 +312,7 @@ WHEN TO CREATE A SKILL:
 - When the user teaches you a specific workflow or procedure
 
 SCOPE:
-- 'global': transferable procedures that can be reused across repositories. Written to Pi's own global skills root, ~/.pi/agent/skills/<slug>/SKILL.md — the same directory Pi loads user skills from, so a name used there is already taken.
+- 'global': transferable procedures that can be reused across repositories. Written to ~/.pi/agent/pi-hermes-memory/skills/<slug>/SKILL.md, this extension's own directory, kept separate from skills the user installed themselves. Pi also loads its own ~/.pi/agent/skills/ first, so a name already used there is rejected rather than silently shadowed.
 - 'project': procedures tied to this repo's paths, scripts, architecture, deploy flow, or conventions. Written to ~/.pi/agent/projects-memory/<project>/skills/<slug>/SKILL.md.
 
 WHEN TO UPDATE A SKILL:

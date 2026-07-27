@@ -63,10 +63,13 @@ export function resolveProjectSkillDiscovery(
   const detected = detectProjectSkills(projectsMemoryDir, cwd);
   skillStore.setProjectContext(detected.name, detected.skillsDir);
 
-  // Global skills live in Pi's own `~/.pi/agent/skills/`, which Pi already
-  // auto-discovers at higher precedence than anything contributed here. Only
-  // the project skills directory needs registering (#125, #126).
-  return { skillPaths: detected.skillsDir ? [detected.skillsDir] : [] };
+  // Pi auto-discovers its own `~/.pi/agent/skills/`, but this extension keeps
+  // its generated skills in a directory of its own so users can audit, wipe, or
+  // ignore them without touching skills they installed themselves (#126). Both
+  // of ours must therefore be contributed here.
+  const skillPaths = [skillStore.getGlobalSkillsDir()];
+  if (detected.skillsDir) skillPaths.push(detected.skillsDir);
+  return { skillPaths };
 }
 
 export function registerProjectSkillDiscoveryHandler(
@@ -102,13 +105,12 @@ export default function (pi: ExtensionAPI) {
   const project = detectProject(config.projectsMemoryDir);
   const projectName = project.name ?? "";
   const skillStore = new SkillStore({
-    globalSkillsDir: path.join(agentRoot, "skills"),
+    globalSkillsDir: path.join(globalDir, "skills"),
+    piGlobalSkillsDir: path.join(agentRoot, "skills"),
     projectSkillsDir: project.memoryDir ? path.join(project.memoryDir, "skills") : null,
     projectName: project.name,
     legacySkillsDir: path.join(legacyGlobalDir, "skills"),
-    legacyExtensionSkillsDir: path.join(globalDir, "skills"),
     migrationSentinelPath: path.join(globalDir, ".skills-migrated-to-extension-storage"),
-    extensionSkillsMigrationSentinelPath: path.join(globalDir, ".skills-migrated-to-pi-global"),
   });
   const dbManager = new DatabaseManager(globalDir);
   let databaseMigrationPending = shouldMigrateExtensionRoot

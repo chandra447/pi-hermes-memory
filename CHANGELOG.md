@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-07-27
+
+### Changed
+
+- **Global skills return to `~/.pi/agent/pi-hermes-memory/skills/`** ([#126](https://github.com/chandra447/pi-hermes-memory/issues/126), reported by [@kdejaeger](https://github.com/kdejaeger)): 0.9.0 moved them into Pi's own `~/.pi/agent/skills/` to eliminate a shadowing bug. That fixed the bug by deleting one of the two directories, and took a deliberate design property with it — skills this extension curates from your sessions were mixed in with skills you installed yourself, so you could no longer wipe or audit ours without picking through yours. Worse, `skill_manage delete` gained the ability to remove hand-written skills it never created. Skills are separated by who writes them again.
+- **`skill_manage delete` can no longer target Pi's global skills root.** It reaches only this extension's own global directory and the active project's. Skills you installed yourself are out of its blast radius.
+
+### Fixed
+
+- **Silent write-loss on shadowed global skill names, fixed at the source** ([#125](https://github.com/chandra447/pi-hermes-memory/issues/125)): Pi keys skills by name, first-loaded wins, and its own `~/.pi/agent/skills/` outranks anything an extension contributes via `resources_discover`. Creating a global skill under a name already present there wrote a file Pi never loads and reported success. Rather than removing one of the directories, `skill_manage` now **refuses** such a write and names both paths, so the shadowed state cannot be created in the first place. Project scope is unaffected — only the global root collides.
+
+### Upgrading
+
+If you ran 0.9.0, the skills it relocated into `~/.pi/agent/skills/` **stay there** and keep working. They are not moved back automatically: 0.9.0's migration renamed each skill and then removed its source directory without recording a manifest, and skill frontmatter carries no provenance field, so there is no reliable way to tell which skills in Pi's root came from this extension and which are yours. Moving files out of your global root on a guess would be a worse version of the mistake being corrected here. Move any you want back by hand, or open an issue and a confirmation-gated `/memory-skills reclaim` will be added.
+
 ## [0.9.0] - 2026-07-26
 
 ### Changed

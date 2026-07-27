@@ -13,19 +13,17 @@ let ROOT_DIR = "";
 let GLOBAL_SKILLS_DIR = "";
 let PROJECT_SKILLS_DIR = "";
 let LEGACY_SKILLS_DIR = "";
-let EXTENSION_SKILLS_DIR = "";
+let PI_GLOBAL_SKILLS_DIR = "";
 let MIGRATION_SENTINEL = "";
-let EXTENSION_MIGRATION_SENTINEL = "";
 
 async function makeStore(withProject = true): Promise<SkillStore> {
   return new SkillStore({
     globalSkillsDir: GLOBAL_SKILLS_DIR,
+    piGlobalSkillsDir: PI_GLOBAL_SKILLS_DIR,
     projectSkillsDir: withProject ? PROJECT_SKILLS_DIR : null,
     projectName: withProject ? "demo-project" : null,
     legacySkillsDir: LEGACY_SKILLS_DIR,
-    legacyExtensionSkillsDir: EXTENSION_SKILLS_DIR,
     migrationSentinelPath: MIGRATION_SENTINEL,
-    extensionSkillsMigrationSentinelPath: EXTENSION_MIGRATION_SENTINEL,
   });
 }
 
@@ -38,7 +36,7 @@ async function cleanSlate(): Promise<void> {
   await fs.mkdir(GLOBAL_SKILLS_DIR, { recursive: true });
   await fs.mkdir(PROJECT_SKILLS_DIR, { recursive: true });
   await fs.mkdir(LEGACY_SKILLS_DIR, { recursive: true });
-  await fs.mkdir(EXTENSION_SKILLS_DIR, { recursive: true });
+  await fs.mkdir(PI_GLOBAL_SKILLS_DIR, { recursive: true });
 }
 
 async function readFile(filePath: string): Promise<string> {
@@ -51,9 +49,8 @@ describe("SkillStore", { concurrency: 1 }, () => {
     GLOBAL_SKILLS_DIR = path.join(ROOT_DIR, "global-skills");
     PROJECT_SKILLS_DIR = path.join(ROOT_DIR, "project-skills");
     LEGACY_SKILLS_DIR = path.join(ROOT_DIR, "legacy-skills");
-    EXTENSION_SKILLS_DIR = path.join(ROOT_DIR, "extension-skills");
+    PI_GLOBAL_SKILLS_DIR = path.join(ROOT_DIR, "pi-global-skills");
     MIGRATION_SENTINEL = path.join(ROOT_DIR, ".skill-migration");
-    EXTENSION_MIGRATION_SENTINEL = path.join(ROOT_DIR, ".skill-migration-to-pi-global");
   });
 
   after(async () => {
@@ -619,46 +616,44 @@ describe("SkillStore", { concurrency: 1 }, () => {
       await fs.access(MIGRATION_SENTINEL);
     });
 
-    it("moves extension-owned global skills into Pi's global skills root", async () => {
-      const source = path.join(EXTENSION_SKILLS_DIR, "deploy-service");
-      await fs.mkdir(source, { recursive: true });
-      await fs.writeFile(path.join(source, "SKILL.md"), [
-        "---",
-        'name: "deploy-service"',
-        'display_name: "Deploy Service"',
-        'description: "Deploy the service"',
-        'version: "1"',
-        'created: "2026-01-01"',
-        'updated: "2026-01-02"',
-        "---",
-        "# Deploy",
-      ].join("\n"), "utf-8");
+  });
 
-      const result = await (await makeStore()).migrateLegacySkills();
+  describe("shadowing guard against Pi's own global skills root", () => {
+    it("writes global skills to the extension directory, never Pi's root", async () => {
+      const result = await (await makeStore()).create("deploy-service", "Deploy the service", "# Deploy", "global");
 
-      assert.strictEqual(result.migrated, 1);
+      assert.strictEqual(result.success, true);
       assert.ok((await readFile(path.join(GLOBAL_SKILLS_DIR, "deploy-service", "SKILL.md"))).includes("# Deploy"));
-      await assert.rejects(fs.access(EXTENSION_SKILLS_DIR));
-      await fs.access(EXTENSION_MIGRATION_SENTINEL);
+      // Skills the user installed themselves stay untouched by ours (#126).
+      await assert.rejects(fs.access(path.join(PI_GLOBAL_SKILLS_DIR, "deploy-service")));
     });
 
-    it("leaves a shadowed skill in place and reports it instead of clobbering Pi's copy", async () => {
-      const source = path.join(EXTENSION_SKILLS_DIR, "swarm-decompose");
-      await fs.mkdir(source, { recursive: true });
-      await fs.writeFile(path.join(source, "SKILL.md"), "---\nname: \"swarm-decompose\"\n---\n# Ours", "utf-8");
-      const existing = path.join(GLOBAL_SKILLS_DIR, "swarm-decompose");
-      await fs.mkdir(existing, { recursive: true });
-      await fs.writeFile(path.join(existing, "SKILL.md"), "---\nname: \"swarm-decompose\"\n---\n# Theirs", "utf-8");
+    it("refuses a global name Pi already loads instead of writing a shadowed copy", async () => {
+      const theirs = path.join(PI_GLOBAL_SKILLS_DIR, "swarm-decompose");
+      await fs.mkdir(theirs, { recursive: true });
+      await fs.writeFile(path.join(theirs, "SKILL.md"), "---\nname: \"swarm-decompose\"\n---\n# Theirs", "utf-8");
 
-      const result = await (await makeStore()).migrateLegacySkills();
+      const result = await (await makeStore()).create("swarm-decompose", "Decompose a swarm", "# Ours", "global");
 
-      assert.strictEqual(result.migrated, 0);
-      assert.strictEqual(result.skipped, 1);
-      assert.ok(result.warnings.some((warning) => warning.includes("swarm-decompose")));
-      assert.ok((await readFile(path.join(existing, "SKILL.md"))).includes("# Theirs"));
-      assert.ok((await readFile(path.join(source, "SKILL.md"))).includes("# Ours"));
-      // No sentinel: the user must resolve the shadowing, so this must retry.
-      await assert.rejects(fs.access(EXTENSION_MIGRATION_SENTINEL));
+      // Pi loads its own root first, so writing here would succeed on disk and
+      // change nothing about the agent's behaviour — the #125 write-loss bug.
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(result.conflictType, "name-collision");
+      assert.ok(result.error?.includes(path.join(theirs, "SKILL.md")));
+      await assert.rejects(fs.access(path.join(GLOBAL_SKILLS_DIR, "swarm-decompose")));
+      assert.ok((await readFile(path.join(theirs, "SKILL.md"))).includes("# Theirs"));
+    });
+
+    it("still allows a project skill to reuse a name taken in Pi's global root", async () => {
+      const theirs = path.join(PI_GLOBAL_SKILLS_DIR, "run-tests");
+      await fs.mkdir(theirs, { recursive: true });
+      await fs.writeFile(path.join(theirs, "SKILL.md"), "---\nname: \"run-tests\"\n---\n# Theirs", "utf-8");
+
+      const result = await (await makeStore()).create("run-tests", "Run this repo's tests", "# Ours", "project");
+
+      // Project skills are a different scope; only the global root collides.
+      assert.strictEqual(result.success, true);
+      assert.ok((await readFile(path.join(PROJECT_SKILLS_DIR, "run-tests", "SKILL.md"))).includes("# Ours"));
     });
   });
 

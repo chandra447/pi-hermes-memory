@@ -29,7 +29,7 @@ describe("resources_discover skill path resolution", () => {
     const result = await handlers.resources_discover({ cwd: "/tmp/demo-repo" }, {});
     const expectedPath = path.join(AGENT_ROOT, "projects-memory", "demo-repo", "skills");
 
-    assert.deepStrictEqual(result, { skillPaths: [expectedPath] });
+    assert.deepStrictEqual(result, { skillPaths: ["/tmp/global-skills", expectedPath] });
   });
 
   it("returns project skillPaths and updates skill store context", () => {
@@ -45,7 +45,7 @@ describe("resources_discover skill path resolution", () => {
     const resource = resolveProjectSkillDiscovery(store, "projects-memory", cwd);
     const expectedPath = path.join(AGENT_ROOT, "projects-memory", "demo-repo", "skills");
 
-    assert.deepStrictEqual(resource, { skillPaths: [expectedPath] });
+    assert.deepStrictEqual(resource, { skillPaths: ["/tmp/global-skills", expectedPath] });
     assert.strictEqual(store.getProjectName(), "demo-repo");
     assert.strictEqual(store.getProjectSkillsDir(), expectedPath);
   });
@@ -61,10 +61,10 @@ describe("resources_discover skill path resolution", () => {
 
     const resource = resolveProjectSkillDiscovery(store, "projects-memory", os.homedir());
 
-    // The global root is Pi's own `~/.pi/agent/skills/`, which Pi already
-    // auto-discovers — contributing it again would make our copy of any
-    // same-named skill a permanent collision loser (#125, #126).
-    assert.deepStrictEqual(resource, { skillPaths: [] });
+    // Outside a project only the extension's own global root is contributed.
+    // It is a directory of ours, kept apart from the skills a user installed
+    // themselves, so Pi has to be told about it (#126).
+    assert.deepStrictEqual(resource, { skillPaths: ["/tmp/global-skills"] });
     assert.strictEqual(store.getProjectName(), null);
     assert.strictEqual(store.getProjectSkillsDir(), null);
   });

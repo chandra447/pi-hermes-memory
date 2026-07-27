@@ -23,13 +23,14 @@ import type { SkillDocument, SkillIndex, SkillResult, SkillScope } from "../type
 import { AGENT_ROOT } from "../paths.js";
 
 interface SkillStoreOptions {
+  /** Where this extension writes global skills. Never Pi's own root. */
   globalSkillsDir?: string;
+  /** Pi's global skills root, consulted read-only to refuse shadowed writes. */
+  piGlobalSkillsDir?: string;
   projectSkillsDir?: string | null;
   projectName?: string | null;
   legacySkillsDir?: string;
-  legacyExtensionSkillsDir?: string;
   migrationSentinelPath?: string;
-  extensionSkillsMigrationSentinelPath?: string;
 }
 
 interface SkillLocation {
@@ -154,29 +155,34 @@ export function normalizeSkillPatchContent(
 
 export class SkillStore {
   private globalSkillsDir: string;
+  private piGlobalSkillsDir: string;
   private projectSkillsDir: string | null;
   private projectName: string | null;
   private legacySkillsDir: string;
-  private legacyExtensionSkillsDir: string;
   private migrationSentinelPath: string;
-  private extensionSkillsMigrationSentinelPath: string;
 
   constructor(options: SkillStoreOptions = {}) {
     const agentRoot = AGENT_ROOT;
-    this.globalSkillsDir = options.globalSkillsDir ?? path.join(agentRoot, "skills");
+    this.globalSkillsDir = options.globalSkillsDir ?? path.join(agentRoot, "pi-hermes-memory", "skills");
+    this.piGlobalSkillsDir = options.piGlobalSkillsDir ?? path.join(agentRoot, "skills");
     this.projectSkillsDir = options.projectSkillsDir ?? null;
     this.projectName = options.projectName ?? null;
     this.legacySkillsDir = options.legacySkillsDir ?? path.join(agentRoot, "memory", "skills");
-    this.legacyExtensionSkillsDir = options.legacyExtensionSkillsDir
-      ?? path.join(agentRoot, "pi-hermes-memory", "skills");
     this.migrationSentinelPath = options.migrationSentinelPath
       ?? path.join(agentRoot, "pi-hermes-memory", ".skills-migrated-to-extension-storage");
-    this.extensionSkillsMigrationSentinelPath = options.extensionSkillsMigrationSentinelPath
-      ?? path.join(agentRoot, "pi-hermes-memory", ".skills-migrated-to-pi-global");
   }
 
   getGlobalSkillsDir(): string {
     return this.globalSkillsDir;
+  }
+
+  /**
+   * Pi's own global skills root. Read-only from here: we never create, patch,
+   * or delete inside it. It is consulted solely to refuse writes that Pi would
+   * silently shadow (see `findShadowingPiGlobalSkill`).
+   */
+  getPiGlobalSkillsDir(): string {
+    return this.piGlobalSkillsDir;
   }
 
   getProjectSkillsDir(): string | null {
@@ -205,7 +211,6 @@ export class SkillStore {
     // Always normalize flat markdown files under the global skills root,
     // even when a previous migration sentinel already exists.
     await this.migrateFlatMarkdownInGlobalSkillsDir(result);
-    await this.migrateExtensionSkillsToGlobalRoot(result);
 
     if (await exists(this.migrationSentinelPath)) return result;
 
@@ -316,60 +321,22 @@ export class SkillStore {
   }
 
   /**
-   * Move extension-managed global skills back into Pi's own global skills root.
+   * Is `slug` already claimed by a skill in Pi's own global root?
    *
    * Pi keys skills by name, first-loaded wins, and `~/.pi/agent/skills/` is
    * auto-discovered at higher precedence than anything an extension contributes
-   * via `resources_discover`. While global skills lived in a private directory,
-   * any name that also existed in Pi's root was permanently shadowed: the
-   * collision warning fired every session and `skill_manage` edits silently had
-   * no effect on the skill the agent actually loaded (#125, #126).
+   * via `resources_discover`. A global skill we write under a name that also
+   * exists there is never the copy Pi loads, so the write succeeds on disk and
+   * changes nothing about the agent's behaviour — silent write-loss (#125).
    *
-   * Runs on every startup until it completes with no shadowed names, since a
-   * shadowed skill can only be resolved by the user renaming one of the two.
+   * Callers refuse the write and name both paths instead, which makes the
+   * shadowed state impossible to create rather than merely reported after the
+   * fact. Returns the shadowing path, or null when the name is free.
    */
-  private async migrateExtensionSkillsToGlobalRoot(result: LegacySkillMigrationResult): Promise<void> {
-    if (path.resolve(this.legacyExtensionSkillsDir) === path.resolve(this.globalSkillsDir)) return;
-    if (await exists(this.extensionSkillsMigrationSentinelPath)) return;
-    if (!await exists(this.legacyExtensionSkillsDir)) return;
-
-    const entries = await fs.readdir(this.legacyExtensionSkillsDir, { withFileTypes: true });
-    let shadowed = 0;
-
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-
-      const sourceDir = path.join(this.legacyExtensionSkillsDir, entry.name);
-      if (!await exists(path.join(sourceDir, "SKILL.md"))) continue;
-
-      const targetDir = path.join(this.globalSkillsDir, entry.name);
-      if (await exists(path.join(targetDir, "SKILL.md"))) {
-        // Pi already loads the copy in its own root; ours was never reachable.
-        // Leave both in place rather than clobbering a skill we did not write.
-        shadowed++;
-        result.skipped++;
-        result.warnings.push(
-          `${entry.name}: already exists at ${targetDir}; the copy at ${sourceDir} was never loaded by Pi. `
-          + `Rename or delete one of them, then restart Pi.`,
-        );
-        continue;
-      }
-
-      try {
-        await fs.mkdir(path.dirname(targetDir), { recursive: true });
-        await fs.rename(sourceDir, targetDir);
-        result.migrated++;
-      } catch (error) {
-        shadowed++;
-        result.warnings.push(`${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-
-    if (shadowed === 0) {
-      await fs.mkdir(path.dirname(this.extensionSkillsMigrationSentinelPath), { recursive: true });
-      await fs.writeFile(this.extensionSkillsMigrationSentinelPath, `${new Date().toISOString()}\n`, "utf-8");
-      await fs.rm(this.legacyExtensionSkillsDir, { recursive: true, force: true });
-    }
+  private async findShadowingPiGlobalSkill(slug: string): Promise<string | null> {
+    if (path.resolve(this.piGlobalSkillsDir) === path.resolve(this.globalSkillsDir)) return null;
+    const candidate = path.join(this.piGlobalSkillsDir, slug, "SKILL.md");
+    return await exists(candidate) ? candidate : null;
   }
 
   async loadIndex(scope?: SkillScope): Promise<SkillIndex[]> {
@@ -449,6 +416,19 @@ export class SkillStore {
           error: `A near-name global skill already exists (${targetId}) but with different intent. Use a clearer differentiated name for the new skill, or patch/update the existing skill if the intent is actually the same.`,
           conflictType: "name-collision",
           similarSkillIds: collidingNameSkillIds,
+          suggestedAction: "rename",
+        };
+      }
+
+      const shadowedBy = await this.findShadowingPiGlobalSkill(slug);
+      if (shadowedBy) {
+        return {
+          success: false,
+          error: `Pi already loads a global skill named '${slug}' from ${shadowedBy}. `
+            + `Pi keys skills by name and loads its own root first, so a skill written to `
+            + `${path.join(this.globalSkillsDir, slug, "SKILL.md")} would never be the copy in effect. `
+            + `Choose a different name, or edit ${shadowedBy} directly.`,
+          conflictType: "name-collision",
           suggestedAction: "rename",
         };
       }
