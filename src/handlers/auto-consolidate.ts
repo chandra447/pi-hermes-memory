@@ -20,7 +20,12 @@ import { createHash } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
-import { CONSOLIDATION_PROMPT, DIRECT_CONSOLIDATION_SYSTEM_PROMPT, ENTRY_DELIMITER } from "../constants.js";
+import {
+  CONSOLIDATION_PROMPT,
+  DEFAULT_CONSOLIDATION_TIMEOUT_MS,
+  DIRECT_CONSOLIDATION_SYSTEM_PROMPT,
+  ENTRY_DELIMITER,
+} from "../constants.js";
 import type { ConsolidationResult, MemoryConfig } from "../types.js";
 import { AGENT_ROOT } from "../paths.js";
 import { execChildPrompt } from "./pi-child-process.js";
@@ -90,7 +95,7 @@ function describeConsolidationFailure(
   const terminated = result.killed || result.code === 124 || result.code === 143;
 
   if (terminated) {
-    return `Consolidation subprocess was terminated (likely timeout or cancellation). Timeout: ${timeoutMs}ms. Consider increasing consolidationTimeoutMs if this is a manual run.`;
+    return `Consolidation subprocess was terminated (likely timeout or cancellation). Timeout: ${timeoutMs}ms. Raise consolidationTimeoutMs if consolidation legitimately needs longer.`;
   }
 
   return `Consolidation process exited with code ${result.code}: ${stderr?.slice(0, 200) || "unknown error"}`;
@@ -101,7 +106,7 @@ export async function triggerConsolidation(
   store: MemoryStore,
   target: MemoryTarget,
   signal?: AbortSignal,
-  timeoutMs: number = 60000,
+  timeoutMs: number = DEFAULT_CONSOLIDATION_TIMEOUT_MS,
   toolTarget: ToolMemoryTarget = target,
   llmConfig: ConsolidationLlmConfig = {},
   directCtx: Pick<ExtensionContext, "model" | "modelRegistry"> | null = null,
@@ -196,7 +201,7 @@ export async function triggerConsolidation(
 export function registerConsolidateCommand(
   pi: ExtensionAPI,
   store: MemoryStore,
-  timeoutMs: number = 60000,
+  timeoutMs: number = DEFAULT_CONSOLIDATION_TIMEOUT_MS,
   projectStore: MemoryStore | null = null,
   projectName?: string | null,
   llmConfig: ConsolidationLlmConfig = {},
@@ -206,7 +211,6 @@ export function registerConsolidateCommand(
   pi.registerCommand("memory-consolidate", {
     description: "Manually trigger memory consolidation to free up space",
     handler: async (_args, ctx) => {
-      const manualTimeoutMs = Math.max(timeoutMs, 180000);
       const results: string[] = [];
       const targets: Array<{
         label: string;
@@ -260,7 +264,7 @@ export function registerConsolidateCommand(
           item.store,
           item.target,
           ctx.signal,
-          manualTimeoutMs,
+          timeoutMs,
           item.toolTarget,
           llmConfig,
           ctx,

@@ -216,14 +216,34 @@ export default function (pi: ExtensionAPI) {
   setupSessionFlush(pi, store, projectStore, config, dbManager, projectName);
 
   // ── 7. Setup auto-consolidation (inject consolidator into stores) ──
-  store.setConsolidator(async (target, signal) => {
-    return triggerConsolidation(pi, store, target, signal, config.consolidationTimeoutMs, target, config);
-  });
+  // A failed auto-consolidation is otherwise invisible outside the tool result,
+  // so log the reason for whoever is watching the session (#135).
+  const runAutoConsolidation = async (
+    target: "memory" | "user" | "failure",
+    targetStore: MemoryStore,
+    toolTarget: "memory" | "user" | "failure" | "project",
+    signal?: AbortSignal,
+  ) => {
+    const result = await triggerConsolidation(
+      pi,
+      targetStore,
+      target,
+      signal,
+      config.consolidationTimeoutMs,
+      toolTarget,
+      config,
+    );
+    if (!result.consolidated) {
+      console.warn(`⚠️ Auto-consolidation failed for '${toolTarget}': ${result.error ?? "no reason reported"}`);
+    }
+    return result;
+  };
+
+  store.setConsolidator((target, signal) => runAutoConsolidation(target, store, target, signal));
   if (projectStore) {
-    projectStore.setConsolidator(async (target, signal) => {
-      const toolTarget = target === "memory" ? "project" : target;
-      return triggerConsolidation(pi, projectStore, target, signal, config.consolidationTimeoutMs, toolTarget, config);
-    });
+    projectStore.setConsolidator((target, signal) =>
+      runAutoConsolidation(target, projectStore, target === "memory" ? "project" : target, signal),
+    );
   }
   registerConsolidateCommand(pi, store, config.consolidationTimeoutMs, projectStore, projectName, config, dbManager);
 

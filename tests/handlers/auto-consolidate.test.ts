@@ -12,7 +12,7 @@ import { registerConsolidateCommand, triggerConsolidation } from "../../src/hand
 import { resolveWatchedChildPiInvocation } from "../../src/handlers/pi-child-process.js";
 import { MemoryStore } from "../../src/store/memory-store.js";
 import { AtomicLockCoordinator } from "../../src/store/atomic-lock-coordinator.js";
-import { ENTRY_DELIMITER } from "../../src/constants.js";
+import { DEFAULT_CONSOLIDATION_TIMEOUT_MS, ENTRY_DELIMITER } from "../../src/constants.js";
 
 // ─── Mock infrastructure ───
 
@@ -98,6 +98,27 @@ const mockStore = {
 
 async function settle(ms = 10) {
   await new Promise((r) => setTimeout(r, ms));
+}
+
+type ManualCommandHandler = (args: unknown, ctx: unknown) => Promise<void>;
+
+async function runManualConsolidate(timeoutMs?: number): Promise<void> {
+  let handler: ManualCommandHandler | undefined;
+  const pi = {
+    on: () => {},
+    exec: async (...args: unknown[]) => {
+      execCalls.push(captureExecArgs(args as Parameters<typeof captureExecArgs>[0]));
+      return { code: 0, stdout: "Done", stderr: "" };
+    },
+    registerTool: () => {},
+    registerCommand: (_name: string, command: { handler: ManualCommandHandler }) => {
+      handler = command.handler;
+    },
+  } as unknown as Parameters<typeof registerConsolidateCommand>[0];
+
+  registerConsolidateCommand(pi, mockStore, timeoutMs);
+  assert.ok(handler, "command handler should be registered");
+  await handler({}, { signal: undefined, ui: { notify: () => {} } });
 }
 
 // ─── Tests ───
@@ -543,30 +564,22 @@ describe("registerConsolidateCommand", () => {
     assert.ok(finalNotification.includes("project:demo-project: ✅ consolidated"), "final notification should include project result");
   });
 
-  it("uses a longer timeout floor for the manual consolidate command", async () => {
-    let handler: any;
+  it("passes the configured timeout through to the manual consolidate child", async () => {
+    await runManualConsolidate(240000);
 
-    const pi = {
-      on: () => {},
-      exec: async (...args: any[]) => {
-        execCalls.push(captureExecArgs(args));
-        return { code: 0, stdout: "Done", stderr: "" };
-      },
-      registerTool: () => {},
-      registerCommand: (_name: string, command: any) => {
-        handler = command.handler;
-      },
-    } as any;
-
-    registerConsolidateCommand(pi, mockStore, 60000);
-    await handler({}, {
-      signal: undefined,
-      ui: { notify: () => {} },
-    });
-
+    assert.ok(execCalls.length > 0, "manual consolidation should spawn children");
     for (const call of execCalls) {
-      assert.strictEqual(call[1][1], "180000");
-      assert.strictEqual(call[2]?.timeout, 185000);
+      assert.strictEqual(call[1][1], "240000");
+      assert.strictEqual(call[2]?.timeout, 245000);
+    }
+  });
+
+  it("defaults the manual consolidate command to the shared consolidation timeout", async () => {
+    await runManualConsolidate();
+
+    assert.ok(execCalls.length > 0, "manual consolidation should spawn children");
+    for (const call of execCalls) {
+      assert.strictEqual(call[1][1], String(DEFAULT_CONSOLIDATION_TIMEOUT_MS));
     }
   });
 
@@ -761,5 +774,80 @@ describe("MemoryStore auto-consolidation integration", () => {
     const result = await store.add("memory", "x".repeat(60));
     assert.ok(!result.success, "should return error");
     assert.ok(result.error!.includes("exceed"), "should mention exceeding limit");
+  });
+
+  async function storeWithConsolidator(
+    dirName: string,
+    consolidator: () => Promise<{ consolidated: boolean; error?: string }>,
+  ): Promise<MemoryStore> {
+    const store = new MemoryStore({
+      memoryCharLimit: 120,
+      userCharLimit: 120,
+      nudgeInterval: 10,
+      reviewEnabled: false,
+      flushOnCompact: false,
+      flushOnShutdown: false,
+      flushMinTurns: 6,
+      autoConsolidate: true,
+      correctionDetection: false,
+      nudgeToolCalls: 15,
+      memoryDir: path.join(MEMORY_DIR, dirName),
+    });
+    store.setConsolidator(consolidator);
+    await store.loadFromDisk();
+    await store.add("memory", "a".repeat(60));
+    return store;
+  }
+
+  it("add() surfaces the reason a failed auto-consolidation reported", async () => {
+    const store = await storeWithConsolidator("reason", async () => ({
+      consolidated: false,
+      error: "Consolidation subprocess was terminated (likely timeout or cancellation). Timeout: 180000ms.",
+    }));
+
+    const result = await store.add("memory", "b".repeat(20));
+
+    assert.ok(!result.success, "over-capacity add should still fail");
+    assert.ok(result.error!.startsWith("Memory at "), "original capacity error must be preserved");
+    assert.ok(
+      result.error!.includes("Auto-consolidation attempted but failed: Consolidation subprocess was terminated"),
+      `expected the consolidation reason to be appended, got: ${result.error}`,
+    );
+  });
+
+  it("add() reports a reasonless consolidation failure instead of staying silent", async () => {
+    const store = await storeWithConsolidator("reasonless", async () => ({ consolidated: false }));
+
+    const result = await store.add("memory", "b".repeat(20));
+
+    assert.ok(result.error!.includes("Auto-consolidation attempted but failed: no reason reported"), result.error);
+  });
+
+  it("add() surfaces a consolidator that throws", async () => {
+    const store = await storeWithConsolidator("throws", async () => {
+      throw new Error("spawn ENOENT");
+    });
+
+    const result = await store.add("memory", "b".repeat(20));
+
+    assert.ok(!result.success, "a thrown consolidator must not surface as success");
+    assert.ok(result.error!.includes("consolidator threw"), result.error);
+    assert.ok(result.error!.includes("spawn ENOENT"), result.error);
+  });
+
+  it("add() distinguishes a consolidation that ran but freed nothing", async () => {
+    const store = await storeWithConsolidator("no-space", async () => ({ consolidated: true }));
+
+    const result = await store.add("memory", "b".repeat(20));
+
+    assert.ok(!result.success, "add should still fail when nothing was freed");
+    assert.ok(
+      result.error!.includes("Auto-consolidation ran but did not free enough space."),
+      result.error,
+    );
+    assert.ok(
+      !result.error!.includes("attempted but failed"),
+      "a successful-but-ineffective consolidation is not a consolidation failure",
+    );
   });
 });

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2026-07-30
+
+### Fixed
+
+- **Auto-consolidation no longer dies on a timeout the manual path never had** ([#136](https://github.com/chandra447/pi-hermes-memory/issues/136), reported by [@jasonrr](https://github.com/jasonrr)): `consolidationTimeoutMs` defaulted to 60s, but `/memory-consolidate` quietly floored itself at 180s while the over-capacity auto path passed the raw 60s straight to a `pi -p` child. A consolidation pays child-process boot plus a full LLM turn, so on stock defaults the auto path was killed mid-run every time — 100% failure on slower models or near-full memory, while manual runs of the same memory succeeded. The default is now **180000** and both paths use the configured value verbatim; the manual floor that hid the mismatch is gone. A configured value below the default is still honored, but `loadConfig` warns at startup that it is likely to be killed mid-run.
+- **Auto-consolidation failures are surfaced instead of swallowed** ([#135](https://github.com/chandra447/pi-hermes-memory/issues/135), reported by [@jasonrr](https://github.com/jasonrr)): `triggerConsolidation` returns a specific reason for every failure mode — lock contention, spawn failure, non-zero exit, timeout kill — and `MemoryStore` discarded all of it in a bare `catch {}`, returning the unchanged `Memory at N/M chars...` capacity error. Every mode looked identical to a memory that was simply full, and the auto path was undiagnosable from outside. The reason is now appended to the tool result (`... Auto-consolidation attempted but failed: <reason>`) and logged once per failure. A consolidation that ran successfully but freed no space is reported distinctly (`Auto-consolidation ran but did not free enough space.`), as is a reload failure after a successful consolidation.
+
 ## [0.9.1] - 2026-07-27
 
 ### Changed

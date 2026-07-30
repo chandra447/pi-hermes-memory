@@ -80,7 +80,7 @@ export interface MemoryConfig {
   failureInjectionMaxEntries: number;
   /** Tool calls before triggering background review (in addition to turn count). Default: 15 */
   nudgeToolCalls: number;
-  /** Maximum time in milliseconds for auto-consolidation to complete. Default: 60000 */
+  /** Maximum time in milliseconds for a consolidation run, auto or manual. Default: 180000 */
   consolidationTimeoutMs: number;
 }
 

@@ -243,15 +243,26 @@ export class MemoryStore {
       return result;
     }
 
-    try {
-      const consolidation = await this.consolidator(target, signal);
-      if (consolidation.consolidated) {
-        await this.loadFromDisk();
-        return this.addWithConsolidation(target, content, signal, retriesLeft - 1, addedMessage, project);
-      }
-    } catch {
+    // Every failure mode (lock contention, spawn failure, non-zero exit, timeout
+    // kill) used to be swallowed here and present identically to a plain capacity
+    // error, making the auto path impossible to diagnose from outside (#135).
+    const consolidation = await this.consolidator(target, signal).catch(
+      (err): ConsolidationResult => ({ consolidated: false, error: `consolidator threw ${String(err).slice(0, 200)}` }),
+    );
+    if (!consolidation.consolidated) {
+      const reason = consolidation.error || "no reason reported";
+      return { ...result, error: `${result.error} Auto-consolidation attempted but failed: ${reason}` };
     }
-    return result;
+
+    try {
+      await this.loadFromDisk();
+    } catch (err) {
+      return { ...result, error: `${result.error} Auto-consolidation succeeded but reloading memory failed: ${String(err).slice(0, 200)}` };
+    }
+
+    const retried = await this.addWithConsolidation(target, content, signal, retriesLeft - 1, addedMessage, project);
+    if (retried.success || !retried.error?.startsWith("Memory at ")) return retried;
+    return { ...retried, error: `${retried.error} Auto-consolidation ran but did not free enough space.` };
   }
 
   private async fifoEvictAndAdd(

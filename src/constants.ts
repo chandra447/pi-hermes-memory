@@ -22,7 +22,13 @@ export const DEFAULT_FLUSH_MIN_TURNS = 6;
 export const DEFAULT_NUDGE_TOOL_CALLS = 15;
 export const DEFAULT_REVIEW_RECENT_MESSAGES = 0;
 export const DEFAULT_FLUSH_RECENT_MESSAGES = 0;
-export const DEFAULT_CONSOLIDATION_TIMEOUT_MS = 60000;
+/**
+ * A consolidation run pays child-process boot plus a full LLM turn, which
+ * routinely exceeds 60s — at the old 60s default the auto path was killed
+ * mid-run on every attempt (#136). Configured values are honored verbatim,
+ * including lower ones; `loadConfig` warns when a value below this is set.
+ */
+export const DEFAULT_CONSOLIDATION_TIMEOUT_MS = 180000;
 export const DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS = 7;
 export const DEFAULT_FAILURE_INJECTION_MAX_ENTRIES = 5;
 
