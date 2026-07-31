@@ -113,7 +113,7 @@ pi install npm:pi-hermes-memory
 Or install from GitHub:
 
 ```bash
-pi install git:github:chandra447/pi-hermes-memory
+pi install git:github.com/chandra447/pi-hermes-memory
 ```
 
 Or test locally without installing:
