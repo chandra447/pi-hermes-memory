@@ -96,11 +96,17 @@ const RELEASE_ATTEMPTS = 3;
 const pendingReleases = new Map<string, () => void>();
 const sharedCoordinators = new Map<string, AtomicLockCoordinator>();
 
+// Opportunistic GC tuning: how old (ms) a row must be before a dead-pid row
+// qualifies for deletion, and how often each coordinator may sweep.
+const DEAD_LOCK_SWEEP_GRACE_MS = 30000;
+const DEAD_LOCK_SWEEP_INTERVAL_MS = 60000;
+
 export class AtomicLockCoordinator {
   private readonly pid: number;
   private readonly incarnation: string | null;
   private readonly probeIncarnation: (pid: number) => string | null;
   private cachedDb: DatabaseLike | null = null;
+  private lastSweepMs = 0;
 
   constructor(private readonly dbPath: string, options: AtomicLockCoordinatorOptions = {}) {
     this.pid = options.pid ?? process.pid;
@@ -116,6 +122,7 @@ export class AtomicLockCoordinator {
     const token = randomUUID();
     const now = Date.now();
     const db = this.open();
+    this.sweepDeadLocks(db, now);
     let acquired = false;
 
     db.exec('BEGIN IMMEDIATE');
@@ -215,6 +222,34 @@ export class AtomicLockCoordinator {
     const prefix = `${path.resolve(this.dbPath)}\0${key}\0`;
     for (const [pendingKey, release] of [...pendingReleases.entries()]) {
       if (pendingKey.startsWith(prefix)) release();
+    }
+  }
+
+  /**
+   * Best-effort GC for lock rows whose holder process has exited. Without
+   * this, rows are only reaped when another session with the same lock key
+   * attempts acquisition — orphaned storage identities (dead sessions,
+   * abandoned projects) leak rows forever. A dead pid can never release its
+   * lease, so deletion is always safe; the grace period only guards against
+   * pid-reuse races (a new process reusing a recycled pid).
+   */
+  private sweepDeadLocks(db: DatabaseLike, now: number): void {
+    if (now - this.lastSweepMs < DEAD_LOCK_SWEEP_INTERVAL_MS) return;
+    this.lastSweepMs = now;
+    try {
+      const rows = db.prepare('SELECT lock_key, pid, acquired_at FROM locks').all() as Array<{
+        lock_key: string;
+        pid: number;
+        acquired_at: number;
+      }>;
+      for (const row of rows) {
+        if (!Number.isSafeInteger(row.pid) || row.pid <= 0) continue;
+        if (processIsAlive(row.pid)) continue;
+        if (now - row.acquired_at < DEAD_LOCK_SWEEP_GRACE_MS) continue;
+        db.prepare('DELETE FROM locks WHERE lock_key = ? AND pid = ?').run(row.lock_key, row.pid);
+      }
+    } catch {
+      // GC is best-effort; never fail an acquisition because of it.
     }
   }
 

@@ -38,6 +38,12 @@ type ConsolidationLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinki
 
 const CONSOLIDATION_LOCK_STALE_GRACE_MS = 30000;
 const CONSOLIDATION_LOCK_ENV = "PI_HERMES_CONSOLIDATION_LOCK_DIR";
+// How long to keep polling for a contended consolidation lock before giving up.
+// Mirrors acquireMarkdownMutationLock: transient contention (another session
+// mid-consolidation) should become a short delay, not an immediate hard
+// failure of the memory write that triggered auto-consolidation.
+const CONSOLIDATION_LOCK_CONTENTION_WAIT_MS = 30000;
+const CONSOLIDATION_LOCK_POLL_MS = 100;
 
 interface ConsolidationLock {
   release: () => Promise<void>;
@@ -67,10 +73,21 @@ async function tryAcquireConsolidationLock(
   const root = consolidationLockRoot();
   await fs.mkdir(root, { recursive: true });
   const coordinator = AtomicLockCoordinator.shared(path.join(root, "locks.sqlite"));
-  const lease = coordinator.tryAcquire(
-    consolidationLockKey(target, toolTarget, storageIdentity),
-    { staleMs: Math.max(timeoutMs, 0) + CONSOLIDATION_LOCK_STALE_GRACE_MS },
-  );
+  const staleMs = Math.max(timeoutMs, 0) + CONSOLIDATION_LOCK_STALE_GRACE_MS;
+  const key = consolidationLockKey(target, toolTarget, storageIdentity);
+
+  // Contention is normally transient (another session is mid-consolidation or
+  // a hung holder is about to cross staleMs). Poll with a bounded deadline
+  // instead of failing the caller on the first collision; a hard failure here
+  // cascades into every memory write that exceeds capacity (memory-store.ts
+  // addWithConsolidation), blocking writes for all sessions while the lock is
+  // held.
+  const deadline = Date.now() + Math.min(CONSOLIDATION_LOCK_CONTENTION_WAIT_MS, staleMs);
+  let lease = coordinator.tryAcquire(key, { staleMs });
+  while (!lease && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, CONSOLIDATION_LOCK_POLL_MS));
+    lease = coordinator.tryAcquire(key, { staleMs });
+  }
   return lease ? { release: async () => lease.release() } : null;
 }
 
