@@ -18,6 +18,7 @@
   },
   "scripts": {
     "check": "node scripts/ensure-dev.mjs check && tsc --noEmit",
+    "check:min-sdk": "node scripts/ensure-dev.mjs check && node scripts/check-min-sdk.mjs",
     "test": "node scripts/ensure-dev.mjs test && tests/run-all.sh"
   },
   "keywords": [
@@ -46,8 +47,8 @@
     "url": "https://github.com/chandra447/pi-hermes-memory"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": ">=0.74.0"
+    "@earendil-works/pi-ai": ">=0.80.1",
+    "@earendil-works/pi-coding-agent": ">=0.80.1"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.80.2",
