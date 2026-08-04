@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { Box, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import {
   createSharedToolResultRenderer,
@@ -11,6 +12,8 @@ import {
   searchResultView,
   skillResultView,
 } from "../../src/tools/tool-result-views.js";
+
+initTheme();
 
 function fakeTheme() {
   return {
@@ -24,7 +27,7 @@ function stripAnsi(text: string): string {
 }
 
 function renderPlain(component: Component, width = 120): string {
-  return component.render(width).map(stripAnsi).join("\n");
+  return component.render(width).map((row) => stripAnsi(row).trimEnd()).join("\n");
 }
 
 function result(text: string, details: Record<string, unknown> = { success: true }) {
@@ -51,7 +54,7 @@ describe("shared tool-result view", () => {
     });
 
     const collapsed = renderPlain(
-      renderSharedToolResult(toolResult, { expanded: false }, fakeTheme()),
+      renderSharedToolResult(toolResult, { expanded: false, isPartial: false }, fakeTheme()),
     );
     assert.equal(collapsed.split("\n").length, 1);
     assert.match(collapsed, /Found 2 memories matching auth/);
@@ -59,7 +62,7 @@ describe("shared tool-result view", () => {
     assert.match(collapsed, /expand/);
 
     const expanded = renderPlain(
-      renderSharedToolResult(toolResult, { expanded: true }, fakeTheme()),
+      renderSharedToolResult(toolResult, { expanded: true, isPartial: false }, fakeTheme()),
     );
     assert.equal(expanded, toolResult.content[0].text);
   });
@@ -71,8 +74,8 @@ describe("shared tool-result view", () => {
     });
     const before = structuredClone(toolResult);
 
-    renderPlain(renderSharedToolResult(toolResult, { expanded: false }, fakeTheme()));
-    renderPlain(renderSharedToolResult(toolResult, { expanded: true }, fakeTheme()));
+    renderPlain(renderSharedToolResult(toolResult, { expanded: false, isPartial: false }, fakeTheme()));
+    renderPlain(renderSharedToolResult(toolResult, { expanded: true, isPartial: false }, fakeTheme()));
 
     assert.deepEqual(toolResult, before);
   });
@@ -84,7 +87,7 @@ describe("shared tool-result view", () => {
       const failure = renderPlain(
         renderSharedToolResult(
           result("query is required", { success: false, message: "query is required" }),
-          { expanded: false },
+          { expanded: false, isPartial: false },
           fakeTheme(),
         ),
       );
