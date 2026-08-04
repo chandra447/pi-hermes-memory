@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-08-04
+
 ### Added
 
 - **Standing instructions: user-authored rules that are always in context** ([#121](https://github.com/chandra447/pi-hermes-memory/issues/121), designed with [@jagaliano](https://github.com/jagaliano)): in `policy-only` mode a persisted constraint only takes effect if the model chooses to call `memory_search` **before** the action the constraint would have prevented. For a prohibition that is exactly the moment the model has no reason to look, so the recall path is structurally unable to enforce prohibitions, independent of model quality. It works fine for preferences, where a wrong guess is cheap. `/memory-pin <rule>` writes to a new `~/.pi/agent/pi-hermes-memory/STANDING.md` that is injected into **every** session, in every memory mode, in its own `<standing-instructions>` block after the memory policy. Background review, consolidation and the correction detector all write through `MemoryStore` and never touch this file, so a model-generated memory has no path into the trusted block — provenance is a property of the storage rather than of a flag. Hard cap of 20 entries / 2000 characters, independent of `memoryCharLimit` and `userCharLimit`; a hand-edited file over the cap is truncated at injection and the omission is stated inside the block rather than dropped silently. Every pin goes through the same `scanContent()` scan as any memory write. `/memory-pin` also takes `list`, `remove <n>` and `clear`; `/memory-preview-context` shows the block and flags over-budget entries. Set `standingInstructionsEnabled: false` to drop the store and the command.
