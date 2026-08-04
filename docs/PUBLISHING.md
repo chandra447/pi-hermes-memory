@@ -90,7 +90,7 @@ After publishing:
 
 Before (git):
 ```bash
-pi install git:github:chandra447/pi-hermes-memory
+pi install git:github.com/chandra447/pi-hermes-memory
 ```
 
 After (npm):
@@ -102,7 +102,7 @@ pi install npm:pi-hermes-memory
 
 Replace:
 ```
-pi install github:chandra447/pi-hermes-memory
+pi install git:github.com/chandra447/pi-hermes-memory
 ```
 
 With:

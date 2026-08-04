@@ -70,5 +70,8 @@ pi -e ./src/index.ts
 ## Installation (for users)
 
 ```bash
-pi install github:chandra447/pi-hermes-memory
+pi install npm:pi-hermes-memory
+
+# or from git
+pi install git:github.com/chandra447/pi-hermes-memory
 ```
