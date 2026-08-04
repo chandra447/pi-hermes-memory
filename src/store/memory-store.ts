@@ -352,7 +352,12 @@ export class MemoryStore {
             : content;
           const scanError = scanContent(normalizedContent);
           if (scanError) return { success: false, error: scanError };
-          if (plannedEntries.some((entry) => this.decodeEntry(entry).text === normalizedContent)) {
+          const normalizedProject = operation.project?.trim() || null;
+          if (plannedEntries.some((entry) => {
+            const decoded = this.decodeEntry(entry);
+            return decoded.text === normalizedContent
+              && (target !== "failure" || decoded.project === normalizedProject);
+          })) {
             return { success: false, error: "Memory mutation plan would add a duplicate entry." };
           }
           plannedEntries.push(this.encodeEntry(normalizedContent, today, today, operation.project));

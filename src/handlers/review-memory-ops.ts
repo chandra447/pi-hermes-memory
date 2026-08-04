@@ -310,7 +310,7 @@ export async function applyReviewOperations(
       action: operation.action,
       content: operation.content,
       oldText: operation.old_text,
-      category: operation.category,
+      category: target === "failure" ? operation.category ?? "failure" : operation.category,
       failureReason: operation.failure_reason,
       project: target === "failure" ? projectName ?? undefined : undefined,
     }));

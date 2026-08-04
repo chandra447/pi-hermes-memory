@@ -444,7 +444,7 @@ describe("applyReviewOperations", () => {
     assert.doesNotMatch(projectStore.getRawEntriesForSync("memory")[0] ?? "", /project64=/);
   });
 
-  it("preserves failure formatting and project attribution in atomic plans", async () => {
+  it("defaults failure formatting and preserves project attribution in atomic plans", async () => {
     const store = new MemoryStore({
       memoryDir: tmpDir,
       memoryCharLimit: 5000,
@@ -467,7 +467,6 @@ describe("applyReviewOperations", () => {
           action: "add",
           target: "failure",
           content: "concise lesson",
-          category: "tool-quirk",
           failure_reason: "tool used stale state",
         },
       ],
@@ -478,7 +477,7 @@ describe("applyReviewOperations", () => {
 
     assert.deepStrictEqual(result, { appliedCount: 2, skippedCount: 0 });
     assert.deepStrictEqual(store.getFailureEntries(), [
-      "[tool-quirk] concise lesson — Failed: tool used stale state",
+      "[failure] concise lesson — Failed: tool used stale state",
     ]);
     assert.match(store.getRawEntriesForSync("failure")[0] ?? "", /project64=cHJvamVjdC1h/);
   });

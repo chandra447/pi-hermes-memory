@@ -1039,32 +1039,46 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.deepEqual(entries.map((entry: any) => entry.project), ["project-a", "project-b"]);
     });
 
-    it("formats categorized failure adds and accepts raw failure content without a category", async () => {
+    it("formats failure adds and deduplicates them within project scope", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
-      const categorized = await store.applyMutationPlan("failure", [{
+      const first = await store.applyMutationPlan("failure", [{
         action: "add",
         content: `${TEST_MARKER} categorized failure`,
         category: "tool-quirk",
         failureReason: "the tool exited",
         project: "project-a",
       }]);
-      const raw = await store.applyMutationPlan("failure", [{
+      const secondProject = await store.applyMutationPlan("failure", [{
         action: "add",
-        content: `${TEST_MARKER} already normalized failure text`,
+        content: `${TEST_MARKER} categorized failure`,
+        category: "tool-quirk",
+        failureReason: "the tool exited",
         project: "project-b",
       }]);
+      const duplicate = await store.applyMutationPlan("failure", [{
+        action: "add",
+        content: `${TEST_MARKER} categorized failure`,
+        category: "tool-quirk",
+        failureReason: "the tool exited",
+        project: "project-a",
+      }]);
 
-      assert.equal(categorized.success, true);
-      assert.equal(raw.success, true);
+      assert.equal(first.success, true);
+      assert.equal(secondProject.success, true);
+      assert.equal(duplicate.success, false);
+      assert.match(duplicate.error ?? "", /duplicate entry/);
       const entries = (store as any).failureEntries.map((entry: string) => (store as any).decodeEntry(entry));
       assert.deepEqual(entries.map((entry: any) => ({ text: entry.text, project: entry.project })), [
         {
           text: `[tool-quirk] ${TEST_MARKER} categorized failure — Failed: the tool exited`,
           project: "project-a",
         },
-        { text: `${TEST_MARKER} already normalized failure text`, project: "project-b" },
+        {
+          text: `[tool-quirk] ${TEST_MARKER} categorized failure — Failed: the tool exited`,
+          project: "project-b",
+        },
       ]);
     });
 
