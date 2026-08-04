@@ -121,6 +121,61 @@ export function resolveReviewModel(
   return ctxModel;
 }
 
+/**
+ * Provider responses that mean "this key is no longer good", as opposed to a
+ * transport hiccup or a model error worth falling back to a subprocess for.
+ */
+const AUTH_REJECTION_PATTERN = new RegExp([
+  String.raw`\b(401|403)\b`,
+  "unauthorized",
+  "forbidden",
+  String.raw`invalid[\s_-]*api[\s_-]*key`,
+  String.raw`authentication[\s_-]*(failed|error)`,
+  String.raw`(invalid|expired|revoked)[\s_-]*(access[\s_-]*)?(token|key|credential)`,
+  String.raw`(token|key|credential)[\s_-]*(is[\s_-]*|has[\s_-]*been[\s_-]*)?(invalid|expired|revoked)`,
+].join("|"), "i");
+
+export function isAuthRejection(message: string): boolean {
+  return AUTH_REJECTION_PATTERN.test(message);
+}
+
+/**
+ * Mirrors the SDK's ResolvedRequestAuth. pi-coding-agent declares it in
+ * core/model-registry but does not re-export it from the package root, and its
+ * `exports` map blocks deep imports — so name it here. tsc still checks the
+ * shape against the real registry at the call below, so drift is a build error.
+ */
+export type ResolvedRequestAuth =
+  | { ok: true; apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }
+  | { ok: false; error: string };
+
+/**
+ * Resolve request auth against credentials re-read from disk.
+ *
+ * Pi's AuthStorage parses auth.json once in its constructor and only reloads
+ * it when an OAuth refresh fails, and ExtensionRunner hands every event the
+ * same ModelRegistry singleton — so an api_key credential is effectively
+ * frozen for the process lifetime. A key rotated on disk by another tool
+ * (e.g. @lnilluv/pi-opencode-go-rotation swapping an opencode-go subscription
+ * key after a weekly limit) stays invisible to this session, and every direct
+ * memory completion keeps presenting the revoked key (#139).
+ *
+ * reload() is public and is a synchronous re-read of that one file, so pay it
+ * per completion — a handful per session — instead of caching a key forever.
+ */
+export async function resolveFreshRequestAuth(
+  modelRegistry: ReviewModelRegistry,
+  model: Model<Api>,
+): Promise<ResolvedRequestAuth> {
+  try {
+    modelRegistry.authStorage?.reload();
+  } catch {
+    // A malformed or unreadable auth.json must not take the review path down;
+    // fall through to whatever credentials are already loaded.
+  }
+  return modelRegistry.getApiKeyAndHeaders(model);
+}
+
 function extractJsonPayload(text: string): unknown {
   const trimmed = text.trim();
   if (!trimmed) return null;
@@ -304,13 +359,15 @@ export async function runDirectMemoryCompletion(
   options: RunDirectMemoryCompletionOptions,
   dbManager: DatabaseManager | null = null,
   projectName?: string | null,
+  deps: { completeSimple?: typeof completeSimple } = {},
 ): Promise<DirectReviewResult> {
+  const complete = deps.completeSimple ?? completeSimple;
   const model = resolveReviewModel(ctx.model, ctx.modelRegistry, options.config);
   if (!model) {
     return { ok: false, appliedCount: 0, fallbackReason: "no_model" };
   }
 
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  const auth = await resolveFreshRequestAuth(ctx.modelRegistry, model);
   if (!auth.ok || !auth.apiKey) {
     return {
       ok: false,
@@ -319,6 +376,7 @@ export async function runDirectMemoryCompletion(
       error: auth.ok ? `No API key for ${model.provider}` : auth.error,
     };
   }
+  let requestAuth = { apiKey: auth.apiKey, headers: auth.headers, env: auth.env };
 
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? 120000;
@@ -334,17 +392,34 @@ export async function runDirectMemoryCompletion(
     timestamp: Date.now(),
   };
 
+  const request = { systemPrompt: options.systemPrompt, messages: [userMessage] };
+
   try {
-    const response = await completeSimple(
-      model,
-      { systemPrompt: options.systemPrompt, messages: [userMessage] },
-      buildDirectReviewCompletionOptions(
+    let response;
+    try {
+      response = await complete(
         model,
-        { apiKey: auth.apiKey, headers: auth.headers, env: auth.env },
-        thinking,
-        controller.signal,
-      ),
-    );
+        request,
+        buildDirectReviewCompletionOptions(model, requestAuth, thinking, controller.signal),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (controller.signal.aborted || !isAuthRejection(message)) throw err;
+
+      // The provider rejected the key mid-flight. A rotation tool may have
+      // written a new one since we resolved auth; re-read and retry once, but
+      // only if the key actually changed — otherwise this is a real auth
+      // problem and the subprocess fallback should handle it (#139).
+      const rotated = await resolveFreshRequestAuth(ctx.modelRegistry, model);
+      if (!rotated.ok || !rotated.apiKey || rotated.apiKey === requestAuth.apiKey) throw err;
+
+      requestAuth = { apiKey: rotated.apiKey, headers: rotated.headers, env: rotated.env };
+      response = await complete(
+        model,
+        request,
+        buildDirectReviewCompletionOptions(model, requestAuth, thinking, controller.signal),
+      );
+    }
 
     if (response.stopReason === "aborted") {
       return { ok: false, appliedCount: 0, fallbackReason: "aborted" };
