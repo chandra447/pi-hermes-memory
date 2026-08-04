@@ -1,4 +1,5 @@
 import { keyHint, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import stripAnsi from "strip-ansi";
 import {
   Text,
   sliceByColumn,
@@ -38,6 +39,12 @@ function textBlocks(content: unknown): string[] {
   });
 }
 
+function sanitizeDisplayText(text: string): string {
+  return stripAnsi(text).replace(/[\p{Cc}\p{Cs}\uFFF9-\uFFFB]/gu, (character) =>
+    character === "\n" || character === "\t" ? character : ""
+  );
+}
+
 function firstLine(text: string): string {
   return text.split(/\r?\n/).find((line) => line.trim())?.trim() ?? "";
 }
@@ -52,12 +59,13 @@ function reason(details: Record<string, unknown> | null): string {
 export function normalizeSharedOutputView(input: unknown): SharedOutputView {
   const result = record(input);
   const details = record(result?.details);
-  const expandedText = textBlocks(result?.content).join("\n");
+  const expandedText = sanitizeDisplayText(textBlocks(result?.content).join("\n"));
+  const detailsReason = sanitizeDisplayText(reason(details));
   const failure = result?.isError === true || details?.success === false || details?.isError === true;
   const status: SharedStatus = failure ? "failure" : expandedText.trim() ? "success" : "empty";
   const summary = failure
-    ? reason(details) || firstLine(expandedText) || "Error"
-    : firstLine(expandedText) || reason(details) || "No output";
+    ? detailsReason || firstLine(expandedText) || "Error"
+    : firstLine(expandedText) || detailsReason || "No output";
   return { summary, expandedText, status };
 }
 
@@ -146,10 +154,15 @@ export function createSharedToolResultRenderer(
     context?: { isError?: boolean },
   ): Component => {
     const adapted = adapt(result);
-    const view = context?.isError ? { ...adapted, status: "failure" as const } : adapted;
+    const displayView = {
+      ...adapted,
+      summary: sanitizeDisplayText(adapted.summary),
+      expandedText: sanitizeDisplayText(adapted.expandedText),
+    };
+    const view = context?.isError ? { ...displayView, status: "failure" as const } : displayView;
     const background: ToolCardBackground = options.isPartial
       ? "toolPendingBg"
-      : view.status === "failure"
+      : context?.isError
         ? "toolErrorBg"
         : "toolSuccessBg";
     return renderView(view, options, theme, background);

@@ -97,6 +97,53 @@ describe("shared tool-result view", () => {
     assert.equal(expanded, toolResult.content[0].text);
   });
 
+  it("sanitizes only the rendered copy of hostile tool text and failure details", () => {
+    const hostileText = [
+      "safe 世界 \x1b]52;c;YXR0YWNr\x07 after OSC",
+      "styled \x1b[31mred\x1b[0m moved \x1b[2J after CSI",
+      "private \x1bPdanger\x1b\\ after DCS",
+      "linked \x1b]8;;https://evil.example\x1b\\label\x1b]8;;\x1b\\ after ST",
+      "carriage\rreturn binary\x00\x08\x7f end",
+    ].join("\n");
+    const hostileReason = "query \x1b]52;c;YXR0YWNr\x07 is required\x00";
+    const toolResult = result(hostileText, {
+      success: false,
+      message: hostileReason,
+      nested: { keep: true },
+    });
+    const before = structuredClone(toolResult);
+
+    const collapsed = renderToolResult(toolResult, false);
+    const expanded = renderToolResult(toolResult, true);
+
+    for (const rendered of [collapsed, expanded]) {
+      assert.doesNotMatch(rendered, /\x1b|\x07|\x00|\x08|\x7f|\r/);
+    }
+    assert.match(collapsed, /query .* is required/);
+    assert.match(expanded, /safe 世界/);
+    assert.match(expanded, /styled red moved  after CSI/);
+    assert.match(expanded, /private danger\\ after DCS/);
+    assert.match(expanded, /linked label after ST/);
+    assert.match(expanded, /carriagereturn binary end/);
+    assert.deepEqual(toolResult, before);
+
+    const adapterResult = result("safe", {
+      success: true,
+      message: "Entry added.",
+      target: "memory\x1b[2J",
+      usage: "1 entry\x00",
+    });
+    const adapterBefore = structuredClone(adapterResult);
+    const adapterRendered = renderPlain(createSharedToolResultRenderer(memoryResultView)(
+      adapterResult,
+      { expanded: false, isPartial: false },
+      fakeTheme(),
+      { isError: false },
+    ));
+    assert.doesNotMatch(adapterRendered, /\x1b|\x00/);
+    assert.deepEqual(adapterResult, adapterBefore);
+  });
+
   it("does not mutate model-visible content or details", () => {
     const toolResult = result("immutable\nfull output", {
       success: true,
@@ -158,7 +205,7 @@ describe("shared tool-result view", () => {
     assertRowKeepsBackground(rows[1]);
   });
 
-  it("keeps the tool-card background across expanded Text rows with ANSI resets and CJK wrapping", () => {
+  it("keeps the tool-card background after sanitizing expanded ANSI and CJK text", () => {
     const width = 18;
     const backgroundOpen = "\x1b[48;2;40;50;40m";
     const ansiTheme = {
@@ -182,6 +229,50 @@ describe("shared tool-result view", () => {
     }
     const expandedRows = rows.slice(1, -1).map((row) => stripAnsi(row).trim());
     assert.deepEqual(expandedRows, ["第一行 世界世界", "世界继续", "第二行 背景保留"]);
+  });
+
+  it("uses Pi shell state for the card background and logical status for foreground", () => {
+    const scenarios = [
+      { partial: true, isError: false, success: false, background: "toolPendingBg", foreground: "warning" },
+      { partial: false, isError: true, success: true, background: "toolErrorBg", foreground: "error" },
+      { partial: false, isError: false, success: true, background: "toolSuccessBg", foreground: "toolOutput" },
+      { partial: false, isError: false, success: false, background: "toolSuccessBg", foreground: "error" },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const backgrounds: string[] = [];
+      const foregrounds: string[] = [];
+      const theme = {
+        fg: (color: string, text: string): string => {
+          foregrounds.push(color);
+          return text;
+        },
+        getBgAnsi: (color: string): string => {
+          backgrounds.push(color);
+          return "";
+        },
+      } as any;
+      const message = scenario.success ? "done" : "query is required";
+      const toolResult = result(message, { success: scenario.success, message });
+
+      const renderer = createSharedToolResultRenderer();
+      const rendered = renderPlain(renderer(
+        toolResult,
+        { expanded: false, isPartial: scenario.partial },
+        theme,
+        { isError: scenario.isError },
+      ));
+      renderPlain(renderer(
+        toolResult,
+        { expanded: true, isPartial: scenario.partial },
+        theme,
+        { isError: scenario.isError },
+      ));
+
+      assert.deepEqual(backgrounds, [scenario.background, scenario.background]);
+      assert.deepEqual(foregrounds, [scenario.foreground]);
+      if (!scenario.success) assert.match(rendered, /query is required/);
+    }
   });
 });
 
