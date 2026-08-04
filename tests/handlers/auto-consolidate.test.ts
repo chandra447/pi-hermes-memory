@@ -510,6 +510,12 @@ describe("triggerConsolidation", () => {
       assert.strictEqual(result.error, undefined);
       assert.strictEqual(directCalls.length, 1);
       assert.strictEqual(execCalls.length, 0, "subprocess must not run on successful direct consolidation");
+      const directOptions = directCalls[0]?.[3] as {
+        requireAtomicShrink?: boolean;
+        expectedTarget?: string;
+      };
+      assert.strictEqual(directOptions.requireAtomicShrink, true);
+      assert.strictEqual(directOptions.expectedTarget, "memory");
     });
 
     it("falls back to subprocess when direct transport succeeds with appliedCount 0", async () => {

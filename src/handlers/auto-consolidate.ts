@@ -208,6 +208,8 @@ export async function triggerConsolidation(
           config: llmConfig,
           timeoutMs,
           signal,
+          requireAtomicShrink: true,
+          expectedTarget: toolTarget,
         },
         dbManager,
         projectName,
