@@ -65,7 +65,12 @@ export function memoryResultView(result: unknown): SharedOutputView {
           : "Updated";
   const parts = [outcome];
   if (typeof data.target === "string" && data.target.trim()) parts.push(`target: ${data.target.trim()}`);
-  if (typeof data.category === "string" && data.category.trim()) parts.push(`category: ${data.category.trim()}`);
+  const category = typeof data.category === "string" && data.category.trim()
+    ? data.category.trim()
+    : data.target === "failure"
+      ? primaryMessage.match(/^Failure memory saved:\s*(\S+)/i)?.[1] ?? null
+      : null;
+  if (category) parts.push(`category: ${category}`);
   if (evicted > 0) parts.push(`evicted: ${evicted}`);
   if (typeof data.entry_count === "number") parts.push(`${data.entry_count} ${data.entry_count === 1 ? "entry" : "entries"}`);
   if (typeof data.usage === "string" && data.usage.trim()) parts.push(data.usage.trim());

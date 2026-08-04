@@ -230,4 +230,42 @@ describe("tool-specific summaries", () => {
       ),
     ), new RegExp(error.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
+
+  it("summarizes successful failure memory from the real producer result shape", () => {
+    // MemoryResult has no category field; producers encode it only in message.
+    const details = {
+      success: true,
+      target: "failure",
+      message: "Failure memory saved: tool-quirk",
+      entry_count: 16,
+      usage: "92% — 9271/10000 chars",
+    };
+    const fullText = JSON.stringify(details);
+    const toolResult = result(fullText, details);
+    const before = structuredClone(toolResult);
+    const view = memoryResultView(toolResult);
+
+    assert.equal(view.status, "success");
+    assert.equal(
+      view.summary,
+      "Saved · target: failure · category: tool-quirk · 16 entries · 92% — 9271/10000 chars",
+    );
+    assert.doesNotMatch(view.summary, /^failure:/);
+    assert.equal(view.expandedText, fullText);
+    assert.deepEqual(toolResult, before);
+
+    const collapsed = renderPlain(
+      createSharedToolResultRenderer(memoryResultView)(
+        toolResult,
+        { expanded: false, isPartial: false },
+        fakeTheme(),
+        { isError: false },
+      ),
+    );
+    assert.match(
+      collapsed,
+      /Saved · target: failure · category: tool-quirk · 16 entries · 92% — 9271\/10000 chars/,
+    );
+    assert.doesNotMatch(collapsed, /^failure:/);
+  });
 });
