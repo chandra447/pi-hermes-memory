@@ -116,8 +116,19 @@ const AUTH_ADAPTER_NAME_PATTERNS: readonly RegExp[] = [
   /(^|[-/])auth-adapter$/,
 ];
 
+// These provider adapters predate the *-auth-adapter convention. Keep this
+// list exact so an arbitrary suffixless *-auth package cannot access child
+// maintenance prompts.
+const AUTH_ADAPTER_PACKAGE_NAMES: ReadonlySet<string> = new Set([
+  "pi-claude-auth",
+  "@gotgenes/pi-anthropic-auth",
+]);
+
 function isAuthAdapterPackageName(name: string): boolean {
-  return AUTH_ADAPTER_NAME_PATTERNS.some((pattern) => pattern.test(name));
+  return (
+    AUTH_ADAPTER_PACKAGE_NAMES.has(name)
+    || AUTH_ADAPTER_NAME_PATTERNS.some((pattern) => pattern.test(name))
+  );
 }
 
 // Read a sibling package's "pi": { "extensions": [...] } manifest field —
@@ -166,7 +177,7 @@ function scanRootForAuthAdapters(root: string): string[] {
         continue;
       }
       for (const scopedName of scopedPackages) {
-        if (!isAuthAdapterPackageName(scopedName)) continue;
+        if (!isAuthAdapterPackageName(`${entry}/${scopedName}`)) continue;
         detected.push(...readPackageExtensionEntries(join(scopeDir, scopedName)));
       }
       continue;

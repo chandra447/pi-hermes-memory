@@ -27,7 +27,12 @@ const OWN_EXTENSION_PATH = path.resolve(
   "../../src/index.ts",
 );
 
-const EXT_ARGS = ["--no-extensions", "-e", OWN_EXTENSION_PATH];
+// Adapter detection scans the real sibling/agent node_modules trees, so a
+// contributor with a provider auth adapter installed gets extra -e args in
+// every child invocation. Derive them instead of assuming a bare environment.
+const DETECTED_ADAPTER_ARGS = detectAuthAdapterExtensionPaths().flatMap((p) => ["-e", p]);
+
+const EXT_ARGS = ["--no-extensions", "-e", OWN_EXTENSION_PATH, ...DETECTED_ADAPTER_ARGS];
 
 describe("inheritedExtensionArgs", () => {
   it("captures explicit -e and --extension parent args", () => {
@@ -203,6 +208,60 @@ describe("detectAuthAdapterExtensionPaths", () => {
       await fs.rm(rootB, { recursive: true, force: true });
     }
   });
+
+  it("detects the allowlisted pi-claude-auth package", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-auth-detect-claude-"));
+    const adapterDir = path.join(root, "pi-claude-auth");
+    const adapterPath = path.join(adapterDir, "src", "index.ts");
+    await fs.mkdir(path.dirname(adapterPath), { recursive: true });
+    await fs.writeFile(adapterPath, "export default () => {};");
+    await fs.writeFile(
+      path.join(adapterDir, "package.json"),
+      JSON.stringify({ name: "pi-claude-auth", pi: { extensions: ["src/index.ts"] } }),
+    );
+    try {
+      assert.deepStrictEqual(detectAuthAdapterExtensionPaths([root]), [adapterPath]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("detects the allowlisted scoped @gotgenes/pi-anthropic-auth package", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-auth-detect-anthropic-"));
+    const adapterDir = path.join(root, "@gotgenes", "pi-anthropic-auth");
+    const adapterPath = path.join(adapterDir, "src", "index.ts");
+    await fs.mkdir(path.dirname(adapterPath), { recursive: true });
+    await fs.writeFile(adapterPath, "export default () => {};");
+    await fs.writeFile(
+      path.join(adapterDir, "package.json"),
+      JSON.stringify({
+        name: "@gotgenes/pi-anthropic-auth",
+        pi: { extensions: ["src/index.ts"] },
+      }),
+    );
+    try {
+      assert.deepStrictEqual(detectAuthAdapterExtensionPaths([root]), [adapterPath]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a suffixless auth package that is not allowlisted", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-auth-detect-untrusted-"));
+    const pkgDir = path.join(root, "pi-vault-auth");
+    const extPath = path.join(pkgDir, "index.ts");
+    await fs.mkdir(pkgDir, { recursive: true });
+    await fs.writeFile(extPath, "export default () => {};");
+    await fs.writeFile(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({ name: "pi-vault-auth", pi: { extensions: ["index.ts"] } }),
+    );
+    try {
+      assert.deepStrictEqual(detectAuthAdapterExtensionPaths([root]), []);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 
@@ -250,6 +309,7 @@ describe("buildChildPiPromptArgs", () => {
           "-p", "--no-session", "--no-extensions",
           "-e", OWN_EXTENSION_PATH,
           "-e", configured,
+          ...DETECTED_ADAPTER_ARGS,
           "hello",
         ],
       );
