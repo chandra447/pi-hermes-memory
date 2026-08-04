@@ -20,6 +20,8 @@ import {
 } from "../store/sqlite-memory-store.js";
 import { MEMORY_TOOL_DESCRIPTION } from "../constants.js";
 import type { MemoryCategory, MemoryResult } from "../types.js";
+import { createSharedToolResultRenderer } from "./shared-output-view.js";
+import { memoryResultView } from "./tool-result-views.js";
 
 function appendSyncWarning(result: MemoryResult, warning: string): MemoryResult {
   const warnings = [...(((result as any).warnings ?? []) as string[]), warning];
@@ -241,6 +243,7 @@ export function registerMemoryTool(
       "Do NOT use memory for temporary task state, TODO items, or session progress — only for durable, cross-session facts.",
       "Use target='failure' with category to save what didn't work (failures, corrections, insights).",
     ],
+    renderResult: createSharedToolResultRenderer(memoryResultView),
     parameters: Type.Object({
       action: StringEnum(["add", "replace", "remove"] as const),
       target: StringEnum(["memory", "user", "project", "failure"] as const),

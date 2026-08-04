@@ -4,6 +4,8 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { DatabaseManager } from '../store/db.js';
 import { searchMemories, getMemoryStats } from '../store/sqlite-memory-store.js';
 import type { MemoryCategory } from '../types.js';
+import { createSharedToolResultRenderer } from './shared-output-view.js';
+import { searchResultView } from './tool-result-views.js';
 
 interface SearchResult {
   success: boolean;
@@ -31,6 +33,7 @@ Returns matching memory entries with project context and dates.`,
       'Use memory_search to find project-specific memories or user preferences.',
       'Use memory_search with category filter to find specific types of memories (failure, correction, insight, etc.).',
     ],
+    renderResult: createSharedToolResultRenderer(searchResultView),
     parameters: Type.Object({
       query: Type.String({ description: 'Search query. Use natural language or specific terms.' }),
       project: Type.Optional(Type.String({ description: 'Filter by project name. Pass null for global memories only.' })),

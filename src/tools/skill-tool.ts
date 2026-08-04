@@ -8,6 +8,8 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { SkillStore } from "../store/skill-store.js";
 import { SKILL_TOOL_DESCRIPTION } from "../constants.js";
+import { createSharedToolResultRenderer } from "./shared-output-view.js";
+import { skillResultView } from "./tool-result-views.js";
 
 function normalizeTextList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -103,6 +105,7 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore): void {
       "Use 'view' before patching or updating when you need to inspect an existing skill.",
       "Do NOT use skills for temporary task state — only for durable, reusable procedures.",
     ],
+    renderResult: createSharedToolResultRenderer(skillResultView),
     parameters: SKILL_TOOL_PARAMETERS,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const skillParams = params as {

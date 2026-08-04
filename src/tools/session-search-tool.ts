@@ -8,6 +8,8 @@ import { searchSessionAnchors } from '../store/session-anchor-search.js';
 import type { SessionAnchorRange, SessionAnchorSearchResult } from '../store/session-anchor-search.js';
 import type { SessionSearchConfig } from '../types.js';
 import { AGENT_ROOT } from '../paths.js';
+import { createSharedToolResultRenderer } from './shared-output-view.js';
+import { searchResultView } from './tool-result-views.js';
 
 interface SearchResult {
   success: boolean;
@@ -90,6 +92,7 @@ exclude:
       'Request source anchors, not summaries or previews.',
       'Use all for required terms, any for alternatives, and exclude for terms that must not appear in a returned range.',
     ],
+    renderResult: createSharedToolResultRenderer(searchResultView),
     parameters: Type.Object({
       markdown: Type.String({ description: 'Markdown request with optional from/to/cwd/limit fields and all/any/exclude lists.' }),
     }),
@@ -157,6 +160,7 @@ Returns bounded conversation snippets with session dates and project context. La
       'Use session_search when the user asks about previous discussions or past work.',
       'Use session_search when you need context from earlier sessions.',
     ],
+    renderResult: createSharedToolResultRenderer(searchResultView),
     parameters: Type.Object({
       query: Type.String({ description: 'Search query. Use natural language or specific terms.' }),
       project: Type.Optional(Type.String({ description: 'Filter by project name (optional).' })),
