@@ -38,6 +38,7 @@ describe("loadConfig", () => {
     assert.deepStrictEqual(config.sessionSearch, { variant: "legacy" });
     assert.strictEqual(config.llmModelOverride, undefined);
     assert.strictEqual(config.llmThinkingOverride, undefined);
+    assert.strictEqual(config.standingInstructionsEnabled, true);
   });
 
   it("honors a configured consolidationTimeoutMs, warning only when it is below the default", () => {

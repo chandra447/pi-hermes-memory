@@ -163,6 +163,32 @@ System Prompt
 
 Set `"memoryPolicyStyle"` to `"full"`, `"compact"`, `"custom"`, or `"none"` to choose policy verbosity while keeping policy-only mode. Set `"memoryMode": "legacy-inject"` to restore the old behavior that injects MEMORY.md, USER.md, project memory, and recent failures into the prompt.
 
+## Standing Instructions
+
+Recall is probabilistic. In `policy-only` mode a stored rule only takes effect if the agent decides to call `memory_search` **before** the action the rule would have prevented — and for a prohibition, that is exactly the moment it has no reason to look. Preferences survive a missed lookup; prohibitions do not.
+
+Standing instructions are the answer to that: a small, user-authored file that is injected into **every** session, in every memory mode.
+
+```
+/memory-pin never run find / or other root-wide filesystem searches
+/memory-pin                     # list what is pinned and how much budget is left
+/memory-pin remove 2            # drop one
+/memory-pin clear               # drop all
+```
+
+They land in a `<standing-instructions>` block placed after the memory policy, so they read as a direct user directive rather than as recalled context.
+
+| Property | Behavior |
+|---|---|
+| **Provenance** | Stored in `~/.pi/agent/pi-hermes-memory/STANDING.md`. Background review, consolidation, and the correction detector never write there — only your editor or `/memory-pin` can. The agent cannot promote its own memory into this block. |
+| **Budget** | Hard cap of 20 entries / 2,000 characters, separate from `memoryCharLimit` and `userCharLimit`. `/memory-pin` refuses a write past the cap; a hand-edited file over the cap is truncated at injection and the omission is stated loudly inside the block. |
+| **Safety** | Every pin goes through the same `scanContent()` injection/exfiltration scan as any memory write, and the block is fenced. |
+| **Disabling** | Set `"standingInstructionsEnabled": false` to drop the store and the command entirely. |
+
+Run `/memory-preview-context` to see exactly what is injected.
+
+This is deliberately *not* tool enforcement. If you need a hard block on a dangerous command rather than a reliable instruction, add a `tool_call` guard — that is a different feature with a different failure mode.
+
 ## Failure Memory
 
 The agent learns from failures, corrections, and insights — just like humans do.
@@ -483,7 +509,8 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "flushOnCompact": true,
   "flushOnShutdown": true,
   "flushMinTurns": 6,
-  "flushRecentMessages": 0
+  "flushRecentMessages": 0,
+  "standingInstructionsEnabled": true
 }
 ```
 
@@ -492,6 +519,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `memoryMode` | `policy-only` | Prompt behavior: `policy-only` injects only memory policy; `legacy-inject` restores full memory prompt injection |
 | `memoryPolicyStyle` | `full` | Policy text used in `policy-only` mode: `full` preserves the default v0.7 policy; `compact` uses shorter built-in guidance; `custom` uses `memoryPolicyCustomText`; `none` injects no policy text |
 | `memoryPolicyCustomText` | unset | Custom policy text used when `memoryPolicyStyle` is `custom`; blank or missing text falls back to `compact` |
+| `standingInstructionsEnabled` | `true` | Inject `STANDING.md` (pinned via `/memory-pin`) into every session, in every memory mode |
 | `memoryCharLimit` | `5000` | Max characters in MEMORY.md |
 | `userCharLimit` | `5000` | Max characters in USER.md |
 | `projectCharLimit` | `5000` | Max characters in project-scoped MEMORY.md |

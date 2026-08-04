@@ -82,6 +82,8 @@ export interface MemoryConfig {
   nudgeToolCalls: number;
   /** Maximum time in milliseconds for a consolidation run, auto or manual. Default: 180000 */
   consolidationTimeoutMs: number;
+  /** Inject pinned STANDING.md instructions into every session. Default: true */
+  standingInstructionsEnabled: boolean;
 }
 
 export type MemoryCategory =

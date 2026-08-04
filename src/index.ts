@@ -48,6 +48,9 @@ import { registerIndexSessionsCommand } from "./handlers/index-sessions.js";
 import { registerLearnMemoryCommand } from "./handlers/learn-memory.js";
 import { migrateThenSyncMarkdownMemories, registerSyncMarkdownMemoriesCommand } from "./handlers/sync-markdown-memories.js";
 import { registerPreviewContextCommand } from "./handlers/preview-context.js";
+import { registerStandingPinCommand } from "./handlers/standing-pin.js";
+import { StandingInstructions } from "./store/standing-instructions.js";
+import { STANDING_FILE } from "./constants.js";
 import { loadConfig } from "./config.js";
 import { detectProject, detectProjectSkills } from "./project.js";
 import { buildPromptContext } from "./prompt-context.js";
@@ -143,6 +146,11 @@ export default function (pi: ExtensionAPI) {
     ? { ...config, memoryCharLimit: config.projectCharLimit, memoryDir: project.memoryDir }
     : { ...config, memoryDir: undefined };
   const projectStore = project.memoryDir ? new MemoryStore(projectConfig) : null;
+  // Never written by review, consolidation or the correction detector — see
+  // store/standing-instructions.ts for why provenance has to be structural.
+  const standingStore = config.standingInstructionsEnabled !== false
+    ? new StandingInstructions(path.join(globalDir, STANDING_FILE))
+    : null;
 
   // ── 1. Load memory from disk on session start ──
   pi.on("session_start", async (_event, ctx) => {
@@ -172,6 +180,7 @@ export default function (pi: ExtensionAPI) {
     await skillStore.ensureDiscoveredRoots();
     await store.loadFromDisk();
     if (projectStore) await projectStore.loadFromDisk();
+    if (standingStore) await standingStore.load();
 
     if (persistenceInitialized) scheduleSessionBackfill(dbManager, sessionsDir, {
       notify: (message, level) => {
@@ -191,7 +200,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
   pi.on("before_agent_start", async (event, _ctx) => {
-    const promptContext = await buildPromptContext(config, store, projectStore, projectName);
+    const promptContext = await buildPromptContext(config, store, projectStore, projectName, standingStore);
 
     if (promptContext) {
       return {
@@ -257,7 +266,8 @@ export default function (pi: ExtensionAPI) {
   registerSwitchProjectCommand(pi, config);
   registerLearnMemoryCommand(pi);
   registerSyncMarkdownMemoriesCommand(pi, dbManager, globalDir, config.projectsMemoryDir, agentRoot);
-  registerPreviewContextCommand(pi, store, projectStore, projectName, config);
+  registerPreviewContextCommand(pi, store, projectStore, projectName, config, standingStore);
+  if (standingStore) registerStandingPinCommand(pi, standingStore);
 
   // ── 10. Live session indexing ──
   pi.on("message_end", async (_event, ctx) => {

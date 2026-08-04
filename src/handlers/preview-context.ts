@@ -5,8 +5,21 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
+import type { StandingInstructions } from "../store/standing-instructions.js";
 import { resolveMemoryPolicyPrompt } from "../prompt-context.js";
 import type { MemoryConfig } from "../types.js";
+
+function appendStandingBlock(lines: string[], standing: StandingInstructions | null): number {
+  const rendered = standing?.render();
+  if (!rendered?.block) return 0;
+  lines.push("  ── STANDING INSTRUCTIONS (always injected) ─────────────────");
+  lines.push(rendered.block);
+  if (rendered.omittedCount > 0) {
+    lines.push(`  ⚠️ ${rendered.omittedCount} pinned instruction(s) exceed the budget and are NOT injected.`);
+  }
+  lines.push("");
+  return 1;
+}
 
 export function registerPreviewContextCommand(
   pi: ExtensionAPI,
@@ -14,6 +27,7 @@ export function registerPreviewContextCommand(
   projectStore: MemoryStore | null,
   projectName: string,
   config: Pick<MemoryConfig, "memoryMode" | "memoryPolicyStyle" | "memoryPolicyCustomText"> = { memoryMode: "policy-only" },
+  standing: StandingInstructions | null = null,
 ): void {
   pi.registerCommand("memory-preview-context", {
     description: "Preview the memory policy or legacy memory context blocks",
@@ -31,15 +45,17 @@ export function registerPreviewContextCommand(
         lines.push("  This is the memory policy appended to the system prompt.");
         lines.push("  Full Markdown memories are NOT injected in this mode.");
         lines.push("");
+        let blockCount = 0;
         if (policyPrompt) {
+          blockCount++;
           lines.push(policyPrompt);
           lines.push("");
-          lines.push("  Blocks shown: 1");
         } else {
           lines.push("  No memory policy context is injected for this policy style.");
           lines.push("");
-          lines.push("  Blocks shown: 0");
         }
+        blockCount += appendStandingBlock(lines, standing);
+        lines.push(`  Blocks shown: ${blockCount}`);
         ctx.ui.notify(lines.join("\n"), "info");
         return;
       }
@@ -72,6 +88,8 @@ export function registerPreviewContextCommand(
         lines.push(projectBlock);
         lines.push("");
       }
+
+      blockCount += appendStandingBlock(lines, standing);
 
       if (blockCount === 0) {
         lines.push("  No memory context blocks are currently injected.");
