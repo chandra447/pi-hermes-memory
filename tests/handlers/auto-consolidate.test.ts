@@ -100,6 +100,21 @@ async function settle(ms = 10) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
+/** Scope the contended-lock poll window so contention tests stay fast. */
+async function withLockWait(waitMs: string, run: () => Promise<void>): Promise<void> {
+  const previous = process.env.PI_HERMES_CONSOLIDATION_LOCK_WAIT_MS;
+  process.env.PI_HERMES_CONSOLIDATION_LOCK_WAIT_MS = waitMs;
+  try {
+    await run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.PI_HERMES_CONSOLIDATION_LOCK_WAIT_MS;
+    } else {
+      process.env.PI_HERMES_CONSOLIDATION_LOCK_WAIT_MS = previous;
+    }
+  }
+}
+
 type ManualCommandHandler = (args: unknown, ctx: unknown) => Promise<void>;
 
 async function runManualConsolidate(timeoutMs?: number): Promise<void> {
@@ -174,7 +189,7 @@ describe("triggerConsolidation", () => {
     }
   });
 
-  it("skips a duplicate subprocess while the same target is consolidating", async () => {
+  it("defers a duplicate subprocess while the same target is consolidating", async () => {
     const releaseExecs: Array<() => void> = [];
     let markExecStarted!: () => void;
     const execStarted = new Promise<void>((resolve) => { markExecStarted = resolve; });
@@ -190,21 +205,95 @@ describe("triggerConsolidation", () => {
       registerCommand: () => {},
     } as any;
 
-    const first = triggerConsolidation(pi, mockStore, "memory");
-    await execStarted;
-    const second = triggerConsolidation(pi, mockStore, "memory");
-    const raced = await Promise.race([
-      second.then((result) => ({ result })),
-      settle(100).then(() => ({ timeout: true as const })),
-    ]);
+    await withLockWait("0", async () => {
+      const first = triggerConsolidation(pi, mockStore, "memory");
+      await execStarted;
+      const second = triggerConsolidation(pi, mockStore, "memory");
+      const raced = await Promise.race([
+        second.then((result) => ({ result })),
+        settle(100).then(() => ({ timeout: true as const })),
+      ]);
 
-    releaseExecs.forEach((release) => release());
-    await Promise.allSettled([first, second]);
+      releaseExecs.forEach((release) => release());
+      await Promise.allSettled([first, second]);
 
-    assert.ok("result" in raced, "duplicate consolidation should return without spawning another child");
-    assert.strictEqual(raced.result.consolidated, false);
-    assert.match(raced.result.error!, /already in progress/i);
-    assert.strictEqual(execCalls.length, 1, "only one child Pi process should be spawned");
+      assert.ok("result" in raced, "duplicate consolidation should return without spawning another child");
+      assert.strictEqual(raced.result.consolidated, false);
+      assert.strictEqual(raced.result.deferred, true, "contention is deferral, not failure");
+      assert.match(raced.result.error!, /already in progress/i);
+      assert.strictEqual(execCalls.length, 1, "only one child Pi process should be spawned");
+    });
+  });
+
+  it("waits out transient contention instead of failing the caller", async () => {
+    const releaseExecs: Array<() => void> = [];
+    let markFirstExecStarted!: () => void;
+    const firstExecStarted = new Promise<void>((resolve) => { markFirstExecStarted = resolve; });
+    const pi = {
+      on: () => {},
+      exec: async (...args: any[]) => {
+        execCalls.push(captureExecArgs(args));
+        if (execCalls.length === 1) {
+          markFirstExecStarted();
+          await new Promise<void>((resolve) => { releaseExecs.push(resolve); });
+        }
+        return { code: 0, stdout: "Done", stderr: "" };
+      },
+      registerTool: () => {},
+      registerCommand: () => {},
+    } as any;
+
+    await withLockWait("2000", async () => {
+      const first = triggerConsolidation(pi, mockStore, "memory");
+      await firstExecStarted;
+      const second = triggerConsolidation(pi, mockStore, "memory");
+      await settle(20);
+      releaseExecs.forEach((release) => release());
+
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      assert.strictEqual(firstResult.consolidated, true);
+      assert.strictEqual(secondResult.consolidated, true, "the queued caller should consolidate, not hard-fail");
+      assert.strictEqual(secondResult.deferred, undefined);
+      assert.strictEqual(execCalls.length, 2);
+    });
+  });
+
+  it("skips its own child when the session it queued behind already freed space", async () => {
+    let entries = ["old entry 1", "old entry 2"];
+    const shrinkingStore = {
+      getMemoryEntries: () => entries,
+      getUserEntries: () => [],
+      getAllFailureEntries: () => [],
+      getStorageIdentity: async (target: string) => path.join("shrinking-store", target),
+      loadFromDisk: async () => { entries = ["merged"]; },
+    } as any;
+
+    const releaseExecs: Array<() => void> = [];
+    let markFirstExecStarted!: () => void;
+    const firstExecStarted = new Promise<void>((resolve) => { markFirstExecStarted = resolve; });
+    const pi = {
+      on: () => {},
+      exec: async (...args: any[]) => {
+        execCalls.push(captureExecArgs(args));
+        markFirstExecStarted();
+        await new Promise<void>((resolve) => { releaseExecs.push(resolve); });
+        return { code: 0, stdout: "Done", stderr: "" };
+      },
+      registerTool: () => {},
+      registerCommand: () => {},
+    } as any;
+
+    await withLockWait("2000", async () => {
+      const first = triggerConsolidation(pi, shrinkingStore, "memory");
+      await firstExecStarted;
+      const second = triggerConsolidation(pi, shrinkingStore, "memory");
+      await settle(20);
+      releaseExecs.forEach((release) => release());
+
+      const [, secondResult] = await Promise.all([first, second]);
+      assert.strictEqual(secondResult.consolidated, true);
+      assert.strictEqual(execCalls.length, 1, "a second LLM pass is pure cost once space is already free");
+    });
   });
 
   it("allows the same project target to consolidate concurrently in distinct stores", async () => {
@@ -821,6 +910,24 @@ describe("MemoryStore auto-consolidation integration", () => {
     const result = await store.add("memory", "b".repeat(20));
 
     assert.ok(result.error!.includes("Auto-consolidation attempted but failed: no reason reported"), result.error);
+  });
+
+  it("add() asks for a retry instead of reporting failure when consolidation is deferred", async () => {
+    const store = await storeWithConsolidator("deferred", async () => ({
+      consolidated: false,
+      deferred: true,
+      error: "Consolidation already in progress for target 'memory' in another session (waited 5000ms).",
+    }));
+
+    const result = await store.add("memory", "b".repeat(20));
+
+    assert.ok(!result.success, "the entry genuinely was not saved");
+    assert.ok(result.error!.startsWith("Memory at "), "original capacity error must be preserved");
+    assert.ok(result.error!.includes("retry in a moment"), result.error);
+    assert.ok(
+      !result.error!.includes("Auto-consolidation attempted but failed"),
+      `lock contention must not read as a broken consolidation, got: ${result.error}`,
+    );
   });
 
   it("add() surfaces a consolidator that throws", async () => {

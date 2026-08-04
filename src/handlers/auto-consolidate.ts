@@ -36,11 +36,30 @@ type MemoryTarget = "memory" | "user" | "failure";
 type ToolMemoryTarget = MemoryTarget | "project";
 type ConsolidationLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride" | "reviewTransport">;
 
-const CONSOLIDATION_LOCK_STALE_GRACE_MS = 30000;
+// staleMs is deliberately decoupled from the consolidation timeout. The holder
+// beats every CONSOLIDATION_LOCK_HEARTBEAT_MS while its child runs, so a
+// legitimately slow consolidation (up to 2x timeoutMs once retryWithoutOverrides
+// fires) never loses its lease, while a holder that stops making progress is
+// reclaimable after seconds instead of after its worst-case runtime (#144).
+const CONSOLIDATION_LOCK_STALE_MS = 45_000;
+const CONSOLIDATION_LOCK_HEARTBEAT_MS = 10_000;
+// Contention is usually transient. Poll for the lock the way
+// acquireMarkdownMutationLock does instead of hard-failing the memory write
+// that triggered auto-consolidation on the very first collision.
+const CONSOLIDATION_LOCK_WAIT_MS = 5_000;
+const CONSOLIDATION_LOCK_POLL_MS = 50;
 const CONSOLIDATION_LOCK_ENV = "PI_HERMES_CONSOLIDATION_LOCK_DIR";
+const CONSOLIDATION_LOCK_WAIT_ENV = "PI_HERMES_CONSOLIDATION_LOCK_WAIT_MS";
 
 interface ConsolidationLock {
   release: () => Promise<void>;
+}
+
+interface ConsolidationLockAttempt {
+  lock: ConsolidationLock | null;
+  /** True when the lock was held by someone else on the first attempt. */
+  contended: boolean;
+  waitedMs: number;
 }
 
 function consolidationLockRoot(): string {
@@ -57,21 +76,60 @@ function consolidationLockKey(target: MemoryTarget, toolTarget: ToolMemoryTarget
   return `${sanitizeLockPart(toolTarget)}:${sanitizeLockPart(target)}:${storageHash}`;
 }
 
-async function tryAcquireConsolidationLock(
+function consolidationLockWaitMs(): number {
+  const configured = Number(process.env[CONSOLIDATION_LOCK_WAIT_ENV]);
+  return Number.isFinite(configured) && configured >= 0 ? configured : CONSOLIDATION_LOCK_WAIT_MS;
+}
+
+async function acquireConsolidationLock(
   store: MemoryStore,
   target: MemoryTarget,
   toolTarget: ToolMemoryTarget,
-  timeoutMs: number,
-): Promise<ConsolidationLock | null> {
+): Promise<ConsolidationLockAttempt> {
   const storageIdentity = await store.getStorageIdentity(target);
   const root = consolidationLockRoot();
   await fs.mkdir(root, { recursive: true });
   const coordinator = AtomicLockCoordinator.shared(path.join(root, "locks.sqlite"));
-  const lease = coordinator.tryAcquire(
-    consolidationLockKey(target, toolTarget, storageIdentity),
-    { staleMs: Math.max(timeoutMs, 0) + CONSOLIDATION_LOCK_STALE_GRACE_MS },
-  );
-  return lease ? { release: async () => lease.release() } : null;
+  const key = consolidationLockKey(target, toolTarget, storageIdentity);
+  const lockOptions = { staleMs: CONSOLIDATION_LOCK_STALE_MS };
+
+  const startedAt = Date.now();
+  let lease = coordinator.tryAcquire(key, lockOptions);
+  const contended = !lease;
+  if (contended) {
+    const deadline = startedAt + consolidationLockWaitMs();
+    while (!lease && Date.now() < deadline) {
+      // Same shape as acquireMarkdownMutationLock; Promise.withResolvers would
+      // need an ES2024 lib this project does not target.
+      await new Promise((resolve) => setTimeout(resolve, CONSOLIDATION_LOCK_POLL_MS));
+      lease = coordinator.tryAcquire(key, lockOptions);
+    }
+  }
+
+  const waitedMs = Date.now() - startedAt;
+  if (!lease) return { lock: null, contended, waitedMs };
+
+  const held = lease;
+  const heartbeat = setInterval(() => {
+    try {
+      held.renew();
+    } catch {
+      // A missed beat only moves the lease closer to staleMs; the next beat
+      // recovers, and a permanently broken lock DB should not crash the run.
+    }
+  }, CONSOLIDATION_LOCK_HEARTBEAT_MS);
+  heartbeat.unref?.();
+
+  return {
+    lock: {
+      release: async () => {
+        clearInterval(heartbeat);
+        held.release();
+      },
+    },
+    contended,
+    waitedMs,
+  };
 }
 
 function entriesForTarget(store: MemoryStore, target: MemoryTarget): string[] {
@@ -99,6 +157,21 @@ function describeConsolidationFailure(
   }
 
   return `Consolidation process exited with code ${result.code}: ${stderr?.slice(0, 200) || "unknown error"}`;
+}
+
+function buildConsolidationPrompt(
+  target: MemoryTarget,
+  toolTarget: ToolMemoryTarget,
+  entries: string[],
+): string {
+  return [
+    CONSOLIDATION_PROMPT,
+    "",
+    `--- Current ${labelForTarget(target, toolTarget)} Entries ---`,
+    entries.join(ENTRY_DELIMITER) || "(empty)",
+    "",
+    `Use the memory tool to consolidate. Target: '${toolTarget}'`,
+  ].join("\n");
 }
 
 export async function triggerConsolidation(
@@ -150,27 +223,42 @@ export async function triggerConsolidation(
     }
   }
 
-  const prompt = [
-    CONSOLIDATION_PROMPT,
-    "",
-    `--- Current ${labelForTarget(target, toolTarget)} Entries ---`,
-    currentContent || "(empty)",
-    "",
-    `Use the memory tool to consolidate. Target: '${toolTarget}'`,
-  ].join("\n");
-
   let lock: ConsolidationLock | null = null;
 
   try {
-    lock = await tryAcquireConsolidationLock(store, target, toolTarget, timeoutMs);
+    const attempt = await acquireConsolidationLock(store, target, toolTarget);
+    lock = attempt.lock;
     if (!lock) {
+      // Not a failure: the work is already running in another session. Say so
+      // plainly so the memory-write path can ask for a retry instead of
+      // reporting a broken consolidation mid-task (#144).
       return {
         consolidated: false,
-        error: `Consolidation already in progress for target '${toolTarget}'. Skipping duplicate subprocess.`,
+        deferred: true,
+        error: `Consolidation already in progress for target '${toolTarget}' in another session`
+          + ` (waited ${attempt.waitedMs}ms). Nothing was consolidated here — retry shortly.`,
       };
     }
 
-    const result = await execChildPrompt(pi, prompt, llmConfig, {
+    let promptEntries = entries;
+    if (attempt.contended) {
+      // We queued behind another session's consolidation and it has now
+      // finished. If it already freed space, running a second LLM pass here
+      // costs a child turn and over-compresses memory for nothing — hand the
+      // caller a reload-and-retry instead.
+      try {
+        await store.loadFromDisk();
+        const refreshed = entriesForTarget(store, target);
+        if (refreshed.join(ENTRY_DELIMITER).length < currentContent.length) {
+          return { consolidated: true };
+        }
+        promptEntries = refreshed;
+      } catch {
+        // Reload failed — consolidate the entries we already read instead.
+      }
+    }
+
+    const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, promptEntries), llmConfig, {
       signal,
       timeoutMs,
       retryWithoutOverrides: true,

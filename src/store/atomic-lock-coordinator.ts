@@ -26,6 +26,12 @@ export interface AtomicLockOptions {
 export interface AtomicLockLease {
   token: string;
   release: () => void;
+  /**
+   * Refresh the lease timestamp so a long-running-but-healthy holder is never
+   * mistaken for a wedged one. Returns false once the lease has been taken
+   * over, which is the holder's signal that it no longer owns the resource.
+   */
+  renew: () => boolean;
 }
 
 export interface AtomicLockCoordinatorOptions {
@@ -93,6 +99,12 @@ function probeProcessIncarnation(pid: number): string | null {
 
 const currentProcessIncarnation = probeProcessIncarnation(process.pid);
 const RELEASE_ATTEMPTS = 3;
+// Opportunistic dead-row GC: a row must be older than the grace period before
+// a dead pid makes it collectable (guards against a pid we cannot observe, and
+// against racing a holder that has just inserted its row), and each coordinator
+// sweeps at most once per interval so acquisition stays cheap.
+const DEAD_LOCK_SWEEP_GRACE_MS = 60_000;
+const DEAD_LOCK_SWEEP_INTERVAL_MS = 60_000;
 const pendingReleases = new Map<string, () => void>();
 const sharedCoordinators = new Map<string, AtomicLockCoordinator>();
 
@@ -101,6 +113,7 @@ export class AtomicLockCoordinator {
   private readonly incarnation: string | null;
   private readonly probeIncarnation: (pid: number) => string | null;
   private cachedDb: DatabaseLike | null = null;
+  private lastSweepMs = 0;
 
   constructor(private readonly dbPath: string, options: AtomicLockCoordinatorOptions = {}) {
     this.pid = options.pid ?? process.pid;
@@ -116,6 +129,7 @@ export class AtomicLockCoordinator {
     const token = randomUUID();
     const now = Date.now();
     const db = this.open();
+    this.sweepDeadLocks(db, now);
     let acquired = false;
 
     db.exec('BEGIN IMMEDIATE');
@@ -174,6 +188,7 @@ export class AtomicLockCoordinator {
     return {
       token,
       release: () => this.release(key, token),
+      renew: () => this.renew(key, token),
     };
   }
 
@@ -193,6 +208,37 @@ export class AtomicLockCoordinator {
     return row?.token === token;
   }
 
+  /**
+   * Extend a held lease. A holder whose work legitimately outlives staleMs
+   * (a consolidation child can run for minutes) must beat periodically or a
+   * peer will reclaim the lease out from under it. Beating also lets staleMs
+   * stay short, so a holder that stops making progress is reclaimed in
+   * seconds instead of after its worst-case runtime.
+   *
+   * Token-fenced: a lease that has already been taken over renews nothing and
+   * returns false.
+   */
+  renew(key: string, token: string): boolean {
+    const db = this.open();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const owner = db.prepare('SELECT token FROM locks WHERE lock_key = ?').get(key) as { token: string } | undefined;
+      const owned = owner?.token === token;
+      if (owned) {
+        db.prepare('UPDATE locks SET acquired_at = ? WHERE lock_key = ? AND token = ?').run(Date.now(), key, token);
+      }
+      db.exec('COMMIT');
+      return owned;
+    } catch (error) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        this.discardCachedDb();
+      }
+      throw error;
+    }
+  }
+
   release(key: string, token: string): void {
     const pendingKey = this.pendingReleaseKey(key, token);
     for (let attempt = 0; attempt < RELEASE_ATTEMPTS; attempt++) {
@@ -209,6 +255,49 @@ export class AtomicLockCoordinator {
   private deleteOwnedLock(key: string, token: string): void {
     const db = this.open();
     db.prepare('DELETE FROM locks WHERE lock_key = ? AND token = ?').run(key, token);
+  }
+
+  /**
+   * Delete rows whose holder process is gone.
+   *
+   * Without this, a row is only ever reclaimed by a peer that asks for the
+   * same lock key again. A key belonging to an identity that never returns
+   * (a deleted project, a one-shot `pi -p` run) leaks its row forever, and a
+   * much later session using that identity pays a spurious wait.
+   *
+   * A dead process can never release or renew its lease, so deleting its row
+   * is always safe. Probing happens outside any transaction and the DELETE is
+   * fenced on (token, acquired_at) so a row re-taken in between is left alone.
+   */
+  private sweepDeadLocks(db: DatabaseLike, now: number): void {
+    if (now - this.lastSweepMs < DEAD_LOCK_SWEEP_INTERVAL_MS) return;
+    this.lastSweepMs = now;
+    try {
+      const rows = db
+        .prepare('SELECT lock_key, token, pid, acquired_at FROM locks WHERE acquired_at <= ?')
+        .all(now - DEAD_LOCK_SWEEP_GRACE_MS) as Array<{
+          lock_key: string;
+          token: string;
+          pid: number;
+          acquired_at: number;
+        }>;
+      const dead = rows.filter((row) => this.holderIsGone(row.pid));
+      if (dead.length === 0) return;
+      const remove = db.prepare('DELETE FROM locks WHERE lock_key = ? AND token = ? AND acquired_at = ?');
+      for (const row of dead) {
+        remove.run(row.lock_key, row.token, row.acquired_at);
+      }
+    } catch {
+      // GC is best-effort — never fail an acquisition because of it.
+    }
+  }
+
+  /** Same liveness test tryAcquire steals on, cheapest check first. */
+  private holderIsGone(pid: number): boolean {
+    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+    if (pid === this.pid) return false;
+    if (processIsAlive(pid)) return false;
+    return this.probeIncarnation(pid) === null;
   }
 
   private retryPendingReleases(key: string): void {

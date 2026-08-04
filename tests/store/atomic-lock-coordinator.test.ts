@@ -275,4 +275,107 @@ describe('AtomicLockCoordinator', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('keeps a beating holder out of reach of a stale takeover', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-lock-renew-'));
+    try {
+      const dbPath = path.join(tmpDir, 'locks.sqlite');
+      const owner = new AtomicLockCoordinator(dbPath, {
+        pid: process.pid,
+        probeIncarnation: () => null,
+      });
+      const lease = owner.tryAcquire('shared', { staleMs: 60_000 });
+      assert.ok(lease);
+
+      // Age the lease well past the contender's stale window. Without a beat
+      // this is exactly the state 'reclaims an alive unknown-incarnation owner
+      // after staleMs elapses' proves is stealable.
+      const lockDb = new Database(dbPath);
+      try {
+        lockDb.prepare('UPDATE locks SET acquired_at = ? WHERE lock_key = ?').run(Date.now() - 10_000, 'shared');
+      } finally {
+        lockDb.close();
+      }
+
+      assert.strictEqual(lease.renew(), true);
+
+      const contender = new AtomicLockCoordinator(dbPath, {
+        pid: process.pid,
+        incarnation: 'known-later',
+        probeIncarnation: () => 'known-later',
+      });
+      assert.strictEqual(contender.tryAcquire('shared', { staleMs: 5_000 }), null);
+      lease.release();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to renew a lease that was already taken over', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-lock-renew-fence-'));
+    try {
+      const dbPath = path.join(tmpDir, 'locks.sqlite');
+      const owner = new AtomicLockCoordinator(dbPath, {
+        pid: process.pid,
+        probeIncarnation: () => null,
+      });
+      const original = owner.tryAcquire('shared', { staleMs: 60_000 });
+      assert.ok(original);
+
+      const lockDb = new Database(dbPath);
+      try {
+        lockDb.prepare('UPDATE locks SET acquired_at = ? WHERE lock_key = ?').run(Date.now() - 10_000, 'shared');
+      } finally {
+        lockDb.close();
+      }
+
+      const contender = new AtomicLockCoordinator(dbPath, {
+        pid: process.pid,
+        incarnation: 'known-later',
+        probeIncarnation: () => 'known-later',
+      });
+      const successor = contender.tryAcquire('shared', { staleMs: 50 });
+      assert.ok(successor);
+
+      assert.strictEqual(original.renew(), false, 'a stolen lease must not resurrect itself');
+      assert.strictEqual(successor.renew(), true);
+      successor.release();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('collects lock rows whose holder process is gone', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-lock-sweep-'));
+    try {
+      const dbPath = path.join(tmpDir, 'locks.sqlite');
+      new AtomicLockCoordinator(dbPath).tryAcquire('schema-init', { staleMs: 0 })!.release();
+
+      const lockDb = new Database(dbPath);
+      try {
+        const insert = lockDb.prepare(
+          'INSERT INTO locks (lock_key, token, pid, incarnation, acquired_at) VALUES (?, ?, ?, NULL, ?)',
+        );
+        insert.run('abandoned', 'dead-owner', 999_999, Date.now() - 120_000);
+        insert.run('just-taken', 'dead-owner-2', 999_999, Date.now());
+        insert.run('ours', 'live-owner', process.pid, Date.now() - 120_000);
+      } finally {
+        lockDb.close();
+      }
+
+      // The sweep piggybacks on the next acquisition, for any key.
+      new AtomicLockCoordinator(dbPath).tryAcquire('unrelated', { staleMs: 0 })!.release();
+
+      const verifyDb = new Database(dbPath);
+      try {
+        const keys = (verifyDb.prepare('SELECT lock_key FROM locks ORDER BY lock_key').all() as Array<{ lock_key: string }>)
+          .map((row) => row.lock_key);
+        assert.deepStrictEqual(keys, ['just-taken', 'ours'], 'only dead rows past the grace period are collected');
+      } finally {
+        verifyDb.close();
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

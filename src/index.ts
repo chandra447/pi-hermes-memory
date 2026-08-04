@@ -233,7 +233,9 @@ export default function (pi: ExtensionAPI) {
       toolTarget,
       config,
     );
-    if (!result.consolidated) {
+    if (result.deferred) {
+      console.info(`⏳ Auto-consolidation for '${toolTarget}' deferred: ${result.error ?? "another session holds the consolidation lock"}`);
+    } else if (!result.consolidated) {
       console.warn(`⚠️ Auto-consolidation failed for '${toolTarget}': ${result.error ?? "no reason reported"}`);
     }
     return result;

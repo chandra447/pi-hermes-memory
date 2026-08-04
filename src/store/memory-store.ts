@@ -249,6 +249,15 @@ export class MemoryStore {
     const consolidation = await this.consolidator(target, signal).catch(
       (err): ConsolidationResult => ({ consolidated: false, error: `consolidator threw ${String(err).slice(0, 200)}` }),
     );
+    if (consolidation.deferred) {
+      // Lock contention, not breakage — another session is consolidating this
+      // target right now. Tell the model to retry instead of reporting a
+      // failed consolidation it can do nothing about (#144).
+      return {
+        ...result,
+        error: `${result.error} Another session is consolidating '${target}' right now, so this entry was not saved — retry in a moment.`,
+      };
+    }
     if (!consolidation.consolidated) {
       const reason = consolidation.error || "no reason reported";
       return { ...result, error: `${result.error} Auto-consolidation attempted but failed: ${reason}` };

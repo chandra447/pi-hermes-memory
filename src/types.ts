@@ -117,6 +117,12 @@ export interface ConsolidationResult {
   consolidated: boolean;
   /** Error message if consolidation failed */
   error?: string;
+  /**
+   * Set when another session already holds the consolidation lock for this
+   * target. Nothing is broken — the work is happening elsewhere — so callers
+   * should tell the user to retry rather than report a failed consolidation.
+   */
+  deferred?: boolean;
 }
 
 export type SkillScope = "global" | "project";
