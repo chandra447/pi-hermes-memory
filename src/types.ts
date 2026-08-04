@@ -109,6 +109,15 @@ export interface MemoryResult {
   matches?: string[];
 }
 
+export interface MemoryMutationOperation {
+  action: "add" | "replace" | "remove";
+  content?: string;
+  oldText?: string;
+  category?: MemoryCategory;
+  failureReason?: string;
+  project?: string;
+}
+
 export interface MemorySnapshot {
   memory: string;
   user: string;

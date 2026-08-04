@@ -25,7 +25,15 @@ import {
   MEMORY_FILE,
   USER_FILE,
 } from "../constants.js";
-import type { MemoryConfig, MemoryResult, MemorySnapshot, ConsolidationResult, MemoryCategory, MemoryOverflowStrategy } from "../types.js";
+import type {
+  MemoryConfig,
+  MemoryResult,
+  MemorySnapshot,
+  ConsolidationResult,
+  MemoryCategory,
+  MemoryMutationOperation,
+  MemoryOverflowStrategy,
+} from "../types.js";
 import { AGENT_ROOT } from "../paths.js";
 import { canonicalMarkdownIdentity, withMarkdownMutationLock } from "./markdown-mutation-lock.js";
 
@@ -314,6 +322,87 @@ export class MemoryStore {
       success: false,
       error: `Memory at ${current}/${limit} chars. Adding this entry (${contentLength} chars) would exceed the limit. Replace or remove existing entries first.`,
     };
+  }
+
+  async applyMutationPlan(
+    target: "memory" | "user" | "failure",
+    operations: MemoryMutationOperation[],
+    options: { requireShrink?: boolean } = {},
+  ): Promise<MemoryResult> {
+    return this.runTargetMutation(target, async () => {
+      await this.syncTargetFromDiskIfChanged(target);
+      if (operations.length === 0) {
+        return { success: false, error: "Memory mutation plan requires at least one operation." };
+      }
+
+      const originalEntries = [...this.entriesFor(target)];
+      let plannedEntries = [...originalEntries];
+      const today = new Date().toISOString().split("T")[0];
+
+      for (const operation of operations) {
+        if (operation.action === "add") {
+          const content = operation.content?.trim() ?? "";
+          if (!content) return { success: false, error: "Memory mutation add requires content." };
+          const normalizedContent = target === "failure" && operation.category
+            ? this.buildFailureMemoryText(content, {
+                category: operation.category,
+                failureReason: operation.failureReason,
+                project: operation.project,
+              })
+            : content;
+          const scanError = scanContent(normalizedContent);
+          if (scanError) return { success: false, error: scanError };
+          if (plannedEntries.some((entry) => this.decodeEntry(entry).text === normalizedContent)) {
+            return { success: false, error: "Memory mutation plan would add a duplicate entry." };
+          }
+          plannedEntries.push(this.encodeEntry(normalizedContent, today, today, operation.project));
+          continue;
+        }
+
+        const oldText = normalizeMemoryLookupText(operation.oldText ?? "");
+        if (!oldText) return { success: false, error: `Memory mutation ${operation.action} requires old_text.` };
+        const matches = plannedEntries.filter((entry) => this.stripMetadata(entry).includes(oldText));
+        if (matches.length === 0) return { success: false, error: `No entry matched '${oldText}'.` };
+        if (matches.length > 1 && !this.areDistinctScopedFailureCopies(target, matches)) {
+          return { success: false, error: `Multiple entries matched '${oldText}'. Be more specific.` };
+        }
+
+        if (operation.action === "remove") {
+          const matchedEntries = new Set(matches);
+          plannedEntries = plannedEntries.filter((entry) => !matchedEntries.has(entry));
+          continue;
+        }
+
+        const content = operation.content?.trim() ?? "";
+        if (!content) return { success: false, error: "Memory mutation replace requires content." };
+        const scanError = scanContent(content);
+        if (scanError) return { success: false, error: scanError };
+        const replacements = new Map(matches.map((entry) => {
+          const decoded = this.decodeEntry(entry);
+          return [entry, this.encodeEntry(content, decoded.created, today, decoded.project ?? undefined)];
+        }));
+        plannedEntries = plannedEntries.map((entry) => replacements.get(entry) ?? entry);
+      }
+
+      const originalTotal = originalEntries.join(ENTRY_DELIMITER).length;
+      const plannedTotal = plannedEntries.join(ENTRY_DELIMITER).length;
+      if (plannedTotal > this.charLimit(target)) {
+        return {
+          success: false,
+          error: `Memory mutation plan would put memory at ${plannedTotal}/${this.charLimit(target)} chars.`,
+        };
+      }
+      if (options.requireShrink && plannedTotal >= originalTotal) {
+        return {
+          success: false,
+          error: `Memory mutation plan did not shrink the target (${originalTotal} -> ${plannedTotal} chars).`,
+        };
+      }
+
+      this.setEntries(target, plannedEntries);
+      await this.saveToDisk(target);
+      return this.successResponse(target, `Applied ${operations.length} memory operations atomically.`);
+    });
   }
 
   async replace(target: "memory" | "user" | "failure", oldText: string, newContent: string): Promise<MemoryResult> {
