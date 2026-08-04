@@ -4,7 +4,6 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { Box, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import {
   createSharedToolResultRenderer,
-  renderSharedToolResult,
   type SharedOutputView,
 } from "../../src/tools/shared-output-view.js";
 import {
@@ -34,6 +33,22 @@ function result(text: string, details: Record<string, unknown> = { success: true
   return { content: [{ type: "text", text }], details };
 }
 
+function renderToolResult(
+  toolResult: ReturnType<typeof result>,
+  expanded: boolean,
+  width = 120,
+): string {
+  return renderPlain(
+    createSharedToolResultRenderer()(
+      toolResult,
+      { expanded, isPartial: false },
+      fakeTheme(),
+      { isError: false },
+    ),
+    width,
+  );
+}
+
 function renderView(view: SharedOutputView, expanded: boolean, width = 120): string {
   return renderPlain(
     createSharedToolResultRenderer(() => view)(
@@ -46,6 +61,25 @@ function renderView(view: SharedOutputView, expanded: boolean, width = 120): str
   );
 }
 
+function assertRowKeepsBackground(row: string): void {
+  let backgroundActive = false;
+  for (let index = 0; index < row.length;) {
+    const sgr = row.slice(index).match(/^\x1b\[([0-9;]*)m/);
+    if (sgr) {
+      const parameters = sgr[1];
+      if (parameters === "" || parameters === "0" || parameters === "49") {
+        backgroundActive = false;
+      } else if (parameters.split(";")[0] === "48") {
+        backgroundActive = true;
+      }
+      index += sgr[0].length;
+      continue;
+    }
+    assert.equal(backgroundActive, true, `background cleared before ${JSON.stringify(row.slice(index))}`);
+    index += 1;
+  }
+}
+
 describe("shared tool-result view", () => {
   it("collapses to one concise line and expands to the full bounded result", () => {
     const toolResult = result("Found 2 memories matching auth:\n\nfirst\nsecond", {
@@ -53,17 +87,13 @@ describe("shared tool-result view", () => {
       count: 2,
     });
 
-    const collapsed = renderPlain(
-      renderSharedToolResult(toolResult, { expanded: false, isPartial: false }, fakeTheme()),
-    );
+    const collapsed = renderToolResult(toolResult, false);
     assert.equal(collapsed.split("\n").length, 1);
     assert.match(collapsed, /Found 2 memories matching auth/);
     assert.doesNotMatch(collapsed, /second/);
     assert.match(collapsed, /expand/);
 
-    const expanded = renderPlain(
-      renderSharedToolResult(toolResult, { expanded: true, isPartial: false }, fakeTheme()),
-    );
+    const expanded = renderToolResult(toolResult, true);
     assert.equal(expanded, toolResult.content[0].text);
   });
 
@@ -74,45 +104,35 @@ describe("shared tool-result view", () => {
     });
     const before = structuredClone(toolResult);
 
-    renderPlain(renderSharedToolResult(toolResult, { expanded: false, isPartial: false }, fakeTheme()));
-    renderPlain(renderSharedToolResult(toolResult, { expanded: true, isPartial: false }, fakeTheme()));
+    renderToolResult(toolResult, false);
+    renderToolResult(toolResult, true);
 
     assert.deepEqual(toolResult, before);
   });
 
-  it("keeps failure reasons and warning-bearing success reasons in NO_COLOR", () => {
-    const previous = process.env.NO_COLOR;
-    process.env.NO_COLOR = "1";
-    try {
-      const failure = renderPlain(
-        renderSharedToolResult(
-          result("query is required", { success: false, message: "query is required" }),
-          { expanded: false, isPartial: false },
-          fakeTheme(),
-        ),
-      );
-      assert.match(failure, /query is required/);
+  it("keeps textual failure and warning reasons in collapsed output", () => {
+    const failure = renderToolResult(
+      result("query is required", { success: false, message: "query is required" }),
+      false,
+    );
+    assert.match(failure, /query is required/);
 
-      const warningView = memoryResultView(result(JSON.stringify({
-        success: true,
-        message: "Entry added. Warning: SQLite mirror unavailable",
-        warning: "SQLite mirror unavailable",
-        warnings: ["SQLite mirror unavailable"],
-        target: "memory",
-        entry_count: 1,
-      }), {
-        success: true,
-        message: "Entry added. Warning: SQLite mirror unavailable",
-        warning: "SQLite mirror unavailable",
-        warnings: ["SQLite mirror unavailable"],
-        target: "memory",
-        entry_count: 1,
-      }));
-      assert.match(renderView(warningView, false), /SQLite mirror unavailable/);
-    } finally {
-      if (previous === undefined) delete process.env.NO_COLOR;
-      else process.env.NO_COLOR = previous;
-    }
+    const warningView = memoryResultView(result(JSON.stringify({
+      success: true,
+      message: "Entry added. Warning: SQLite mirror unavailable",
+      warning: "SQLite mirror unavailable",
+      warnings: ["SQLite mirror unavailable"],
+      target: "memory",
+      entry_count: 1,
+    }), {
+      success: true,
+      message: "Entry added. Warning: SQLite mirror unavailable",
+      warning: "SQLite mirror unavailable",
+      warnings: ["SQLite mirror unavailable"],
+      target: "memory",
+      entry_count: 1,
+    }));
+    assert.match(renderView(warningView, false), /SQLite mirror unavailable/);
   });
 
   it("fits ANSI, CJK, and partial rows while preserving the outer tool-card background", () => {
@@ -135,22 +155,33 @@ describe("shared tool-result view", () => {
     assert.equal(visibleWidth(rows[1]), width);
     assert.match(stripAnsi(rows[1]), /处理中|In progress/);
 
-    let backgroundActive = false;
-    for (let index = 0; index < rows[1].length;) {
-      const sgr = rows[1].slice(index).match(/^\x1b\[([0-9;]*)m/);
-      if (sgr) {
-        const parameters = sgr[1];
-        if (parameters === "" || parameters === "0" || parameters === "49") {
-          backgroundActive = false;
-        } else if (parameters.split(";")[0] === "48") {
-          backgroundActive = true;
-        }
-        index += sgr[0].length;
-        continue;
-      }
-      assert.equal(backgroundActive, true);
-      index += 1;
+    assertRowKeepsBackground(rows[1]);
+  });
+
+  it("keeps the tool-card background across expanded Text rows with ANSI resets and CJK wrapping", () => {
+    const width = 18;
+    const backgroundOpen = "\x1b[48;2;40;50;40m";
+    const ansiTheme = {
+      fg: (_color: string, text: string): string => text,
+      getBgAnsi: (_color: string): string => backgroundOpen,
+    } as any;
+    const expandedText = "第一行 世界世界世界\x1b[0m继续\n第二行 \x1b[49m背景保留";
+    const box = new Box(1, 1, (text: string) => `${backgroundOpen}${text}\x1b[49m`);
+    box.addChild(createSharedToolResultRenderer()(
+      result(expandedText),
+      { expanded: true, isPartial: false },
+      ansiTheme,
+      { isError: false },
+    ));
+
+    const rows = box.render(width);
+    assert.ok(rows.length > 4);
+    for (const row of rows) {
+      assert.equal(visibleWidth(row), width);
+      assertRowKeepsBackground(row);
     }
+    const expandedRows = rows.slice(1, -1).map((row) => stripAnsi(row).trim());
+    assert.deepEqual(expandedRows, ["第一行 世界世界", "世界继续", "第二行 背景保留"]);
   });
 });
 
@@ -179,5 +210,24 @@ describe("tool-specific summaries", () => {
     const skill = skillResultView(result(skillText, JSON.parse(skillText)));
     assert.match(skill.summary, /deploy/i);
     assert.equal(skill.expandedText, skillText);
+  });
+
+  it("renders a real skill-tool JSON failure as an actionable failure", () => {
+    const error = "Skill 'global:missing' not found.";
+    const skillText = JSON.stringify({ success: false, error });
+    const toolResult = result(skillText, {});
+    const skill = skillResultView(toolResult);
+
+    assert.equal(skill.status, "failure");
+    assert.equal(skill.summary, `Error · ${error}`);
+    assert.equal(skill.expandedText, skillText);
+    assert.match(renderPlain(
+      createSharedToolResultRenderer(skillResultView)(
+        toolResult,
+        { expanded: false, isPartial: false },
+        fakeTheme(),
+        { isError: false },
+      ),
+    ), new RegExp(error.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
 });

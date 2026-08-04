@@ -103,7 +103,14 @@ function renderView(
   theme: SharedOutputTheme | undefined,
   background: ToolCardBackground,
 ): Component {
-  if (options.expanded) return new Text(view.expandedText || view.summary, 0, 0);
+  if (options.expanded) {
+    return new Text(
+      view.expandedText || view.summary,
+      0,
+      0,
+      (line) => restoreBackground(line, background, theme),
+    );
+  }
 
   return {
     render(width: number): string[] {
@@ -127,20 +134,6 @@ function renderView(
     },
     invalidate(): void {},
   };
-}
-
-export function renderSharedToolResult(
-  result: unknown,
-  options: ToolRenderResultOptions,
-  theme?: SharedOutputTheme,
-): Component {
-  const view = normalizeSharedOutputView(result);
-  const background: ToolCardBackground = options.isPartial
-    ? "toolPendingBg"
-    : view.status === "failure"
-      ? "toolErrorBg"
-      : "toolSuccessBg";
-  return renderView(view, options, theme, background);
 }
 
 export function createSharedToolResultRenderer(

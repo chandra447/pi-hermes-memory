@@ -87,7 +87,11 @@ export function searchResultView(result: unknown): SharedOutputView {
 export function skillResultView(result: unknown): SharedOutputView {
   const base = normalizeSharedOutputView(result);
   const data = resultData(result);
-  if (!data || data.success === false) return base;
+  if (!data) return base;
+  if (data.success === false) {
+    const failureReason = firstText(data.error, data.message);
+    return { ...base, status: "failure", summary: failureReason ? `Error · ${failureReason}` : "Error" };
+  }
   if (Array.isArray(data.skills)) return { ...base, summary: `Skills: ${data.skills.length} available` };
 
   const name = firstText(data.displayName, data.name, data.skillId, data.skill_id);
