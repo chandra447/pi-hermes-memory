@@ -13,7 +13,7 @@ import {
   runDirectMemoryCompletion,
 } from "../../src/handlers/review-memory-ops.js";
 import { DatabaseManager } from "../../src/store/db.js";
-import { reconcileMarkdownMemoryScope } from "../../src/store/sqlite-memory-store.js";
+import { getMemories, reconcileMarkdownMemoryScope } from "../../src/store/sqlite-memory-store.js";
 
 function mockModel(reasoning: boolean): Model<Api> {
   return {
@@ -285,6 +285,297 @@ describe("applyReviewOperations", () => {
 
     assert.strictEqual(result.appliedCount, 0);
     assert.strictEqual(result.skippedCount, 1);
+  });
+
+  it("rolls back the entire atomic plan when a later operation fails", async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+    await store.add("memory", "keep this original entry");
+    const memoryPath = path.join(tmpDir, "MEMORY.md");
+    const beforeEntries = store.getMemoryEntries();
+    const beforeDisk = await fs.readFile(memoryPath, "utf8");
+
+    const result = await applyReviewOperations(
+      store,
+      null,
+      [
+        { action: "remove", target: "memory", old_text: "keep this" },
+        { action: "remove", target: "memory", old_text: "missing later entry" },
+      ],
+      null,
+      null,
+      { requireAtomicShrink: true, expectedTarget: "memory" },
+    );
+
+    assert.strictEqual(result.appliedCount, 0);
+    assert.strictEqual(result.skippedCount, 2);
+    assert.match(result.error ?? "", /No entry matched 'missing later entry'/);
+    assert.deepStrictEqual(store.getMemoryEntries(), beforeEntries);
+    assert.strictEqual(await fs.readFile(memoryPath, "utf8"), beforeDisk);
+  });
+
+  it("rejects mixed and unexpected atomic targets before mutation", async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+    await store.add("memory", "global source entry");
+
+    const mixed = await applyReviewOperations(
+      store,
+      null,
+      [
+        { action: "remove", target: "memory", old_text: "global source" },
+        { action: "remove", target: "user", old_text: "anything" },
+      ],
+      null,
+      null,
+      { requireAtomicShrink: true, expectedTarget: "memory" },
+    );
+    const unexpected = await applyReviewOperations(
+      store,
+      null,
+      [{ action: "remove", target: "memory", old_text: "global source" }],
+      null,
+      null,
+      { requireAtomicShrink: true, expectedTarget: "user" },
+    );
+
+    assert.deepStrictEqual(
+      { appliedCount: mixed.appliedCount, skippedCount: mixed.skippedCount },
+      { appliedCount: 0, skippedCount: 2 },
+    );
+    assert.match(mixed.error ?? "", /exactly one target/);
+    assert.deepStrictEqual(
+      { appliedCount: unexpected.appliedCount, skippedCount: unexpected.skippedCount },
+      { appliedCount: 0, skippedCount: 1 },
+    );
+    assert.match(unexpected.error ?? "", /targeted 'memory', expected 'user'/);
+    assert.deepStrictEqual(store.getMemoryEntries().map((entry) => entry.replace(/\s*<!--.*$/, "")), [
+      "global source entry",
+    ]);
+  });
+
+  it("rejects an empty atomic plan and an unavailable atomic project store", async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+
+    const empty = await applyReviewOperations(
+      store,
+      null,
+      [],
+      null,
+      "project-a",
+      { requireAtomicShrink: true, expectedTarget: "project" },
+    );
+    const unavailable = await applyReviewOperations(
+      store,
+      null,
+      [{ action: "remove", target: "project", old_text: "project source" }],
+      null,
+      "project-a",
+      { requireAtomicShrink: true, expectedTarget: "project" },
+    );
+
+    assert.deepStrictEqual(
+      { appliedCount: empty.appliedCount, skippedCount: empty.skippedCount },
+      { appliedCount: 0, skippedCount: 0 },
+    );
+    assert.match(empty.error ?? "", /requires at least one operation/i);
+    assert.deepStrictEqual(
+      { appliedCount: unavailable.appliedCount, skippedCount: unavailable.skippedCount },
+      { appliedCount: 0, skippedCount: 1 },
+    );
+    assert.match(unavailable.error ?? "", /project memory is unavailable/i);
+    assert.deepStrictEqual(store.getMemoryEntries(), []);
+  });
+
+  it("applies an atomic project plan only to the isolated project store", async () => {
+    const globalDir = path.join(tmpDir, "global");
+    const projectDir = path.join(tmpDir, "project");
+    const store = new MemoryStore({
+      memoryDir: globalDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    const projectStore = new MemoryStore({
+      memoryDir: projectDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await Promise.all([store.loadFromDisk(), projectStore.loadFromDisk()]);
+    await store.add("memory", "global source stays intact");
+    await projectStore.add("memory", "project source has a long implementation detail");
+
+    const result = await applyReviewOperations(
+      store,
+      projectStore,
+      [
+        { action: "remove", target: "project", old_text: "project source" },
+        { action: "add", target: "project", content: "project rule" },
+      ],
+      null,
+      "project-a",
+      { requireAtomicShrink: true, expectedTarget: "project" },
+    );
+
+    assert.deepStrictEqual(result, { appliedCount: 2, skippedCount: 0 });
+    assert.deepStrictEqual(store.getMemoryEntries().map((entry) => entry.replace(/\s*<!--.*$/, "")), [
+      "global source stays intact",
+    ]);
+    assert.deepStrictEqual(projectStore.getMemoryEntries().map((entry) => entry.replace(/\s*<!--.*$/, "")), [
+      "project rule",
+    ]);
+    assert.doesNotMatch(projectStore.getRawEntriesForSync("memory")[0] ?? "", /project64=/);
+  });
+
+  it("preserves failure formatting and project attribution in atomic plans", async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      failureCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+    await store.addFailure("obsolete failure detail that is intentionally long", {
+      category: "failure",
+      project: "project-a",
+    });
+
+    const result = await applyReviewOperations(
+      store,
+      null,
+      [
+        { action: "remove", target: "failure", old_text: "obsolete failure detail" },
+        {
+          action: "add",
+          target: "failure",
+          content: "concise lesson",
+          category: "tool-quirk",
+          failure_reason: "tool used stale state",
+        },
+      ],
+      null,
+      "project-a",
+      { requireAtomicShrink: true, expectedTarget: "failure" },
+    );
+
+    assert.deepStrictEqual(result, { appliedCount: 2, skippedCount: 0 });
+    assert.deepStrictEqual(store.getFailureEntries(), [
+      "[tool-quirk] concise lesson — Failed: tool used stale state",
+    ]);
+    assert.match(store.getRawEntriesForSync("failure")[0] ?? "", /project64=cHJvamVjdC1h/);
+  });
+
+  it("attributes ordinary non-atomic failures to the current project", async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      failureCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+    const dbManager = new DatabaseManager(path.join(tmpDir, "db"));
+    store.setMutationObserver((target, entries) => {
+      reconcileMarkdownMemoryScope(dbManager, entries, target, target === "failure" ? "project-a" : null);
+      return null;
+    });
+
+    try {
+      const result = await applyReviewOperations(
+        store,
+        null,
+        [{
+          action: "add",
+          target: "failure",
+          content: "ordinary scoped lesson",
+          category: "correction",
+          failure_reason: "user corrected the command",
+        }],
+        dbManager,
+        "project-a",
+      );
+
+      assert.deepStrictEqual(result, { appliedCount: 1, skippedCount: 0 });
+      assert.deepStrictEqual(store.getFailureEntries(), [
+        "[correction] ordinary scoped lesson — Failed: user corrected the command",
+      ]);
+      const memories = getMemories(dbManager, { target: "failure", project: "project-a" });
+      assert.strictEqual(memories.length, 1);
+      assert.strictEqual(getMemories(dbManager, { target: "failure", project: null }).length, 0);
+      assert.strictEqual(memories[0].category, "correction");
+      assert.match(memories[0].content, /ordinary scoped lesson/);
+    } finally {
+      dbManager.close();
+    }
+  });
+
+  it("returns an actionable direct-completion error without partial atomic changes", async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+    await store.add("memory", "keep this direct-review source");
+    const beforeEntries = store.getMemoryEntries();
+    const modelRegistry = {
+      authStorage: { reload: () => undefined },
+      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test-key" }),
+      getAll: () => [mockModel(false)],
+      getAvailable: () => [mockModel(false)],
+    };
+    const complete = async () => ({
+      stopReason: "stop",
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          operations: [
+            { action: "remove", target: "memory", old_text: "keep this" },
+            { action: "remove", target: "memory", old_text: "missing later entry" },
+          ],
+        }),
+      }],
+    });
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry } as never,
+      store,
+      null,
+      {
+        userPrompt: "consolidate",
+        systemPrompt: "return operations",
+        config: {},
+        requireAtomicShrink: true,
+        expectedTarget: "memory",
+      },
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.appliedCount, 0);
+    assert.match(result.error ?? "", /No entry matched 'missing later entry'/);
+    assert.deepStrictEqual(store.getMemoryEntries(), beforeEntries);
   });
 
   it("uses the in-lock mutation observer as the sole SQLite reconciliation path", async () => {

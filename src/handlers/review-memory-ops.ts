@@ -21,6 +21,7 @@ export interface ReviewMemoryOperation {
 export interface ApplyReviewOperationsResult {
   appliedCount: number;
   skippedCount: number;
+  error?: string;
 }
 
 export interface DirectReviewResult {
@@ -36,6 +37,8 @@ export interface RunDirectMemoryCompletionOptions {
   config: Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride">;
   timeoutMs?: number;
   signal?: AbortSignal;
+  requireAtomicShrink?: boolean;
+  expectedTarget?: ReviewMemoryOperation["target"];
 }
 
 /** Shared transport gate: review/flush/consolidation/correction all default to
@@ -263,8 +266,64 @@ export async function applyReviewOperations(
   projectStore: MemoryStore | null,
   operations: ReviewMemoryOperation[],
   _dbManager: DatabaseManager | null = null,
-  _projectName?: string | null,
+  projectName?: string | null,
+  options: {
+    requireAtomicShrink?: boolean;
+    expectedTarget?: ReviewMemoryOperation["target"];
+  } = {},
 ): Promise<ApplyReviewOperationsResult> {
+  if (options.requireAtomicShrink) {
+    if (operations.length === 0) {
+      return {
+        appliedCount: 0,
+        skippedCount: 0,
+        error: "Atomic plan requires at least one operation.",
+      };
+    }
+
+    const target = operations[0]?.target;
+    if (!target || operations.some((operation) => operation.target !== target)) {
+      return {
+        appliedCount: 0,
+        skippedCount: operations.length,
+        error: "Atomic plan must use exactly one target.",
+      };
+    }
+    if (options.expectedTarget && target !== options.expectedTarget) {
+      return {
+        appliedCount: 0,
+        skippedCount: operations.length,
+        error: `Atomic plan targeted '${target}', expected '${options.expectedTarget}'.`,
+      };
+    }
+    if (target === "project" && !projectStore) {
+      return {
+        appliedCount: 0,
+        skippedCount: operations.length,
+        error: "Project memory is unavailable.",
+      };
+    }
+
+    const activeStore = target === "project" ? projectStore! : store;
+    const memoryTarget = target === "project" ? "memory" : target;
+    const mutationOperations = operations.map((operation) => ({
+      action: operation.action,
+      content: operation.content,
+      oldText: operation.old_text,
+      category: operation.category,
+      failureReason: operation.failure_reason,
+      project: target === "failure" ? projectName ?? undefined : undefined,
+    }));
+    const result = await activeStore.applyMutationPlan(memoryTarget, mutationOperations, { requireShrink: true });
+    return result.success
+      ? { appliedCount: operations.length, skippedCount: 0 }
+      : {
+          appliedCount: 0,
+          skippedCount: operations.length,
+          error: result.error ?? "Atomic memory plan failed.",
+        };
+  }
+
   let appliedCount = 0;
   let skippedCount = 0;
 
@@ -290,6 +349,7 @@ export async function applyReviewOperations(
           result = await activeStore.addFailure(op.content, {
             category,
             failureReason: op.failure_reason,
+            project: projectName ?? undefined,
           });
           if (result.success) {
             appliedCount++;
@@ -434,14 +494,26 @@ export async function runDirectMemoryCompletion(
       return { ok: true, appliedCount: 0, fallbackReason: "empty" };
     }
 
-    const { appliedCount } = await applyReviewOperations(
+    const applied = await applyReviewOperations(
       store,
       projectStore,
       operations,
       dbManager,
       projectName,
+      {
+        requireAtomicShrink: options.requireAtomicShrink,
+        expectedTarget: options.expectedTarget,
+      },
     );
-    return { ok: true, appliedCount };
+    if (applied.error) {
+      return {
+        ok: false,
+        appliedCount: 0,
+        fallbackReason: "provider_error",
+        error: applied.error,
+      };
+    }
+    return { ok: true, appliedCount: applied.appliedCount };
   } catch (err) {
     if (controller.signal.aborted) {
       return { ok: false, appliedCount: 0, fallbackReason: "aborted" };
