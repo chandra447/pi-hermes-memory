@@ -8,6 +8,7 @@ import { searchSessionAnchors } from '../store/session-anchor-search.js';
 import type { SessionAnchorRange, SessionAnchorSearchResult } from '../store/session-anchor-search.js';
 import type { SessionSearchConfig } from '../types.js';
 import { AGENT_ROOT } from '../paths.js';
+import { Text } from "@earendil-works/pi-tui";
 
 interface SearchResult {
   success: boolean;
@@ -18,6 +19,7 @@ interface SearchResult {
   outputTruncated?: boolean;
   snippetChars?: number;
   truncatedCount?: number;
+  query?: string;
   ranges?: SessionAnchorRange[];
 }
 
@@ -116,6 +118,42 @@ exclude:
         ranges: searchResult.ranges,
       };
       return { content: [{ type: 'text' as const, text: output }], details: result };
+    },
+
+    // Anchor mode: compact call header showing the markdown request preview
+    renderCall(args, theme, _context) {
+      let text = theme.fg("toolTitle", theme.bold("session_search "));
+      const md = (args.markdown ?? "").replace(/\s+/g, " ").trim();
+      text += theme.fg("accent", md.length <= 80 ? `"${md}"` : `"${md.slice(0, 77)}..."`);
+      text += theme.fg("muted", ` (anchors)`);
+      return new Text(text, 0, 0);
+    },
+
+    // Anchor mode: collapsed shows anchor count; expanded shows the anchors
+    renderResult(result, { expanded, isPartial }, theme, _context) {
+      if (isPartial) {
+        return new Text(theme.fg("warning", "Searching..."), 0, 0);
+      }
+      const details = result.details as SearchResult | undefined;
+      if (!details || !details.success) {
+        const msg = details?.message ?? "Search failed";
+        return new Text(theme.fg("dim", msg), 0, 0);
+      }
+      const count = details.count ?? 0;
+      let text = count === 0
+        ? theme.fg("dim", details.message ?? "No anchors found")
+        : theme.fg("success", `${count} anchor${count === 1 ? "" : "s"}`);
+      if (expanded && details.output) {
+        const lines = details.output.split("\n").slice(0, 30);
+        for (const line of lines) {
+          text += `\n${theme.fg("dim", line)}`;
+        }
+        const total = details.output.split("\n").length;
+        if (total > lines.length) {
+          text += `\n${theme.fg("muted", `... (${total - lines.length} more lines)`)}`;
+        }
+      }
+      return new Text(text, 0, 0);
     },
   });
 }
@@ -233,10 +271,67 @@ Returns bounded conversation snippets with session dates and project context. La
         count: results.length,
         truncatedCount,
         snippetChars,
+        query,
         outputChars: output.text.length,
         outputTruncated: output.truncated,
       };
       return { content: [{ type: 'text' as const, text: output.text }], details: finalResult };
+    },
+
+    // Legacy mode: compact call header showing query + active filters
+    renderCall(args, theme, _context) {
+      let text = theme.fg("toolTitle", theme.bold("session_search "));
+      text += theme.fg("accent", `"${args.query}"`);
+      const filters: string[] = [];
+      if (args.project) filters.push(`project=${args.project}`);
+      if (args.role) filters.push(`role=${args.role}`);
+      if (Number.isFinite(args.limit)) filters.push(`limit=${Math.floor(args.limit!)}`);
+      if (Number.isFinite(args.snippetChars)) filters.push(`snippet=${Math.floor(args.snippetChars!)}`);
+      if (filters.length > 0) {
+        text += theme.fg("muted", ` · ${filters.join(", ")}`);
+      }
+      return new Text(text, 0, 0);
+    },
+
+    // Legacy mode: collapsed shows result count; expanded shows the snippets
+    renderResult(result, { expanded, isPartial }, theme, _context) {
+      if (isPartial) {
+        return new Text(theme.fg("warning", "Searching..."), 0, 0);
+      }
+      const details = result.details as SearchResult | undefined;
+      if (!details) {
+        return new Text(theme.fg("dim", "No results"), 0, 0);
+      }
+      if (!details.success) {
+        return new Text(theme.fg("dim", details.message ?? "No results"), 0, 0);
+      }
+      const count = details.count ?? 0;
+      if (count === 0) {
+        let text = theme.fg("dim", "No results found");
+        if (details.message) text = theme.fg("dim", details.message);
+        return new Text(text, 0, 0);
+      }
+      let text = theme.fg("success", `Found ${count} result${count === 1 ? "" : "s"}`);
+      if (details.truncatedCount && details.truncatedCount > 0) {
+        text += theme.fg("warning", ` · ${details.truncatedCount} snippet${details.truncatedCount === 1 ? "" : "s"} truncated`);
+      }
+      if (details.outputTruncated) {
+        text += theme.fg("warning", " · output capped");
+      }
+      if (expanded) {
+        const content = result.content[0];
+        if (content?.type === "text" && content.text) {
+          const lines = content.text.split("\n").slice(0, 25);
+          for (const line of lines) {
+            text += `\n${theme.fg("dim", line)}`;
+          }
+          const total = content.text.split("\n").length;
+          if (total > lines.length) {
+            text += `\n${theme.fg("muted", `... (${total - lines.length} more lines)`)}`;
+          }
+        }
+      }
+      return new Text(text, 0, 0);
     },
   });
 }
