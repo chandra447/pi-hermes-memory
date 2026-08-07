@@ -94,7 +94,7 @@ const repoRootCache = new Map<string, string | null>();
  * newly derived repository name, so upgrading never orphans memory that was
  * written under the old cwd-basename identity.
  *
- * Project-scoped memory is stored at ~/.pi/agent/<projectsMemoryDir>/<projectName>/.
+ * Project-scoped memory is stored at ~/.gsd/agent/<projectsMemoryDir>/<projectName>/.
  */
 export function detectProject(projectsMemoryDir = "projects-memory", cwd?: string): ProjectInfo {
   const dir = cwd ?? process.cwd();

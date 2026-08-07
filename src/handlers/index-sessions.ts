@@ -7,7 +7,7 @@ import fs from "node:fs";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
-} from "@earendil-works/pi-coding-agent";
+} from "@gsd/pi-coding-agent";
 import { DatabaseManager } from "../store/db.js";
 import { indexAllSessions, getSessionStats } from "../store/session-indexer.js";
 import { AGENT_ROOT } from "../paths.js";

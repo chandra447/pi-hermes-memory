@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+} from "@gsd/pi-coding-agent";
 import type { MemoryStore } from "../store/memory-store.js";
 import type { DatabaseManager } from "../store/db.js";
 import {

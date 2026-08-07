@@ -6,7 +6,7 @@
  * zero value until multiple sessions accumulate facts organically.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import { INTERVIEW_PROMPT } from "../constants.js";
 

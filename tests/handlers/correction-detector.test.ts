@@ -14,7 +14,7 @@ import { MemoryStore } from "../../src/store/memory-store.js";
 import { registerMemoryTool } from "../../src/tools/memory-tool.js";
 import { isCorrection, setupCorrectionDetector } from "../../src/handlers/correction-detector.js";
 import { resolveWatchedChildPiInvocation } from "../../src/handlers/pi-child-process.js";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import type { MemoryConfig } from "../../src/types.js";
 
 // ─── Pattern matching tests ───

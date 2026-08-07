@@ -178,11 +178,11 @@ _Done when: all core paths have automated tests and the extension passes a manua
 
 ## Epic 10: Documentation & Distribution
 
-_Done when: extension is installable via `pi install` and has user-facing docs._
+_Done when: extension is installable via `gsd install` and has user-facing docs._
 
 - [x] `README.md` — What it does, installation, usage, configuration — `ed22fa6`
 - [x] `README.md` — Example screenshots (manual verification — needs Pi TUI) of `/memory-insights` output — requires Pi TUI
--  [x ]  Ve r ify  `pi install github:efrembaraldo/gsd-pi-hermes-memory` works end-to-end — requires Pi CLI
+-  [x ]  Ve r ify  `gsd install github:efrembaraldo/gsd-pi-hermes-memory` works end-to-end — requires Pi CLI
 - [x] Tag v0.1.0 release on GitHub — `7983f09`
 
 ---
@@ -206,7 +206,7 @@ _Done when: extension is installable via `pi install` and has user-facing docs._
 **Automated test coverage: 119 tests, 0 failures, 0 type e
 rrors.**
 
-**Manual verification required:** Run `pi -e ./src/index.ts` or `pi install github:efrembaraldo/gsd-pi-hermes-memory`, then:
+**Manual verification required:** Run `pi -e ./src/index.ts` or `gsd install github:efrembaraldo/gsd-pi-hermes-memory`, then:
 
 1. Have the LLM save a memory and verify it appears in `~/.pi/agent/memory/MEMORY.md`
 2. Start a new session (`/new`) and verify the memory appears in the system prompt

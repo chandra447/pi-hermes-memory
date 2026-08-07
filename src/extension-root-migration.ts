@@ -755,8 +755,8 @@ async function migrateDatabaseGeneration(
 }
 
 /**
- * Move legacy extension assets from ~/.pi/agent/memory into
- * ~/.pi/agent/gsd-pi-hermes-memory. Existing destination files win.
+ * Move legacy extension assets from ~/.gsd/agent/memory into
+ * ~/.gsd/agent/gsd-pi-hermes-memory. Existing destination files win.
  */
 export async function migrateExtensionRoot(
 	legacyRoot: string,

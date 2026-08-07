@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Minimum supported Pi corrected to 0.80.1, and now verified in CI**: `peerDependencies` declared `>=0.74.0`, but `src/handlers/review-memory-ops.ts` imports `@earendil-works/pi-ai/compat`, a subpath that does not exist before 0.80.1 — so every user on 0.74 through 0.79.x got `ERR_PACKAGE_PATH_NOT_EXPORTED` and no extension at all, while `package.json` told them they were supported. The floor is corrected, and a new `min-sdk` CI job installs exactly the declared minimum and type-checks against it, so the advertised range can no longer drift from reality. The regular `check` job could never catch this: it installs whatever the devDependency range resolves to, which is always new enough.
+- **Minimum supported Pi corrected to 0.80.1, and now verified in CI**: `peerDependencies` declared `>=0.74.0`, but `src/handlers/review-memory-ops.ts` imports `@gsd/pi-ai/compat`, a subpath that does not exist before 0.80.1 — so every user on 0.74 through 0.79.x got `ERR_PACKAGE_PATH_NOT_EXPORTED` and no extension at all, while `package.json` told them they were supported. The floor is corrected, and a new `min-sdk` CI job installs exactly the declared minimum and type-checks against it, so the advertised range can no longer drift from reality. The regular `check` job could never catch this: it installs whatever the devDependency range resolves to, which is always new enough.
 
 ### Upgrading
 
@@ -113,7 +113,7 @@ If you ran 0.9.0, the skills it relocated into `~/.pi/agent/skills/` **stay ther
 
 ### Fixed
 
-- **Release dependency alignment**: aligned direct `@earendil-works/pi-ai` and `@earendil-works/pi-tui` package ranges with `@earendil-works/pi-coding-agent` 0.80.2 so `npm install` stays lockfile-clean and TypeScript sees a single compatible Pi TUI type surface in CI.
+- **Release dependency alignment**: aligned direct `@gsd/pi-ai` and `@gsd/pi-tui` package ranges with `@gsd/pi-coding-agent` 0.80.2 so `npm install` stays lockfile-clean and TypeScript sees a single compatible Pi TUI type surface in CI.
 
 ## [0.7.21] - 2026-06-28
 

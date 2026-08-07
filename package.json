@@ -19,7 +19,8 @@
   "scripts": {
     "check": "node scripts/ensure-dev.mjs check && tsc --noEmit",
     "check:min-sdk": "node scripts/ensure-dev.mjs check && node scripts/check-min-sdk.mjs",
-    "test": "node scripts/ensure-dev.mjs test && tests/run-all.sh"
+    "test": "node scripts/ensure-dev.mjs test && tests/run-all.sh",
+    "postinstall": "node scripts/setup-gsd-aliases.mjs"
   },
   "keywords": [
     "pi-package",
@@ -54,6 +55,7 @@
     "@earendil-works/pi-ai": "^0.80.2",
     "@earendil-works/pi-coding-agent": "^0.80.2",
     "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.10.0",
     "tsx": "^4.21.0",
     "typebox": "^1.1.33",
     "typescript": "^6.0.3"

@@ -1,4 +1,4 @@
-# Pi Hermes Memory — Roadmap
+# GSD Pi Hermes Memory — Roadmap
 
 > From markdown files to a pluggable memory substrate for any Pi agent harness.
 
@@ -25,7 +25,7 @@
 Hermes has three memory subsystems operating at different timescales:
 
 | Layer | What | Capacity | Token Cost |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **L1: Persistent Memory** (MEMORY.md + USER.md) | Curated facts, frozen snapshot injection | ~1,300 tokens total | Fixed per session |
 | **L2: Episodic Memory** (Skills System) | Procedural memory — SKILL.md files created from experience, progressive disclosure | Unlimited | ~3K tokens for index, full content on demand |
 | **L3: Session Search** (SQLite FTS5) | Full-text search over ALL conversations | Unlimited | On-demand only |
@@ -35,7 +35,7 @@ Plus **L4: External Providers** — Honcho, Mem0, Hindsight, etc. for deeper use
 ### Gap Analysis: Hermes vs. Our v0.1
 
 | Capability | Hermes | Our v0.1 | Priority |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | L1: Persistent Memory (MEMORY.md + USER.md) | ✅ | ✅ **Covered** | — |
 | Frozen snapshot + prefix cache preservation | ✅ | ✅ **Covered** | — |
 | Content scanning (injection, exfil, unicode) | ✅ | ✅ **Covered** | — |
@@ -126,12 +126,12 @@ graph LR
 
 ### Epic 1: Skill Tool + Procedural Memory
 
-Hermes creates skills after complex tasks (5+ tool calls). Skills are SKILL.md files in `~/.hermes/skills/` with progressive disclosure. We adapt this for Pi's existing skill infrastructure at `~/.pi/agent/skills/`.
+Hermes creates skills after complex tasks (5+ tool calls). Skills are SKILL.md files in `~/.hermes/skills/` with progressive disclosure. We adapt this for Pi's existing skill infrastructure at `~/.gsd/agent/skills/`.
 
 **Key insight**: Pi already has a skill system. Our skill tool should write SKILL.md files that are compatible with Pi's skill discovery. This means our skills are immediately usable as Pi slash commands — no separate ecosystem needed.
 
 - [ ] `skill` tool — register via `pi.registerTool()` with actions: `create`, `patch`, `edit`, `delete`
-- [x] Skill storage split by scope: global skills in `~/.pi/agent/skills/<slug>/SKILL.md`, project skills in `~/.pi/agent/projects-memory/<project>/skills/<slug>/SKILL.md` (discovered via `resources_discover`)
+- [x] Skill storage split by scope: global skills in `~/.gsd/agent/skills/<slug>/SKILL.md`, project skills in `~/.gsd/agent/projects-memory/<project>/skills/<slug>/SKILL.md` (discovered via `resources_discover`)
 - [ ] SKILL.md format — compatible with Pi's SKILL.md spec (frontmatter + markdown body)
 - [ ] Progressive disclosure — skill index (name + description only) injected into system prompt, full content loaded on demand via `skill_view` action
 - [ ] Auto-trigger after complex tasks — track tool calls per turn, trigger skill extraction at 5+ tool calls
@@ -226,7 +226,7 @@ Entries live forever. A fact saved in session 3 ("project uses node 18") might b
 
 ### Epic 4: Project Memory Polish
 
-Project-scoped memory (`~/.pi/agent/<project>/MEMORY.md`) was added in the feature branch that merged with v0.2.1. It works but needs cleanup, testing, and documentation.
+Project-scoped memory (`~/.gsd/agent/<project>/MEMORY.md`) was added in the feature branch that merged with v0.2.1. It works but needs cleanup, testing, and documentation.
 
 - [ ] `/memory-insights` — polished project section with separator, usage stats, file paths
 - [ ] `/memory-switch-project` — manually switch active project memory (auto-detected from cwd at load)
@@ -274,7 +274,7 @@ Agent has access to tools:
 
 ### Data Model
 
-- `~/.pi/agent/memory/sessions.db` — single SQLite file
+- `~/.gsd/agent/memory/sessions.db` — single SQLite file
 - `sessions` + `messages` tables — all past conversations indexed
 - `message_fts` FTS5 virtual table — full-text search across messages
 - `memories` table — extended memory entries (unlimited, searchable)
@@ -425,7 +425,7 @@ These hold across all versions:
 
 ```mermaid
 gantt
-    title Pi Hermes Memory — Release Timeline
+    title GSD Pi Hermes Memory — Release Timeline
     dateFormat YYYY-MM-DD
     axisFormat %b %Y
 

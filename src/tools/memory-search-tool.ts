@@ -1,6 +1,6 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
+import { StringEnum } from "@gsd/pi-ai";
 import { DatabaseManager } from '../store/db.js';
 import { searchMemories, getMemoryStats } from '../store/sqlite-memory-store.js';
 import type { MemoryCategory } from '../types.js';

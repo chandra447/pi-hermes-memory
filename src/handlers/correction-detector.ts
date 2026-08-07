@@ -8,7 +8,7 @@
  * - Negative patterns: suppress even if a positive pattern matched
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import {

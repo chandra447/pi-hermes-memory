@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import type { ExtensionAPI } from '@gsd/pi-coding-agent';
 import { DatabaseManager } from '../../src/store/db.js';
 import { registerMemoryTool } from '../../src/tools/memory-tool.js';
 import {
@@ -131,7 +131,7 @@ describe('memory sqlite sync + markdown backfill', () => {
     );
   });
 
-  it('backfills legacy project memory directories from the old ~/.pi/agent/<project> layout', async () => {
+  it('backfills legacy project memory directories from the old ~/.gsd/agent/<project> layout', async () => {
     const legacyProjectDir = path.join(agentRoot, 'legacy-project');
     fs.mkdirSync(legacyProjectDir, { recursive: true });
     fs.writeFileSync(

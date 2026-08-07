@@ -1,8 +1,8 @@
 <div align="center">
 
-![Pi Hermes Memory](docs/images/pi_memory.png)
+![GSD Pi Hermes Memory](docs/images/pi_memory.png)
 
-# 🧠 Pi Hermes Memory
+# 🧠 GSD Pi Hermes Memory
 
 **Persistent memory + session search + secret scanning for Pi**
 
@@ -25,7 +25,7 @@ Your Pi agent normally forgets everything when you close a session. **This exten
 
 ```bash
 # Install
-pi install npm:gsd-pi-hermes-memory
+gsd install npm:gsd-pi-hermes-memory
 
 # Index your past sessions (one-time)
 /memory-index-sessions
@@ -41,8 +41,8 @@ pi install npm:gsd-pi-hermes-memory
 
 If you’re upgrading from older versions, startup now auto-migrates extension data safely:
 
-- legacy extension root: `~/.pi/agent/memory` → `~/.pi/agent/gsd-pi-hermes-memory`
-- legacy flat skills: `~/.pi/agent/gsd-pi-hermes-memory/skills/*.md` → `~/.pi/agent/gsd-pi-hermes-memory/skills/<slug>/SKILL.md`
+- legacy extension root: `~/.gsd/agent/memory` → `~/.gsd/agent/gsd-pi-hermes-memory`
+- legacy flat skills: `~/.gsd/agent/gsd-pi-hermes-memory/skills/*.md` → `~/.gsd/agent/gsd-pi-hermes-memory/skills/<slug>/SKILL.md`
 
 This resolves Pi skill index conflicts like:
 
@@ -53,7 +53,7 @@ No manual action is needed. Launch Pi once after upgrade to let migration/normal
 ## Features
 
 | Feature | What happens |
-|---|---|
+| --- | --- |
 | 🔍 **Session Search** | Search across all past conversations via SQLite FTS5 |
 | 🧠 **Persistent Memory** | Facts, preferences, lessons saved to markdown files |
 | 🔄 **Memory Search Sync** | Successful Markdown memory writes are mirrored into SQLite for `memory_search` |
@@ -79,7 +79,7 @@ No manual action is needed. Launch Pi once after upgrade to let migration/normal
 The extension manages three types of knowledge:
 
 | Type | What | Storage | Token cost |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Memory** (MEMORY.md) | Facts — env details, project conventions, tool quirks | 5,000 chars max | Searchable by default |
 | **User Profile** (USER.md) | Who you are — name, preferences, communication style | 5,000 chars max | Searchable by default |
 | **Skills** (Pi-native `SKILL.md`) | Procedures — *how* to do something, reusable across sessions | Unlimited | Discoverable by Pi + manageable via the `skill_manage` tool |
@@ -107,13 +107,13 @@ npm test
 ## Installation
 
 ```bash
-pi install npm:gsd-pi-hermes-memory
+gsd install npm:gsd-pi-hermes-memory
 ```
 
 Or install from GitHub:
 
 ```bash
-pi install git:github.com/efrembaraldo/gsd-pi-hermes-memory
+gsd install git:github.com/efrembaraldo/gsd-pi-hermes-memory
 ```
 
 Or test locally without installing:
@@ -133,7 +133,7 @@ was compiled against a different Node.js version using NODE_MODULE_VERSION ...
 The extension attempts one automatic `npm rebuild better-sqlite3` against the Node that is running Pi. If that still fails:
 
 ```bash
-cd ~/.pi/agent/npm/node_modules/better-sqlite3
+cd ~/.gsd/agent/npm/node_modules/better-sqlite3
 npm rebuild better-sqlite3
 ```
 
@@ -144,9 +144,9 @@ Or install Pi with npm so the host runtime and extension install share one Node 
 The extension stores memory at two levels:
 
 | Tier | Location | What goes here | Available when |
-|---|---|---|---|
-| **Global** | `~/.pi/agent/gsd-pi-hermes-memory/` | Facts that apply everywhere — your name, preferences, OS, tools | Searchable via `memory_search` |
-| **Project** | `~/.pi/agent/projects-memory/<project>/` | Facts scoped to one codebase — architecture decisions, API quirks, team norms | Searchable when cwd matches the project |
+| --- | --- | --- | --- |
+| **Global** | `~/.gsd/agent/gsd-pi-hermes-memory/` | Facts that apply everywhere — your name, preferences, OS, tools | Searchable via `memory_search` |
+| **Project** | `~/.gsd/agent/projects-memory/<project>/` | Facts scoped to one codebase — architecture decisions, API quirks, team norms | Searchable when cwd matches the project |
 
 By default, full Markdown memories are **not** injected into the system prompt. The system prompt gets a full-detail `<memory-policy>` that tells the agent when to call `memory_search` and how to treat memory results. This keeps first-turn token usage low while preserving access to user, project, failure, correction, insight, preference, convention, and tool-quirk memories.
 
@@ -179,8 +179,8 @@ Standing instructions are the answer to that: a small, user-authored file that i
 They land in a `<standing-instructions>` block placed after the memory policy, so they read as a direct user directive rather than as recalled context.
 
 | Property | Behavior |
-|---|---|
-| **Provenance** | Stored in `~/.pi/agent/gsd-pi-hermes-memory/STANDING.md`. Background review, consolidation, and the correction detector never write there — only your editor or `/memory-pin` can. The agent cannot promote its own memory into this block. |
+| --- | --- |
+| **Provenance** | Stored in `~/.gsd/agent/gsd-pi-hermes-memory/STANDING.md`. Background review, consolidation, and the correction detector never write there — only your editor or `/memory-pin` can. The agent cannot promote its own memory into this block. |
 | **Budget** | Hard cap of 20 entries / 2,000 characters, separate from `memoryCharLimit` and `userCharLimit`. `/memory-pin` refuses a write past the cap; a hand-edited file over the cap is truncated at injection and the omission is stated loudly inside the block. |
 | **Safety** | Every pin goes through the same `scanContent()` injection/exfiltration scan as any memory write, and the block is fenced. |
 | **Disabling** | Set `"standingInstructionsEnabled": false` to drop the store and the command entirely. |
@@ -196,7 +196,7 @@ The agent learns from failures, corrections, and insights — just like humans d
 ### Memory Categories
 
 | Category | What it stores | Example |
-|---|---|---|
+| --- | --- | --- |
 | `failure` | What didn't work and why | "Tried localStorage for tokens — XSS vulnerability" |
 | `correction` | User corrections | "Use pnpm, not npm" |
 | `insight` | Learnings from experience | "Auth0 SDK handles refresh tokens automatically" |
@@ -234,7 +234,7 @@ Once installed, the extension works automatically for durable memory. Skills are
 The agent gets a `memory` tool it can call proactively:
 
 | Action | Target | What it does |
-|---|---|---|
+| --- | --- | --- |
 | `add` | `memory` or `user` | Append a new entry |
 | `replace` | `memory` or `user` | Update an existing entry (matched by substring) |
 | `remove` | `memory` or `user` | Delete an entry (matched by substring) |
@@ -244,7 +244,7 @@ The agent gets a `memory` tool it can call proactively:
 The agent also gets a `skill_manage` tool for saving reusable procedures. The explicit name is intentional: it manages saved procedures and avoids being mistaken for generic skill discovery.
 
 | Action | What it does |
-|---|---|
+| --- | --- |
 | `create` | Save a new skill (name, description, step-by-step body, required `scope`) |
 | `view` | Read a skill's full content by `skill_id`, or list all skills if no id is given |
 | `patch` | Update one section of an existing skill by `skill_id` |
@@ -253,8 +253,8 @@ The agent also gets a `skill_manage` tool for saving reusable procedures. The ex
 
 Skills are stored in Pi-native locations:
 
-- Global skills: `~/.pi/agent/gsd-pi-hermes-memory/skills/<slug>/SKILL.md`
-- Project skills: `~/.pi/agent/projects-memory/<project>/skills/<slug>/SKILL.md`
+- Global skills: `~/.gsd/agent/gsd-pi-hermes-memory/skills/<slug>/SKILL.md`
+- Project skills: `~/.gsd/agent/projects-memory/<project>/skills/<slug>/SKILL.md`
 
 New skills must choose scope explicitly:
 
@@ -310,17 +310,17 @@ Project-scoped skills are loaded via Pi's `resources_discover` hook.
 
 On discovery, the extension returns the active project's skills directory as a skill path:
 
-- `~/.pi/agent/projects-memory/<project>/skills/`
+- `~/.gsd/agent/projects-memory/<project>/skills/`
 
 This lets Pi discover project skills as native skills without copying them into the global skills folder.
 
 ### Memory vs User Profile vs Skills
 
 | Store | File | What goes here | Limit |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **memory** | `MEMORY.md` | Agent's notes — env facts, project conventions, tool quirks, lessons learned | 5,000 chars |
 | **user** | `USER.md` | User profile — name, preferences, communication style, habits | 5,000 chars |
-| **skills** | `~/.pi/agent/gsd-pi-hermes-memory/skills/<slug>/SKILL.md` or `projects-memory/<project>/skills/<slug>/SKILL.md` | Procedures — *how* to debug, deploy, test, or fix something | Unlimited |
+| **skills** | `~/.gsd/agent/gsd-pi-hermes-memory/skills/<slug>/SKILL.md` or `projects-memory/<project>/skills/<slug>/SKILL.md` | Procedures — *how* to debug, deploy, test, or fix something | Unlimited |
 | **extended** | `sessions.db` | Searchable memories beyond the core limit | Unlimited |
 | **sessions** | `sessions.db` | Past conversation history (searchable via FTS5) | Unlimited |
 
@@ -334,6 +334,7 @@ By default, the extension indexes your Pi session history into a SQLite database
 | `memory_search` | Search extended memory store — unlimited capacity, keyword-based |
 
 Search behavior notes:
+
 - Multi-word natural-language queries are supported for both `memory_search` and `session_search`.
 - Exact phrases can be requested with quotes, for example `"memory search"`.
 - Advanced FTS queries with operators like `OR` still work when you need them.
@@ -351,11 +352,13 @@ For users who prefer source anchors over snippets, `sessionSearch.variant` can b
 The extension keeps Markdown memory as the human-readable source of truth, and mirrors successful writes into the SQLite-backed search store used by `memory_search`.
 
 This means:
+
 - Fresh `memory` tool writes become searchable immediately
 - Older Markdown entries can be backfilled with `/memory-sync-markdown`
 - SQLite search does **not** replace the core Markdown limit
 
 This is the **hybrid memory architecture**:
+
 - **Core memory** (MEMORY.md/USER.md/failures.md): Human-readable, size-limited, searchable by default
 - **SQLite memory mirror/store** (`sessions.db`): Searchable on demand via `memory_search`
 
@@ -366,7 +369,7 @@ Important: if core Markdown memory is full and consolidation cannot free space, 
 When you correct the agent, it saves immediately — no waiting for the background review. Examples of corrections the agent detects:
 
 | You say | What happens |
-|---|---|
+| --- | --- |
 | "don't do that" | ✅ Immediate save |
 | "no, use yarn instead" | ✅ Immediate save |
 | "actually, fix the test first" | ✅ Immediate save |
@@ -403,7 +406,7 @@ If direct mode fails (no model, no auth, provider error, unparseable response, o
 Set `reviewTransport` in config only when you need to override this:
 
 | Value | Behavior |
-|---|---|
+| --- | --- |
 | `direct` (default) | Try in-process `completeSimple()` first; fall back to subprocess on failure |
 | `subprocess` | Always use `pi -p` subprocess for every LLM-driven memory operation (pre-PR #92 behavior) |
 
@@ -418,7 +421,7 @@ This means skills build up naturally over time without you having to ask.
 ### Commands
 
 | Command | What it does |
-|---|---|
+| --- | --- |
 | `/memory-insights` | Shows everything stored in memory and user profile |
 | `/memory-skills` | Opens an interactive skills manager for search, multi-select, move, and delete |
 | `/memory-consolidate` | Manually trigger memory consolidation to free space |
@@ -454,6 +457,7 @@ This means skills build up naturally over time without you having to ask.
 `/memory-skills` now opens an interactive TUI modal for skill management.
 
 Features:
+
 - fuzzy search by skill name
 - single-list view with scope badges (`[G]` global, `[P]` project)
 - multi-select with spacebar
@@ -462,6 +466,7 @@ Features:
 - inline action summaries for partial success/conflicts
 
 Keybindings:
+
 - `↑` / `↓` — move focus
 - `space` — toggle selection
 - `/` — focus search
@@ -474,13 +479,14 @@ Keybindings:
 - `esc` — close the modal
 
 Move behavior:
+
 - moves are **conflict-safe**
 - if the destination already contains the same slug, the conflicting skill stays in place
 - batch moves use partial-success semantics: non-conflicting skills move, blocked skills are reported in the summary
 
 ## Configuration
 
-Create `~/.pi/agent/hermes-memory-config.json`:
+Create `~/.gsd/agent/hermes-memory-config.json`:
 
 ```json
 {
@@ -489,7 +495,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "memoryCharLimit": 5000,
   "userCharLimit": 5000,
   "projectCharLimit": 5000,
-  "memoryDir": "~/.pi/agent/gsd-pi-hermes-memory",
+  "memoryDir": "~/.gsd/agent/gsd-pi-hermes-memory",
   "projectsMemoryDir": "projects-memory",
   "sessionSearch": { "variant": "legacy" },
   "llmModelOverride": "openrouter/deepseek/deepseek-v4-flash",
@@ -515,7 +521,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 ```
 
 | Setting | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `memoryMode` | `policy-only` | Prompt behavior: `policy-only` injects only memory policy; `legacy-inject` restores full memory prompt injection |
 | `memoryPolicyStyle` | `full` | Policy text used in `policy-only` mode: `full` preserves the default v0.7 policy; `compact` uses shorter built-in guidance; `custom` uses `memoryPolicyCustomText`; `none` injects no policy text |
 | `memoryPolicyCustomText` | unset | Custom policy text used when `memoryPolicyStyle` is `custom`; blank or missing text falls back to `compact` |
@@ -523,9 +529,9 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `memoryCharLimit` | `5000` | Max characters in MEMORY.md |
 | `userCharLimit` | `5000` | Max characters in USER.md |
 | `projectCharLimit` | `5000` | Max characters in project-scoped MEMORY.md |
-| `memoryDir` | `~/.pi/agent/gsd-pi-hermes-memory` | Custom directory for extension storage files |
-| `projectsMemoryDir` | `projects-memory` | Subdirectory under `~/.pi/agent/` for project-scoped memory |
-| `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.pi/agent/sessions/` |
+| `memoryDir` | `~/.gsd/agent/gsd-pi-hermes-memory` | Custom directory for extension storage files |
+| `projectsMemoryDir` | `projects-memory` | Subdirectory under `~/.gsd/agent/` for project-scoped memory |
+| `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.gsd/agent/sessions/` |
 | `llmModelOverride` | unset | Optional model override for background review (direct and subprocess), correction save, session flush, and consolidation |
 | `llmThinkingOverride` | unset | Optional thinking override for those LLM calls; valid values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. If `llmModelOverride` is set and this is omitted, review/child calls default to `off` |
 | `childExtensionPaths` | unset | Trusted provider/auth adapter entry paths explicitly allowed in isolated child Pi processes; sibling packages matching the `*-oauth-adapter`/`*-auth-adapter` naming convention (including scoped packages, via their `package.json` `pi.extensions` manifest) are detected automatically — this setting is only needed for adapters that don't match that convention. In-process direct transport (the default for review/flush/correction/consolidation) doesn't need this at all, since it reads whatever provider auth is already registered |
@@ -553,7 +559,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 ## Where Data Lives
 
 ```
-~/.pi/agent/
+~/.gsd/agent/
 ├── gsd-pi-hermes-memory/      ← Global extension storage root
 │   ├── MEMORY.md          ← Agent's personal notes (env facts, patterns, lessons)
 │   ├── USER.md            ← User profile (name, preferences, habits)
@@ -578,7 +584,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 
 These are plain markdown files. You can read and edit them directly if you want to curate what the agent remembers. Memory entries are separated by `§` (section sign). Skills use Pi-compatible `SKILL.md` files with frontmatter.
 
-If you are upgrading from a version that stored project memory directly at `~/.pi/agent/<project>/MEMORY.md`, the extension copies or merges those entries into `~/.pi/agent/projects-memory/<project>/MEMORY.md` on startup. The old folders are left in place as a backup.
+If you are upgrading from a version that stored project memory directly at `~/.gsd/agent/<project>/MEMORY.md`, the extension copies or merges those entries into `~/.gsd/agent/projects-memory/<project>/MEMORY.md` on startup. The old folders are left in place as a backup.
 
 The `sessions.db` SQLite database stores session history and extended memory entries. It's searchable via FTS5 full-text search.
 
@@ -592,7 +598,7 @@ The `sessions.db` SQLite database stores session history and extended memory ent
 - **System prompts are invisible**: Pi's TUI does not display the system prompt. Use `/memory-preview-context` to inspect whether policy-only or legacy memory injection is active.
 - **Project skill visibility depends on Pi discovery cycles**: project skills are exposed through `resources_discover` using the active project's `skills/` path. If a moved or newly created project skill doesn't show up immediately in a running session, trigger a reload/new session so Pi refreshes discovered resources.
 - **Project move requires active project context**: in `/memory-skills`, the `p` hotkey is disabled when Pi is not currently in a detected project directory.
-- **Skills still need curation**: Skills are saved by the agent through the `skill_manage` tool when it decides a reusable procedure is worth keeping. They may still need review. You can move, delete, or edit them directly in `~/.pi/agent/gsd-pi-hermes-memory/skills/` or the active project's `skills/` folder.
+- **Skills still need curation**: Skills are saved by the agent through the `skill_manage` tool when it decides a reusable procedure is worth keeping. They may still need review. You can move, delete, or edit them directly in `~/.gsd/agent/gsd-pi-hermes-memory/skills/` or the active project's `skills/` folder.
 
 ## Architecture
 

@@ -5,7 +5,7 @@
  * Why this exists: `peerDependencies` is the only thing telling a user whether
  * this extension works on their Pi, and nothing verified it. The declared floor
  * had drifted to `>=0.74.0` while `src/handlers/review-memory-ops.ts` imports
- * `@earendil-works/pi-ai/compat`, a subpath that does not exist before 0.80.1 —
+ * `@gsd/pi-ai/compat`, a subpath that does not exist before 0.80.1 —
  * so anyone on 0.74-0.79.x got ERR_PACKAGE_PATH_NOT_EXPORTED and no extension
  * at all, with nothing in CI to catch it.
  *

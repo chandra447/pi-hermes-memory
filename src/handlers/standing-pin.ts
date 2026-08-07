@@ -7,7 +7,7 @@
  * impossible rather than merely forbidden by prompt.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { STANDING_MAX_CHARS, STANDING_MAX_ENTRIES } from "../constants.js";
 import type { StandingInstructions } from "../store/standing-instructions.js";
 

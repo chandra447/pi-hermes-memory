@@ -5,7 +5,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";
 import { DatabaseManager } from '../store/db.js';
 import {
   reconcileMarkdownFailureScopes,

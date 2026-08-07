@@ -1,7 +1,7 @@
 /**
  * Integration tests — exercise the extension end-to-end.
  *
- * NOTE: Tests that write to ~/.pi/agent/memory/ are excluded because the
+ * NOTE: Tests that write to ~/.gsd/agent/memory/ are excluded because the
  * MemoryStore class hardcodes that path and node:test runs files in parallel,
  * which causes race conditions between test files that share the directory.
  * File-level integration is instead validated by the Epic 1 smoke test

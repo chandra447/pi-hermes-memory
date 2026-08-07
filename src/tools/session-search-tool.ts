@@ -1,7 +1,7 @@
 import * as path from 'node:path';
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
+import { StringEnum } from "@gsd/pi-ai";
 import { DatabaseManager } from '../store/db.js';
 import { searchSessions, getIndexedMessageCount } from '../store/session-search.js';
 import { searchSessionAnchors } from '../store/session-anchor-search.js';

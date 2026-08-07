@@ -7,7 +7,7 @@
  * Fallback: pi.exec("pi", ["-p", ...]) subprocess when direct path is unavailable.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
 import { COMBINED_REVIEW_PROMPT, DIRECT_REVIEW_SYSTEM_PROMPT } from "../constants.js";
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";

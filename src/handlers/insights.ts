@@ -2,7 +2,7 @@
  * Insights command — /memory-insights shows what's stored in persistent memory.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 
 export function registerInsightsCommand(pi: ExtensionAPI, store: MemoryStore, projectStore: MemoryStore | null, projectName: string): void {

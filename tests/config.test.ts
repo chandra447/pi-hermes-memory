@@ -138,11 +138,11 @@ describe("loadConfig", () => {
   it("expands ~/ memoryDir into an absolute home path", () => {
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      memoryDir: "~/.pi/agent/gsd-pi-hermes-memory",
+      memoryDir: "~/.gsd/agent/gsd-pi-hermes-memory",
     }));
 
     const config = loadConfig(TEST_CONFIG_PATH);
-    assert.strictEqual(config.memoryDir, path.join(os.homedir(), ".pi", "agent", "gsd-pi-hermes-memory"));
+    assert.strictEqual(config.memoryDir, path.join(os.homedir(), ".gsd", "agent", "gsd-pi-hermes-memory"));
   });
 
   it("resolves relative memoryDir values against the agent root instead of cwd", () => {

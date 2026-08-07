@@ -12,7 +12,17 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "declaration": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "paths": {
+      "@gsd/pi-coding-agent": ["./node_modules/@earendil-works/pi-coding-agent"],
+      "@gsd/pi-coding-agent/*": ["./node_modules/@earendil-works/pi-coding-agent/*"],
+      "@gsd/pi-ai": ["./node_modules/@earendil-works/pi-ai"],
+      "@gsd/pi-ai/*": ["./node_modules/@earendil-works/pi-ai/*"],
+      "@gsd/pi-tui": ["./node_modules/@earendil-works/pi-tui"],
+      "@gsd/pi-tui/*": ["./node_modules/@earendil-works/pi-tui/*"],
+      "@gsd/pi-agent-core": ["./node_modules/@earendil-works/pi-agent-core"],
+      "@gsd/pi-agent-core/*": ["./node_modules/@earendil-works/pi-agent-core/*"]
+    }
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"]

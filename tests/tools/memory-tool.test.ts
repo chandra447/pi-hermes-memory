@@ -11,7 +11,7 @@ import { MemoryStore } from "../../src/store/memory-store.js";
 import { DatabaseManager } from "../../src/store/db.js";
 import { getMemories, syncMemoryEntry } from "../../src/store/sqlite-memory-store.js";
 import { ENTRY_DELIMITER, MEMORY_FILE } from "../../src/constants.js";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 
 describe("registerMemoryTool", () => {
   let tmpDir: string;

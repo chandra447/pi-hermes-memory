@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { MemoryStore } from "../../src/store/memory-store.js";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@gsd/pi-ai";
 import {
   applyReviewOperations,
   buildDirectReviewCompletionOptions,

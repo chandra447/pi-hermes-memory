@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import type { MemoryConfig, ThinkingLevel } from "../types.js";
 import { AGENT_ROOT } from "../paths.js";
 
@@ -283,7 +283,7 @@ function isCliJsPath(value: string | undefined): value is string {
 
 function resolvedInstalledPiCliPath(): string | undefined {
 	try {
-		const packageEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
+		const packageEntry = import.meta.resolve("@gsd/pi-coding-agent");
 		const entryPath = fileURLToPath(packageEntry);
 		const cliPath = join(dirname(entryPath), "cli.js");
 		return existsSync(cliPath) ? cliPath : undefined;

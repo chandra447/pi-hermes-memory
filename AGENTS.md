@@ -2,15 +2,15 @@
 
 ## Project Overview
 
-This is a Pi coding agent extension that brings Hermes-style persistent memory and a learning loop to any Pi user. After `pi install`, users get persistent memory across sessions, a background learning loop, and session-end flush.
+This is a Pi coding agent extension that brings Hermes-style persistent memory and a learning loop to any Pi user. After `gsd install`, users get persistent memory across sessions, a background learning loop, and session-end flush.
 
 **v0.1 is complete** (119 tests, v0.1.0 tagged). Current work is **v0.2: Skills + Smart Curation** — see `docs/0.2/TASKS.md`.
 
 ## Architecture
 
 - **Language**: TypeScript (loaded via jiti, no compilation needed at runtime)
-- **Runtime**: Pi extension API (`@earendil-works/pi-coding-agent`)
-- **Storage**: Two markdown files (`MEMORY.md`, `USER.md`) in `~/.pi/agent/memory/`
+- **Runtime**: Pi extension API (`@gsd/pi-coding-agent`)
+- **Storage**: Two markdown files (`MEMORY.md`, `USER.md`) in `~/.gsd/agent/memory/`
 - **Entry point**: `src/index.ts` — registers tools, event handlers, and commands
 
 ## Key Files
@@ -71,8 +71,8 @@ pi -e ./src/index.ts
 ## Installation (for users)
 
 ```bash
-pi install npm:gsd-pi-hermes-memory
+gsd install npm:gsd-pi-hermes-memory
 
 # or from git
-pi install git:github.com/efrembaraldo/gsd-pi-hermes-memory
+gsd install git:github.com/efrembaraldo/gsd-pi-hermes-memory
 ```

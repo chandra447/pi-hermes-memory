@@ -5,7 +5,7 @@
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
-} from "@earendil-works/pi-coding-agent";
+} from "@gsd/pi-coding-agent";
 
 export function registerLearnMemoryCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("learn-memory-tool", {
@@ -220,7 +220,7 @@ export function registerLearnMemoryCommand(pi: ExtensionAPI): void {
 				lines.push("");
 				lines.push('  "Want to edit manually"');
 				lines.push(
-					"    → Files at ~/.pi/agent/gsd-pi-hermes-memory/ (plain markdown)",
+					"    → Files at ~/.gsd/agent/gsd-pi-hermes-memory/ (plain markdown)",
 				);
 			}
 

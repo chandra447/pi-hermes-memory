@@ -297,7 +297,7 @@ function indexSessionFile(dbManager: DatabaseManager, file: string, result: Bulk
  * Index all sessions from disk.
  *
  * @param dbManager — Database manager instance
- * @param sessionsDir — Path to ~/.pi/agent/sessions/
+ * @param sessionsDir — Path to ~/.gsd/agent/sessions/
  * @param projectDir — Optional: specific project directory to index
  * @returns Bulk index result
  */

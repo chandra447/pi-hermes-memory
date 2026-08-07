@@ -8,7 +8,7 @@
  * subprocess only if direct mode fails or reviewTransport forces subprocess.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import { DIRECT_FLUSH_SYSTEM_PROMPT, ENTRY_DELIMITER, FLUSH_PROMPT } from "../constants.js";

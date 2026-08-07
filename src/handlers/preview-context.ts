@@ -3,7 +3,7 @@
  * or legacy memory blocks appended to the system prompt.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import type { StandingInstructions } from "../store/standing-instructions.js";
 import { resolveMemoryPolicyPrompt } from "../prompt-context.js";

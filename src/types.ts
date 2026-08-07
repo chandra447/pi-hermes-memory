@@ -2,7 +2,7 @@
  * Shared TypeScript types for the Hermes Memory extension.
  */
 
-import type { TextContent } from "@earendil-works/pi-ai";
+import type { TextContent } from "@gsd/pi-ai";
 
 export type MemoryOverflowStrategy =
 	| "auto-consolidate"
@@ -55,7 +55,7 @@ export interface MemoryConfig {
 	flushMinTurns: number;
 	/** Recent conversation messages included in session flush. 0 = all. Default: 0 */
 	flushRecentMessages?: number;
-	/** Override extension storage directory. Default: ~/.pi/agent/gsd-pi-hermes-memory */
+	/** Override extension storage directory. Default: ~/.gsd/agent/gsd-pi-hermes-memory */
 	memoryDir?: string;
 	/** Directory for project-scoped memory (relative to ~/.pi/agent). Default: "projects-memory" */
 	projectsMemoryDir?: string;

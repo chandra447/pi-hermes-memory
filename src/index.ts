@@ -2,7 +2,7 @@
  * GSD Pi Hermes Memory Extension
  *
  * Brings Hermes-style persistent memory and a learning loop to any Pi user.
- * After `pi install`, users get:
+ * After `gsd install`, users get:
  *
  * 1. Persistent Memory — MEMORY.md + USER.md that survive across sessions
  * 2. Background Learning Loop — auto-saves notable facts every N turns
@@ -24,7 +24,7 @@
 
 import * as path from "node:path";
 import * as fs from "node:fs";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
 import { DatabaseManager } from "./store/db.js";
@@ -83,7 +83,7 @@ export function resolveProjectSkillDiscovery(
 	const detected = detectProjectSkills(projectsMemoryDir, cwd);
 	skillStore.setProjectContext(detected.name, detected.skillsDir);
 
-	// Pi auto-discovers its own `~/.pi/agent/skills/`, but this extension keeps
+	// Pi auto-discovers its own `~/.gsd/agent/skills/`, but this extension keeps
 	// its generated skills in a directory of its own so users can audit, wipe, or
 	// ignore them without touching skills they installed themselves (#126). Both
 	// of ours must therefore be contributed here.
@@ -170,11 +170,11 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	// Keep project memory available for users upgrading from the old
-	// ~/.pi/agent/<project>/ layout. This is non-destructive: legacy folders
+	// ~/.gsd/agent/<project>/ layout. This is non-destructive: legacy folders
 	// remain in place while entries are copied/merged into projects-memory/.
 	migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
 	// Detect project from cwd using shared helper
-	// Project-scoped store: ~/.pi/agent/<projectsMemoryDir>/<project_name>/
+	// Project-scoped store: ~/.gsd/agent/<projectsMemoryDir>/<project_name>/
 	const projectConfig = project.memoryDir
 		? {
 				...config,

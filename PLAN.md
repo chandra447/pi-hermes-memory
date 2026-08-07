@@ -1,14 +1,14 @@
 # GSD Pi Hermes Memory Extension — Complete Implementation Plan
 
 > **Status**: Ready for implementation  
-> **Approach**: Installable Pi extension using `pi install`  
+> **Approach**: Installable Pi extension using `gsd install`  
 > **Model for subagents**: `glm-5-turbo`
 
 ---
 
 ## What We're Building
 
-An installable Pi extension that brings **Hermes-style persistent memory and a learning loop** to any Pi user. After `pi install`, the user gets:
+An installable Pi extension that brings **Hermes-style persistent memory and a learning loop** to any Pi user. After `gsd install`, the user gets:
 
 1. **Persistent Memory** — Two curated markdown files (`MEMORY.md`, `USER.md`) surviving across sessions, injected into the system prompt as a frozen snapshot at session start. The LLM can add/replace/remove entries via a `memory` tool.
 
@@ -157,7 +157,7 @@ Before any write, content is scanned for:
 | Hermes Concept | Pi Extension Equivalent | Implementation Detail |
 | --- | --- | --- |
 | `MemoryStore` class | `MemoryStore` class in `memory-store.ts` | Same §-delimited entries, char limits, frozen snapshot |
-| `MEMORY.md` / `USER.md` in `~/.hermes/memories/` | Same files in `~/.pi/agent/memory/` | Resolved via `ctx.cwd` or hardcoded `~/.pi/agent/memory/` |
+| `MEMORY.md` / `USER.md` in `~/.hermes/memories/` | Same files in `~/.gsd/agent/memory/` | Resolved via `ctx.cwd` or hardcoded `~/.gsd/agent/memory/` |
 | `memory` tool via `tools.registry.register()` | `pi.registerTool({ name: "memory" })` | Same OpenAI-style schema with rich description |
 | `format_for_system_prompt()` frozen snapshot | `before_agent_start` event → `return { systemPrompt: event.systemPrompt + block }` | Snapshot captured at `session_start`, never mutated |
 | `_memory_nudge_interval` + `_spawn_background_review()` | `turn_end` event → turn counter → `pi.exec("pi", ["-p", reviewPrompt])` | Uses `pi -p` for isolated one-shot review |
@@ -174,7 +174,7 @@ Before any write, content is scanned for:
 
 ```
 gsd-pi-hermes-memory/
-├── package.json              # For pi install
+├── package.json              # For gsd install
 ├── src/
 │   ├── index.ts              # Extension entry point — wires everything together
 │   ├── types.ts              # Shared TypeScript interfaces + getMessageText helper
@@ -194,7 +194,7 @@ gsd-pi-hermes-memory/
 Runtime files (created automatically):
 
 ```
-~/.pi/agent/memory/
+~/.gsd/agent/memory/
 ├── MEMORY.md     # Agent's personal notes
 └── USER.md       # User profile data
 ```
@@ -218,7 +218,7 @@ export const DEFAULT_NUDGE_INTERVAL = 10; // turns between auto-reviews
 export const DEFAULT_FLUSH_MIN_TURNS = 6; // minimum turns before flush triggers
 
 // Memory directory
-export const MEMORY_DIR_NAME = "memory"; // relative to ~/.pi/agent/
+export const MEMORY_DIR_NAME = "memory"; // relative to ~/.gsd/agent/
 
 // File names
 export const MEMORY_FILE = "MEMORY.md";
@@ -594,9 +594,9 @@ export class MemoryStore {
 ### `memory-tool.ts`
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
+import { StringEnum } from "@gsd/pi-ai";
 import { MemoryStore } from "./memory-store.js";
 import { MEMORY_TOOL_DESCRIPTION } from "./constants.js";
 
@@ -651,7 +651,7 @@ export function registerMemoryTool(pi: ExtensionAPI, store: MemoryStore): void {
 ### `background-review.ts`
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { MemoryStore } from "./memory-store.js";
 import { COMBINED_REVIEW_PROMPT } from "./constants.js";
 import type { MemoryConfig } from "./types.js";
@@ -727,7 +727,7 @@ export function setupBackgroundReview(
 ### `session-flush.ts`
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { MemoryStore } from "./memory-store.js";
 import { FLUSH_PROMPT } from "./constants.js";
 import type { MemoryConfig } from "./types.js";
@@ -805,7 +805,7 @@ export function setupSessionFlush(
 ### `insights.ts`
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { MemoryStore } from "./memory-store.js";
 
 export function registerInsightsCommand(pi: ExtensionAPI, store: MemoryStore): void {
@@ -859,7 +859,7 @@ export function registerInsightsCommand(pi: ExtensionAPI, store: MemoryStore): v
 ### `index.ts` — Extension Entry Point
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { MemoryStore } from "./memory-store.js";
 import { registerMemoryTool } from "./memory-tool.js";
 import { setupBackgroundReview } from "./background-review.js";
@@ -928,9 +928,9 @@ export default function (pi: ExtensionAPI) {
     "extensions": ["./src/index.ts"]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.1.0",
+    "@gsd/pi-coding-agent": ">=0.1.0",
     "typebox": ">=1.0.0",
-    "@earendil-works/pi-ai": ">=0.1.0"
+    "@gsd/pi-ai": ">=0.1.0"
   },
   "keywords": ["pi", "memory", "learning", "agent"],
   "license": "MIT"
@@ -971,7 +971,7 @@ Files: `insights.ts`, `README.md`
 - `/memory-insights` command
 - Configuration support (char limits, nudge interval) via Pi settings
 - README with installation and usage
-- npm publish for `pi install`
+- npm publish for `gsd install`
 
 **Test**: Full end-to-end — install, use across multiple sessions, verify persistence and learning.
 

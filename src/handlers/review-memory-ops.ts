@@ -2,9 +2,9 @@
  * Parse and apply structured memory operations from direct background review.
  */
 
-import type { Api, Model } from "@earendil-works/pi-ai";
-import { completeSimple, type Message, type SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@gsd/pi-ai";
+import { completeSimple, type Message, type SimpleStreamOptions } from "@gsd/pi-ai/compat";
+import type { ExtensionContext } from "@gsd/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import type { DatabaseManager } from "../store/db.js";
 import type { MemoryCategory, MemoryConfig, MemoryResult, ThinkingLevel } from "../types.js";

@@ -1,7 +1,7 @@
 /**
  * Shared better-sqlite3 loader with ABI mismatch recovery.
  *
- * Pi installs extension deps under ~/.pi/agent/npm. When the host Node that
+ * Pi installs extension deps under ~/.gsd/agent/npm. When the host Node that
  * runs Pi (e.g. Homebrew) differs from the Node that compiled better-sqlite3,
  * require() throws NODE_MODULE_VERSION errors. Detect that, attempt one
  * npm rebuild against the current runtime, and surface a clear recovery path.
@@ -205,7 +205,7 @@ export function formatBetterSqlite3AbiError(options: {
 		"Fix: rebuild the extension install against the same Node that runs Pi, then restart Pi:",
 		options.packageRoot
 			? `  cd "${options.packageRoot}" && npm rebuild better-sqlite3`
-			: "  cd ~/.pi/agent/npm && npm rebuild better-sqlite3",
+			: "  cd ~/.gsd/agent/npm && npm rebuild better-sqlite3",
 		"If you installed Pi with Homebrew, either rebuild as above after brew Node upgrades, or install Pi with npm so the extension and host share one Node toolchain.",
 	].join("\n");
 }

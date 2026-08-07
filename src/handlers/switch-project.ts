@@ -7,7 +7,7 @@
  * for a project they're not currently in.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import type { MemoryConfig } from "../types.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";

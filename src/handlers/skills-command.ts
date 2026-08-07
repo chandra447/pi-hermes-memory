@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@gsd/pi-coding-agent";
 import { SkillStore } from "../store/skill-store.js";
 import type { SkillIndex, SkillResult, SkillScope } from "../types.js";
 import {
@@ -18,7 +18,7 @@ import {
   wrapTextWithAnsi,
   type Focusable,
   type TUI,
-} from "@earendil-works/pi-tui";
+} from "@gsd/pi-tui";
 
 export const MEMORY_SKILLS_KEYMAP = {
   moveGlobal: "g",

@@ -3,7 +3,7 @@
  * Guard for check/test npm scripts.
  *
  * The published tarball intentionally omits tests/ and TypeScript (devDependency).
- * When those scripts are run from an installed package (e.g. after `pi install`),
+ * When those scripts are run from an installed package (e.g. after `gsd install`),
  * fail with a clear message instead of `tsc: not found` / `tests/run-all.sh: not found`.
  *
  * @see https://github.com/efrembaraldo/gsd-pi-hermes-memory/issues/108

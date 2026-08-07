@@ -45,7 +45,7 @@ Target state:
     "image": "https://raw.githubusercontent.com/efrembaraldo/gsd-pi-hermes-memory/main/docs/assets/hermes-memory-preview.png"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@gsd/pi-coding-agent": "*"
   }
 }
 ```
@@ -82,7 +82,7 @@ npm publish --access public
 After publishing:
 1. Check `https://www.npmjs.com/package/gsd-pi-hermes-memory`
 2. Check `https://pi.dev/packages` — should appear within minutes
-3. Test install: `pi install npm:gsd-pi-hermes-memory`
+3. Test install: `gsd install npm:gsd-pi-hermes-memory`
 
 ## Post-Publish
 
@@ -90,24 +90,24 @@ After publishing:
 
 Before (git):
 ```bash
-pi install git:github.com/efrembaraldo/gsd-pi-hermes-memory
+gsd install git:github.com/efrembaraldo/gsd-pi-hermes-memory
 ```
 
 After (npm):
 ```bash
-pi install npm:gsd-pi-hermes-memory
+gsd install npm:gsd-pi-hermes-memory
 ```
 
 ### Update README installation instructions
 
 Replace:
 ```
-pi install git:github.com/efrembaraldo/gsd-pi-hermes-memory
+gsd install git:github.com/efrembaraldo/gsd-pi-hermes-memory
 ```
 
 With:
 ```
-pi install npm:gsd-pi-hermes-memory
+gsd install npm:gsd-pi-hermes-memory
 ```
 
 Keep the git option as an alternative.
@@ -136,7 +136,7 @@ npm version major && npm publish
 - [ ] `npm publish --access public`
 - [ ] Verify on npmjs.com
 - [ ] Verify on pi.dev/packages
-- [ ] Test `pi install npm:gsd-pi-hermes-memory`
+- [ ] Test `gsd install npm:gsd-pi-hermes-memory`
 - [ ] Update README installation instructions
 - [ ] Add demo screenshot/image for pi.dev gallery (optional but recommended)
 - [ ] Tag release: `git tag v0.1.0-npm && git push --tags`

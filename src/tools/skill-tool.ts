@@ -3,9 +3,9 @@
  * Complements the `memory` tool (declarative knowledge) with procedural knowledge.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
+import { StringEnum } from "@gsd/pi-ai";
 import { SkillStore } from "../store/skill-store.js";
 import { SKILL_TOOL_DESCRIPTION } from "../constants.js";
 
