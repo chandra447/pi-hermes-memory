@@ -1,4 +1,4 @@
-# Pi Hermes Memory Extension — Complete Implementation Plan
+# GSD Pi Hermes Memory Extension — Complete Implementation Plan
 
 > **Status**: Ready for implementation  
 > **Approach**: Installable Pi extension using `pi install`  
@@ -27,7 +27,7 @@ When implementing in a new session, read these files **first** in this order. Ev
 ### Must-read (core port targets)
 
 | File | What it contains | Plan component derived from it |
-|---|---|---|
+| --- | --- | --- |
 | `hermes-agent/tools/memory_tool.py` | **Entire memory system**: `MemoryStore` class (CRUD, char limits, frozen snapshot, atomic writes via temp+rename), `memory_tool()` dispatch function, `MEMORY_SCHEMA` (OpenAI tool schema with rich description), `check_memory_requirements()`, `_scan_memory_content()` (injection/exfil scanning), `_MEMORY_THREAT_PATTERNS`, `_INVISIBLE_CHARS`, `ENTRY_DELIMITER = "\n§\n"` | `memory-store.ts`, `memory-tool.ts`, `content-scanner.ts`, `constants.ts` |
 | `hermes-agent/run_agent.py` | **Learning loop**: `_MEMORY_REVIEW_PROMPT`, `_SKILL_REVIEW_PROMPT`, `_COMBINED_REVIEW_PROMPT` (lines ~2833-2865), `_spawn_background_review()` (lines ~2867-2955), `flush_memories()` (lines ~7324-7538), `_memory_nudge_interval` config (lines ~1428-1447), `flush_min_turns` config | `background-review.ts`, `session-flush.ts`, `constants.ts` |
 | `hermes-agent/agent/memory_provider.py` | `MemoryProvider` abstract base class with lifecycle hooks: `initialize()`, `system_prompt_block()`, `prefetch()`, `sync_turn()`, `on_session_end()`, `on_pre_compress()`, `shutdown()` | Understanding provider pattern for future extensibility |
@@ -36,7 +36,7 @@ When implementing in a new session, read these files **first** in this order. Ev
 ### Context-only (understanding, not direct port)
 
 | File | What to skim for |
-|---|---|
+| --- | --- |
 | `hermes-agent/agent/insights.py` | `InsightsEngine` class — how Hermes generates usage reports from session history. Our `/memory-insights` is a simpler version. |
 | `hermes-agent/hermes_state.py` | SQLite session store — **we don't need this** (Pi has `SessionManager`). Skim to understand session schema only. |
 | `hermes-agent/hermes_cli/plugins.py` | Plugin system — `PluginContext.register_tool()`, `register_hook()`, `register_command()`. Interesting pattern but Pi has its own `ExtensionAPI`. |
@@ -44,7 +44,7 @@ When implementing in a new session, read these files **first** in this order. Ev
 ### Key line ranges for quick access
 
 | File | Lines | What's there |
-|---|---|---|
+| --- | --- | --- |
 | `hermes-agent/tools/memory_tool.py` | 1-50 | Imports, `get_memory_dir()`, `ENTRY_DELIMITER` |
 | `hermes-agent/tools/memory_tool.py` | 53-101 | `_MEMORY_THREAT_PATTERNS`, `_INVISIBLE_CHARS`, `_scan_memory_content()` |
 | `hermes-agent/tools/memory_tool.py` | 105-310 | `MemoryStore` class — full CRUD + persistence |
@@ -144,6 +144,7 @@ Compaction / Session End
 ### Hermes Security (source: `hermes-agent/tools/memory_tool.py`)
 
 Before any write, content is scanned for:
+
 - **Prompt injection**: "ignore previous instructions", "you are now..."
 - **Role hijacking**: "act as if you have no restrictions"
 - **Secret exfiltration**: `curl ${API_KEY`, `cat .env`
@@ -154,7 +155,7 @@ Before any write, content is scanned for:
 ## Architecture: Hermes → Pi Extension Mapping
 
 | Hermes Concept | Pi Extension Equivalent | Implementation Detail |
-|---|---|---|
+| --- | --- | --- |
 | `MemoryStore` class | `MemoryStore` class in `memory-store.ts` | Same §-delimited entries, char limits, frozen snapshot |
 | `MEMORY.md` / `USER.md` in `~/.hermes/memories/` | Same files in `~/.pi/agent/memory/` | Resolved via `ctx.cwd` or hardcoded `~/.pi/agent/memory/` |
 | `memory` tool via `tools.registry.register()` | `pi.registerTool({ name: "memory" })` | Same OpenAI-style schema with rich description |
@@ -172,7 +173,7 @@ Before any write, content is scanned for:
 ## File Structure
 
 ```
-pi-hermes-memory/
+gsd-pi-hermes-memory/
 ├── package.json              # For pi install
 ├── src/
 │   ├── index.ts              # Extension entry point — wires everything together
@@ -191,6 +192,7 @@ pi-hermes-memory/
 ```
 
 Runtime files (created automatically):
+
 ```
 ~/.pi/agent/memory/
 ├── MEMORY.md     # Agent's personal notes
@@ -918,7 +920,7 @@ export default function (pi: ExtensionAPI) {
 
 ```json
 {
-  "name": "pi-hermes-memory",
+  "name": "gsd-pi-hermes-memory",
   "version": "1.0.0",
   "description": "Hermes-style persistent memory and learning loop for Pi coding agent",
   "main": "src/index.ts",
@@ -940,6 +942,7 @@ export default function (pi: ExtensionAPI) {
 ## Implementation Phases
 
 ### Phase 1: Core Memory (Day 1)
+
 Files: `types.ts`, `constants.ts`, `content-scanner.ts`, `memory-store.ts`, `memory-tool.ts`, `index.ts`
 
 - MemoryStore with full CRUD + atomic persistence
@@ -951,6 +954,7 @@ Files: `types.ts`, `constants.ts`, `content-scanner.ts`, `memory-store.ts`, `mem
 **Test**: Install extension, ask agent to save something to memory, restart session, verify it recalls.
 
 ### Phase 2: Learning Loop (Day 2)
+
 Files: `background-review.ts`, `session-flush.ts`
 
 - Turn counter in `turn_end` events
@@ -961,6 +965,7 @@ Files: `background-review.ts`, `session-flush.ts`
 **Test**: Have a 10+ turn conversation, verify background review triggers and saves notable facts.
 
 ### Phase 3: Polish & Distribution (Day 3)
+
 Files: `insights.ts`, `README.md`
 
 - `/memory-insights` command
@@ -993,6 +998,7 @@ Files: `insights.ts`, `README.md`
 ## Security Posture (identical to Hermes)
 
 All writes pass through `content-scanner.ts`:
+
 - ❌ Blocks prompt injection ("ignore previous instructions")
 - ❌ Blocks role hijacking ("you are now...")
 - ❌ Blocks secret exfiltration ("curl ${API_KEY...")

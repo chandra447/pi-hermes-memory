@@ -114,7 +114,7 @@ describe("sqlite-native loader", () => {
       (error: unknown) => {
         assert.ok(error instanceof BetterSqlite3LoadError);
         const message = error.message;
-        assert.match(message, /pi-hermes-memory could not load the native better-sqlite3 module/);
+        assert.match(message, /gsd-pi-hermes-memory could not load the native better-sqlite3 module/);
         assert.match(message, /npm rebuild better-sqlite3/);
         assert.match(message, /Homebrew/);
         assert.match(message, /npm missing/);

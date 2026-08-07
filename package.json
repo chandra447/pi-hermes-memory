@@ -1,5 +1,5 @@
 {
-  "name": "pi-hermes-memory",
+  "name": "gsd-pi-hermes-memory",
   "version": "0.9.3",
   "description": "🧠 Persistent memory + 🔍 session search + 🛡️ secret scanning for Pi. Token-aware policy-only memory by default, SQLite FTS5 search, auto-consolidation, procedural skills. 732 tests. Ported from Hermes agent.",
   "type": "module",
@@ -44,7 +44,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/chandra447/pi-hermes-memory"
+    "url": "https://github.com/efrembaraldo/gsd-pi-hermes-memory"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.80.1",

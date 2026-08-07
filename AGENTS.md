@@ -1,4 +1,4 @@
-# Pi Hermes Memory Extension
+# GSD Pi Hermes Memory Extension
 
 ## Project Overview
 
@@ -16,7 +16,7 @@ This is a Pi coding agent extension that brings Hermes-style persistent memory a
 ## Key Files
 
 | File | Purpose |
-|---|---
+| --- | ---
 | `src/index.ts` | Extension entry point — wires all components together |
 | `src/types.ts` | Shared TypeScript interfaces + `getMessageText()` helper |
 | `src/constants.ts` | Prompts, defaults, delimiter |
@@ -49,6 +49,7 @@ The implementation is ported from the Hermes agent harness. See `PLAN.md` → "H
 - **v0.2 tasks** (current): `docs/0.2/TASKS.md` — Skills, auto-consolidation, correction detection, tool-call-aware nudge
 
 **Workflow:**
+
 1. Pick a task from `docs/0.2/TASKS.md`
 2. Mark it `[~]` (in progress)
 3. Implement it
@@ -70,8 +71,8 @@ pi -e ./src/index.ts
 ## Installation (for users)
 
 ```bash
-pi install npm:pi-hermes-memory
+pi install npm:gsd-pi-hermes-memory
 
 # or from git
-pi install git:github.com/chandra447/pi-hermes-memory
+pi install git:github.com/efrembaraldo/gsd-pi-hermes-memory
 ```

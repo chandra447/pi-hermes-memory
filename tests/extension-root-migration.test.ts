@@ -22,7 +22,7 @@ afterEach(() => {
 describe("migrateExtensionRoot", () => {
   it("moves legacy files into new extension root", async () => {
     const legacy = path.join(tmpDir, "memory");
-    const target = path.join(tmpDir, "pi-hermes-memory");
+    const target = path.join(tmpDir, "gsd-pi-hermes-memory");
     fs.mkdirSync(path.join(legacy, "skills", "abc"), { recursive: true });
     fs.writeFileSync(path.join(legacy, "MEMORY.md"), "legacy memory", "utf-8");
     fs.writeFileSync(path.join(legacy, "skills", "abc", "SKILL.md"), "legacy skill", "utf-8");
@@ -37,7 +37,7 @@ describe("migrateExtensionRoot", () => {
 
   it("does not overwrite existing target files", async () => {
     const legacy = path.join(tmpDir, "memory");
-    const target = path.join(tmpDir, "pi-hermes-memory");
+    const target = path.join(tmpDir, "gsd-pi-hermes-memory");
     fs.mkdirSync(legacy, { recursive: true });
     fs.mkdirSync(target, { recursive: true });
 
@@ -52,7 +52,7 @@ describe("migrateExtensionRoot", () => {
 
   it("reports a failed sessions database move as critical", async () => {
     const legacy = path.join(tmpDir, "memory");
-    const target = path.join(tmpDir, "pi-hermes-memory");
+    const target = path.join(tmpDir, "gsd-pi-hermes-memory");
     fs.mkdirSync(legacy, { recursive: true });
     const sourceDb = new Database(path.join(legacy, "sessions.db"));
     sourceDb.exec("CREATE TABLE retained (value TEXT); INSERT INTO retained VALUES ('legacy')");
@@ -74,7 +74,7 @@ describe("migrateExtensionRoot", () => {
 
   it("publishes the complete SQLite generation and removes the legacy set", async () => {
     const legacy = path.join(tmpDir, "memory");
-    const target = path.join(tmpDir, "pi-hermes-memory");
+    const target = path.join(tmpDir, "gsd-pi-hermes-memory");
     fs.mkdirSync(legacy, { recursive: true });
     const sourceDb = new Database(path.join(legacy, "sessions.db"));
     try {
@@ -107,7 +107,7 @@ describe("migrateExtensionRoot", () => {
 
   it("migrates one SQLite snapshot while a checkpoint runs", async () => {
     const legacy = path.join(tmpDir, "memory");
-    const target = path.join(tmpDir, "pi-hermes-memory");
+    const target = path.join(tmpDir, "gsd-pi-hermes-memory");
     fs.mkdirSync(legacy, { recursive: true });
     const sourceDb = new Database(path.join(legacy, "sessions.db"));
     let checkpointTriggered = false;
@@ -152,7 +152,7 @@ describe("migrateExtensionRoot", () => {
 
   it("holds a write exclusion through snapshot publication and source retirement", async () => {
     const legacy = path.join(tmpDir, "memory");
-    const target = path.join(tmpDir, "pi-hermes-memory");
+    const target = path.join(tmpDir, "gsd-pi-hermes-memory");
     fs.mkdirSync(legacy, { recursive: true });
     const sourceDb = new Database(path.join(legacy, "sessions.db"));
     let concurrentWriteCode = "";
@@ -191,7 +191,7 @@ describe("migrateExtensionRoot", () => {
 
   it("rolls back a failed source retirement so migration can retry", async () => {
     const legacy = path.join(tmpDir, "memory");
-    const target = path.join(tmpDir, "pi-hermes-memory");
+    const target = path.join(tmpDir, "gsd-pi-hermes-memory");
     fs.mkdirSync(legacy, { recursive: true });
     const sourceDb = new Database(path.join(legacy, "sessions.db"));
     sourceDb.exec("CREATE TABLE retained (value TEXT); INSERT INTO retained VALUES ('legacy')");
@@ -220,7 +220,7 @@ describe("migrateExtensionRoot", () => {
 
   it("does not delete a destination created while source retirement fails", async () => {
     const legacy = path.join(tmpDir, "memory");
-    const target = path.join(tmpDir, "pi-hermes-memory");
+    const target = path.join(tmpDir, "gsd-pi-hermes-memory");
     fs.mkdirSync(legacy, { recursive: true });
     const sourceDb = new Database(path.join(legacy, "sessions.db"));
     sourceDb.exec("CREATE TABLE retained (value TEXT); INSERT INTO retained VALUES ('legacy')");
@@ -251,7 +251,7 @@ describe("migrateExtensionRoot", () => {
 
   it("keeps corrupt generation publication behind the pending boundary", async () => {
     const legacy = path.join(tmpDir, "memory");
-    const target = path.join(tmpDir, "pi-hermes-memory");
+    const target = path.join(tmpDir, "gsd-pi-hermes-memory");
     fs.mkdirSync(legacy, { recursive: true });
     fs.writeFileSync(path.join(legacy, "sessions.db"), "not sqlite", "utf-8");
     fs.writeFileSync(path.join(legacy, "sessions.db-wal"), "legacy wal", "utf-8");
@@ -273,7 +273,7 @@ describe("migrateExtensionRoot", () => {
 
   it("preserves the retirement directory when rollback restoration is incomplete", async () => {
     const legacy = path.join(tmpDir, "memory");
-    const target = path.join(tmpDir, "pi-hermes-memory");
+    const target = path.join(tmpDir, "gsd-pi-hermes-memory");
     fs.mkdirSync(legacy, { recursive: true });
     const sourceDb = new Database(path.join(legacy, "sessions.db"));
     sourceDb.exec("CREATE TABLE retained (value TEXT); INSERT INTO retained VALUES ('legacy')");
@@ -298,7 +298,7 @@ describe("migrateExtensionRoot", () => {
 
   it("preserves the raw generation when backup detects corruption after locking", async () => {
     const legacy = path.join(tmpDir, "memory");
-    const target = path.join(tmpDir, "pi-hermes-memory");
+    const target = path.join(tmpDir, "gsd-pi-hermes-memory");
     fs.mkdirSync(legacy, { recursive: true });
     const sourceDb = new Database(path.join(legacy, "sessions.db"));
     sourceDb.exec("CREATE TABLE retained (value TEXT); INSERT INTO retained VALUES ('raw generation')");
@@ -325,7 +325,7 @@ describe("migrateExtensionRoot", () => {
 
   it("leaves the legacy SQLite generation retryable when snapshot publish fails", async () => {
     const legacy = path.join(tmpDir, "memory");
-    const target = path.join(tmpDir, "pi-hermes-memory");
+    const target = path.join(tmpDir, "gsd-pi-hermes-memory");
     fs.mkdirSync(legacy, { recursive: true });
     const sourceDb = new Database(path.join(legacy, "sessions.db"));
     sourceDb.pragma("journal_mode = WAL");
@@ -351,7 +351,7 @@ describe("migrateExtensionRoot", () => {
 
   it("never mixes legacy sidecars into an existing destination generation", async () => {
     const legacy = path.join(tmpDir, "memory");
-    const target = path.join(tmpDir, "pi-hermes-memory");
+    const target = path.join(tmpDir, "gsd-pi-hermes-memory");
     fs.mkdirSync(legacy, { recursive: true });
     fs.mkdirSync(target, { recursive: true });
     fs.writeFileSync(path.join(legacy, "sessions.db"), "legacy database", "utf-8");

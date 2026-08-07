@@ -1,5 +1,5 @@
 /**
- * Pi Hermes Memory Extension
+ * GSD Pi Hermes Memory Extension
  *
  * Brings Hermes-style persistent memory and a learning loop to any Pi user.
  * After `pi install`, users get:
@@ -28,9 +28,20 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
 import { DatabaseManager } from "./store/db.js";
-import { indexSession, upsertSessionFileMetadata } from "./store/session-indexer.js";
-import { scheduleSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-backfill.js";
-import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-live-index.js";
+import {
+	indexSession,
+	upsertSessionFileMetadata,
+} from "./store/session-indexer.js";
+import {
+	scheduleSessionBackfill,
+	waitForSessionBackfill,
+	SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS,
+} from "./handlers/session-backfill.js";
+import {
+	scheduleLiveSessionIndex,
+	waitForLiveSessionIndex,
+	SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS,
+} from "./handlers/session-live-index.js";
 import { parseSessionFile } from "./store/session-parser.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
 import { registerSkillTool } from "./tools/skill-tool.js";
@@ -39,14 +50,20 @@ import { registerMemorySearchTool } from "./tools/memory-search-tool.js";
 import { setupBackgroundReview } from "./handlers/background-review.js";
 import { setupSessionFlush } from "./handlers/session-flush.js";
 import { registerInsightsCommand } from "./handlers/insights.js";
-import { triggerConsolidation, registerConsolidateCommand } from "./handlers/auto-consolidate.js";
+import {
+	triggerConsolidation,
+	registerConsolidateCommand,
+} from "./handlers/auto-consolidate.js";
 import { setupCorrectionDetector } from "./handlers/correction-detector.js";
 import { registerSkillsCommand } from "./handlers/skills-command.js";
 import { registerInterviewCommand } from "./handlers/interview.js";
 import { registerSwitchProjectCommand } from "./handlers/switch-project.js";
 import { registerIndexSessionsCommand } from "./handlers/index-sessions.js";
 import { registerLearnMemoryCommand } from "./handlers/learn-memory.js";
-import { migrateThenSyncMarkdownMemories, registerSyncMarkdownMemoriesCommand } from "./handlers/sync-markdown-memories.js";
+import {
+	migrateThenSyncMarkdownMemories,
+	registerSyncMarkdownMemoriesCommand,
+} from "./handlers/sync-markdown-memories.js";
 import { registerPreviewContextCommand } from "./handlers/preview-context.js";
 import { registerStandingPinCommand } from "./handlers/standing-pin.js";
 import { StandingInstructions } from "./store/standing-instructions.js";
@@ -59,269 +76,357 @@ import { AGENT_ROOT } from "./paths.js";
 import { isDatabaseMigrationPending } from "./extension-root-migration.js";
 
 export function resolveProjectSkillDiscovery(
-  skillStore: SkillStore,
-  projectsMemoryDir: string | undefined,
-  cwd?: string,
+	skillStore: SkillStore,
+	projectsMemoryDir: string | undefined,
+	cwd?: string,
 ): { skillPaths: string[] } {
-  const detected = detectProjectSkills(projectsMemoryDir, cwd);
-  skillStore.setProjectContext(detected.name, detected.skillsDir);
+	const detected = detectProjectSkills(projectsMemoryDir, cwd);
+	skillStore.setProjectContext(detected.name, detected.skillsDir);
 
-  // Pi auto-discovers its own `~/.pi/agent/skills/`, but this extension keeps
-  // its generated skills in a directory of its own so users can audit, wipe, or
-  // ignore them without touching skills they installed themselves (#126). Both
-  // of ours must therefore be contributed here.
-  const skillPaths = [skillStore.getGlobalSkillsDir()];
-  if (detected.skillsDir) skillPaths.push(detected.skillsDir);
-  return { skillPaths };
+	// Pi auto-discovers its own `~/.pi/agent/skills/`, but this extension keeps
+	// its generated skills in a directory of its own so users can audit, wipe, or
+	// ignore them without touching skills they installed themselves (#126). Both
+	// of ours must therefore be contributed here.
+	const skillPaths = [skillStore.getGlobalSkillsDir()];
+	if (detected.skillsDir) skillPaths.push(detected.skillsDir);
+	return { skillPaths };
 }
 
 export function registerProjectSkillDiscoveryHandler(
-  pi: Pick<ExtensionAPI, "on">,
-  skillStore: SkillStore,
-  projectsMemoryDir: string | undefined,
+	pi: Pick<ExtensionAPI, "on">,
+	skillStore: SkillStore,
+	projectsMemoryDir: string | undefined,
 ): void {
-  pi.on("resources_discover", async (event, _ctx) => {
-    return resolveProjectSkillDiscovery(skillStore, projectsMemoryDir, (event as { cwd?: string }).cwd);
-  });
+	pi.on("resources_discover", async (event, _ctx) => {
+		return resolveProjectSkillDiscovery(
+			skillStore,
+			projectsMemoryDir,
+			(event as { cwd?: string }).cwd,
+		);
+	});
 }
 
 export default function (pi: ExtensionAPI) {
-  const config = loadConfig();
+	const config = loadConfig();
 
-  const agentRoot = AGENT_ROOT;
-  const legacyGlobalDir = path.join(agentRoot, "memory");
-  const defaultGlobalDir = path.join(agentRoot, "pi-hermes-memory");
+	const agentRoot = AGENT_ROOT;
+	const legacyGlobalDir = path.join(agentRoot, "memory");
+	const defaultGlobalDir = path.join(agentRoot, "gsd-pi-hermes-memory");
 
-  const configuredMemoryDir = config.memoryDir?.trim();
-  const pointsToLegacyMemoryDir = configuredMemoryDir
-    ? path.resolve(configuredMemoryDir) === path.resolve(legacyGlobalDir)
-    : false;
+	const configuredMemoryDir = config.memoryDir?.trim();
+	const pointsToLegacyMemoryDir = configuredMemoryDir
+		? path.resolve(configuredMemoryDir) === path.resolve(legacyGlobalDir)
+		: false;
 
-  const globalDir = !configuredMemoryDir || pointsToLegacyMemoryDir
-    ? defaultGlobalDir
-    : configuredMemoryDir;
+	const globalDir =
+		!configuredMemoryDir || pointsToLegacyMemoryDir
+			? defaultGlobalDir
+			: configuredMemoryDir;
 
-  const shouldMigrateExtensionRoot = !configuredMemoryDir || pointsToLegacyMemoryDir;
-  let persistenceInitialized = false;
+	const shouldMigrateExtensionRoot =
+		!configuredMemoryDir || pointsToLegacyMemoryDir;
+	let persistenceInitialized = false;
 
-  const store = new MemoryStore({ ...config, memoryDir: globalDir });
-  const project = detectProject(config.projectsMemoryDir);
-  const projectName = project.name ?? "";
-  const skillStore = new SkillStore({
-    globalSkillsDir: path.join(globalDir, "skills"),
-    piGlobalSkillsDir: path.join(agentRoot, "skills"),
-    projectSkillsDir: project.memoryDir ? path.join(project.memoryDir, "skills") : null,
-    projectName: project.name,
-    legacySkillsDir: path.join(legacyGlobalDir, "skills"),
-    migrationSentinelPath: path.join(globalDir, ".skills-migrated-to-extension-storage"),
-  });
-  const dbManager = new DatabaseManager(globalDir);
-  let databaseMigrationPending = shouldMigrateExtensionRoot
-    && isDatabaseMigrationPending(legacyGlobalDir, globalDir);
-  if (databaseMigrationPending) {
-    dbManager.setOpenGuard(() => {
-      if (databaseMigrationPending) {
-        throw new Error("Legacy sessions.db migration is pending");
-      }
-    });
-  }
-  const sessionsDir = path.join(agentRoot, "sessions");
+	const store = new MemoryStore({ ...config, memoryDir: globalDir });
+	const project = detectProject(config.projectsMemoryDir);
+	const projectName = project.name ?? "";
+	const skillStore = new SkillStore({
+		globalSkillsDir: path.join(globalDir, "skills"),
+		piGlobalSkillsDir: path.join(agentRoot, "skills"),
+		projectSkillsDir: project.memoryDir
+			? path.join(project.memoryDir, "skills")
+			: null,
+		projectName: project.name,
+		legacySkillsDir: path.join(legacyGlobalDir, "skills"),
+		migrationSentinelPath: path.join(
+			globalDir,
+			".skills-migrated-to-extension-storage",
+		),
+	});
+	const dbManager = new DatabaseManager(globalDir);
+	let databaseMigrationPending =
+		shouldMigrateExtensionRoot &&
+		isDatabaseMigrationPending(legacyGlobalDir, globalDir);
+	if (databaseMigrationPending) {
+		dbManager.setOpenGuard(() => {
+			if (databaseMigrationPending) {
+				throw new Error("Legacy sessions.db migration is pending");
+			}
+		});
+	}
+	const sessionsDir = path.join(agentRoot, "sessions");
 
-  const refreshSkillProjectContext = (cwd?: string) => {
-    const resource = resolveProjectSkillDiscovery(skillStore, config.projectsMemoryDir, cwd);
-    return {
-      name: skillStore.getProjectName(),
-      skillsDir: skillStore.getProjectSkillsDir(),
-      resource,
-    };
-  };
+	const refreshSkillProjectContext = (cwd?: string) => {
+		const resource = resolveProjectSkillDiscovery(
+			skillStore,
+			config.projectsMemoryDir,
+			cwd,
+		);
+		return {
+			name: skillStore.getProjectName(),
+			skillsDir: skillStore.getProjectSkillsDir(),
+			resource,
+		};
+	};
 
-  // Keep project memory available for users upgrading from the old
-  // ~/.pi/agent/<project>/ layout. This is non-destructive: legacy folders
-  // remain in place while entries are copied/merged into projects-memory/.
-  migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
-  // Detect project from cwd using shared helper
-  // Project-scoped store: ~/.pi/agent/<projectsMemoryDir>/<project_name>/
-  const projectConfig = project.memoryDir
-    ? { ...config, memoryCharLimit: config.projectCharLimit, memoryDir: project.memoryDir }
-    : { ...config, memoryDir: undefined };
-  const projectStore = project.memoryDir ? new MemoryStore(projectConfig) : null;
-  // Never written by review, consolidation or the correction detector — see
-  // store/standing-instructions.ts for why provenance has to be structural.
-  const standingStore = config.standingInstructionsEnabled !== false
-    ? new StandingInstructions(path.join(globalDir, STANDING_FILE))
-    : null;
+	// Keep project memory available for users upgrading from the old
+	// ~/.pi/agent/<project>/ layout. This is non-destructive: legacy folders
+	// remain in place while entries are copied/merged into projects-memory/.
+	migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
+	// Detect project from cwd using shared helper
+	// Project-scoped store: ~/.pi/agent/<projectsMemoryDir>/<project_name>/
+	const projectConfig = project.memoryDir
+		? {
+				...config,
+				memoryCharLimit: config.projectCharLimit,
+				memoryDir: project.memoryDir,
+			}
+		: { ...config, memoryDir: undefined };
+	const projectStore = project.memoryDir
+		? new MemoryStore(projectConfig)
+		: null;
+	// Never written by review, consolidation or the correction detector — see
+	// store/standing-instructions.ts for why provenance has to be structural.
+	const standingStore =
+		config.standingInstructionsEnabled !== false
+			? new StandingInstructions(path.join(globalDir, STANDING_FILE))
+			: null;
 
-  // ── 1. Load memory from disk on session start ──
-  pi.on("session_start", async (_event, ctx) => {
-    if (!persistenceInitialized) {
-      try {
-        await migrateThenSyncMarkdownMemories(
-          dbManager,
-          shouldMigrateExtensionRoot ? legacyGlobalDir : null,
-          globalDir,
-          config.projectsMemoryDir,
-          agentRoot,
-          {
-            onMigrationSucceeded: () => {
-              databaseMigrationPending = false;
-              dbManager.setOpenGuard(null);
-            },
-          },
-        );
-        persistenceInitialized = true;
-      } catch {
-        // Best-effort only: migration or SQLite backfill must not block startup.
-      }
-    }
+	// ── 1. Load memory from disk on session start ──
+	pi.on("session_start", async (_event, ctx) => {
+		if (!persistenceInitialized) {
+			try {
+				await migrateThenSyncMarkdownMemories(
+					dbManager,
+					shouldMigrateExtensionRoot ? legacyGlobalDir : null,
+					globalDir,
+					config.projectsMemoryDir,
+					agentRoot,
+					{
+						onMigrationSucceeded: () => {
+							databaseMigrationPending = false;
+							dbManager.setOpenGuard(null);
+						},
+					},
+				);
+				persistenceInitialized = true;
+			} catch {
+				// Best-effort only: migration or SQLite backfill must not block startup.
+			}
+		}
 
-    refreshSkillProjectContext(ctx.cwd);
-    await skillStore.migrateLegacySkills();
-    await skillStore.ensureDiscoveredRoots();
-    await store.loadFromDisk();
-    if (projectStore) await projectStore.loadFromDisk();
-    if (standingStore) await standingStore.load();
+		refreshSkillProjectContext(ctx.cwd);
+		await skillStore.migrateLegacySkills();
+		await skillStore.ensureDiscoveredRoots();
+		await store.loadFromDisk();
+		if (projectStore) await projectStore.loadFromDisk();
+		if (standingStore) await standingStore.load();
 
-    if (persistenceInitialized) scheduleSessionBackfill(dbManager, sessionsDir, {
-      notify: (message, level) => {
-        const ui = (ctx as { ui?: { notify?: (message: string, level?: string) => void } }).ui;
-        if (ui?.notify) {
-          ui.notify(message, level);
-        } else if (level === "error" || level === "warning") {
-          console.warn(message);
-        } else {
-          console.info(message);
-        }
-      },
-    });
-  });
+		if (persistenceInitialized)
+			scheduleSessionBackfill(dbManager, sessionsDir, {
+				notify: (message, level) => {
+					const ui = (
+						ctx as {
+							ui?: { notify?: (message: string, level?: string) => void };
+						}
+					).ui;
+					if (ui?.notify) {
+						ui.notify(message, level);
+					} else if (level === "error" || level === "warning") {
+						console.warn(message);
+					} else {
+						console.info(message);
+					}
+				},
+			});
+	});
 
-  registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir);
+	registerProjectSkillDiscoveryHandler(
+		pi,
+		skillStore,
+		config.projectsMemoryDir,
+	);
 
-  // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
-  pi.on("before_agent_start", async (event, _ctx) => {
-    const promptContext = await buildPromptContext(config, store, projectStore, projectName, standingStore);
+	// ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
+	pi.on("before_agent_start", async (event, _ctx) => {
+		const promptContext = await buildPromptContext(
+			config,
+			store,
+			projectStore,
+			projectName,
+			standingStore,
+		);
 
-    if (promptContext) {
-      return {
-        systemPrompt: event.systemPrompt + "\n\n" + promptContext,
-      };
-    }
-  });
+		if (promptContext) {
+			return {
+				systemPrompt: event.systemPrompt + "\n\n" + promptContext,
+			};
+		}
+	});
 
-  // ── 3. Register the memory tool (with project store + SQLite sync) ──
-  registerMemoryTool(pi, store, projectStore, dbManager, projectName);
+	// ── 3. Register the memory tool (with project store + SQLite sync) ──
+	registerMemoryTool(pi, store, projectStore, dbManager, projectName);
 
-  // ── 4. Register the skill tool ──
-  registerSkillTool(pi, skillStore);
+	// ── 4. Register the skill tool ──
+	registerSkillTool(pi, skillStore);
 
-  // ── 5. Setup background learning loop (with tool-call-aware nudge) ──
-  setupBackgroundReview(pi, store, projectStore, config, {
-    dbManager,
-    projectName: projectName || null,
-  });
+	// ── 5. Setup background learning loop (with tool-call-aware nudge) ──
+	setupBackgroundReview(pi, store, projectStore, config, {
+		dbManager,
+		projectName: projectName || null,
+	});
 
-  // ── 6. Setup session-end flush ──
-  setupSessionFlush(pi, store, projectStore, config, dbManager, projectName);
+	// ── 6. Setup session-end flush ──
+	setupSessionFlush(pi, store, projectStore, config, dbManager, projectName);
 
-  // ── 7. Setup auto-consolidation (inject consolidator into stores) ──
-  // A failed auto-consolidation is otherwise invisible outside the tool result,
-  // so log the reason for whoever is watching the session (#135).
-  const runAutoConsolidation = async (
-    target: "memory" | "user" | "failure",
-    targetStore: MemoryStore,
-    toolTarget: "memory" | "user" | "failure" | "project",
-    signal?: AbortSignal,
-  ) => {
-    const result = await triggerConsolidation(
-      pi,
-      targetStore,
-      target,
-      signal,
-      config.consolidationTimeoutMs,
-      toolTarget,
-      config,
-    );
-    if (result.deferred) {
-      console.info(`⏳ Auto-consolidation for '${toolTarget}' deferred: ${result.error ?? "another session holds the consolidation lock"}`);
-    } else if (!result.consolidated) {
-      console.warn(`⚠️ Auto-consolidation failed for '${toolTarget}': ${result.error ?? "no reason reported"}`);
-    }
-    return result;
-  };
+	// ── 7. Setup auto-consolidation (inject consolidator into stores) ──
+	// A failed auto-consolidation is otherwise invisible outside the tool result,
+	// so log the reason for whoever is watching the session (#135).
+	const runAutoConsolidation = async (
+		target: "memory" | "user" | "failure",
+		targetStore: MemoryStore,
+		toolTarget: "memory" | "user" | "failure" | "project",
+		signal?: AbortSignal,
+	) => {
+		const result = await triggerConsolidation(
+			pi,
+			targetStore,
+			target,
+			signal,
+			config.consolidationTimeoutMs,
+			toolTarget,
+			config,
+		);
+		if (result.deferred) {
+			console.info(
+				`⏳ Auto-consolidation for '${toolTarget}' deferred: ${result.error ?? "another session holds the consolidation lock"}`,
+			);
+		} else if (!result.consolidated) {
+			console.warn(
+				`⚠️ Auto-consolidation failed for '${toolTarget}': ${result.error ?? "no reason reported"}`,
+			);
+		}
+		return result;
+	};
 
-  store.setConsolidator((target, signal) => runAutoConsolidation(target, store, target, signal));
-  if (projectStore) {
-    projectStore.setConsolidator((target, signal) =>
-      runAutoConsolidation(target, projectStore, target === "memory" ? "project" : target, signal),
-    );
-  }
-  registerConsolidateCommand(pi, store, config.consolidationTimeoutMs, projectStore, projectName, config, dbManager);
+	store.setConsolidator((target, signal) =>
+		runAutoConsolidation(target, store, target, signal),
+	);
+	if (projectStore) {
+		projectStore.setConsolidator((target, signal) =>
+			runAutoConsolidation(
+				target,
+				projectStore,
+				target === "memory" ? "project" : target,
+				signal,
+			),
+		);
+	}
+	registerConsolidateCommand(
+		pi,
+		store,
+		config.consolidationTimeoutMs,
+		projectStore,
+		projectName,
+		config,
+		dbManager,
+	);
 
-  // ── 8. Setup correction detection ──
-  setupCorrectionDetector(pi, store, projectStore, config, dbManager, projectName);
+	// ── 8. Setup correction detection ──
+	setupCorrectionDetector(
+		pi,
+		store,
+		projectStore,
+		config,
+		dbManager,
+		projectName,
+	);
 
-  // ── 9. Register commands ──
-  registerInsightsCommand(pi, store, projectStore, projectName);
-  registerSkillsCommand(pi, skillStore);
-  registerInterviewCommand(pi, store);
-  registerSwitchProjectCommand(pi, config);
-  registerLearnMemoryCommand(pi);
-  registerSyncMarkdownMemoriesCommand(pi, dbManager, globalDir, config.projectsMemoryDir, agentRoot);
-  registerPreviewContextCommand(pi, store, projectStore, projectName, config, standingStore);
-  if (standingStore) registerStandingPinCommand(pi, standingStore);
+	// ── 9. Register commands ──
+	registerInsightsCommand(pi, store, projectStore, projectName);
+	registerSkillsCommand(pi, skillStore);
+	registerInterviewCommand(pi, store);
+	registerSwitchProjectCommand(pi, config);
+	registerLearnMemoryCommand(pi);
+	registerSyncMarkdownMemoriesCommand(
+		pi,
+		dbManager,
+		globalDir,
+		config.projectsMemoryDir,
+		agentRoot,
+	);
+	registerPreviewContextCommand(
+		pi,
+		store,
+		projectStore,
+		projectName,
+		config,
+		standingStore,
+	);
+	if (standingStore) registerStandingPinCommand(pi, standingStore);
 
-  // ── 10. Live session indexing ──
-  pi.on("message_end", async (_event, ctx) => {
-    scheduleLiveSessionIndex(dbManager, ctx.sessionManager, {
-      onError: (err) => console.warn(`⚠️ Live session indexing failed: ${err instanceof Error ? err.message : String(err)}`),
-    });
-  });
+	// ── 10. Live session indexing ──
+	pi.on("message_end", async (_event, ctx) => {
+		scheduleLiveSessionIndex(dbManager, ctx.sessionManager, {
+			onError: (err) =>
+				console.warn(
+					`⚠️ Live session indexing failed: ${err instanceof Error ? err.message : String(err)}`,
+				),
+		});
+	});
 
-  // ── 11. SQLite session search + extended memory ──
-  registerSessionSearchTool(pi, dbManager, config.sessionSearch ?? { variant: "legacy" });
-  registerMemorySearchTool(pi, dbManager);
-  registerIndexSessionsCommand(pi);
+	// ── 11. SQLite session search + extended memory ──
+	registerSessionSearchTool(
+		pi,
+		dbManager,
+		config.sessionSearch ?? { variant: "legacy" },
+	);
+	registerMemorySearchTool(pi, dbManager);
+	registerIndexSessionsCommand(pi);
 
-  // ── 12. Auto-index session on shutdown ──
-  // Registered last, so this runs after the session-flush shutdown handler and
-  // is the final DB activity. Closing here truncates the WAL via
-  // PRAGMA wal_checkpoint(TRUNCATE); without it the WAL only grows to its
-  // high-water mark and is never reclaimed across sessions.
-  //
-  // Ordering is safe: Pi's ExtensionRunner.emit() runs same-extension handlers
-  // sequentially in registration order and awaits each one, so the flush above
-  // fully completes before close() runs. WARNING: do not register another
-  // DB-writing session_shutdown handler after this block — it would run after
-  // close() and silently no-op.
-  pi.on("session_shutdown", async (_event, ctx) => {
-    try {
-      const sessionFile = ctx.sessionManager.getSessionFile();
-      if (sessionFile && require("node:fs").existsSync(sessionFile)) {
-        const sessionData = parseSessionFile(sessionFile);
-        if (sessionData) {
-          dbManager.withCorruptionRecovery(() => {
-            indexSession(dbManager, sessionData);
-            // Keep session_files metadata in sync with the final on-disk state.
-            // Pi appends the closing session entry on shutdown after the last
-            // message_end, so without this upsert the stored size/mtime would be
-            // stale and the next startup would re-parse this file unnecessarily.
-            upsertSessionFileMetadata(dbManager, sessionFile, sessionData.id);
-          });
-        }
-      }
-    } catch {
-      // Silent fail — don't block shutdown
-    } finally {
-      try {
-        await Promise.all([
-          waitForSessionBackfill(SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS),
-          waitForLiveSessionIndex(SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS),
-        ]);
-      } catch {
-        // Best effort only — shutdown should not be held up by indexing errors.
-      }
-      try { dbManager.close(); } catch { /* best effort — never block shutdown */ }
-    }
-  });
+	// ── 12. Auto-index session on shutdown ──
+	// Registered last, so this runs after the session-flush shutdown handler and
+	// is the final DB activity. Closing here truncates the WAL via
+	// PRAGMA wal_checkpoint(TRUNCATE); without it the WAL only grows to its
+	// high-water mark and is never reclaimed across sessions.
+	//
+	// Ordering is safe: Pi's ExtensionRunner.emit() runs same-extension handlers
+	// sequentially in registration order and awaits each one, so the flush above
+	// fully completes before close() runs. WARNING: do not register another
+	// DB-writing session_shutdown handler after this block — it would run after
+	// close() and silently no-op.
+	pi.on("session_shutdown", async (_event, ctx) => {
+		try {
+			const sessionFile = ctx.sessionManager.getSessionFile();
+			if (sessionFile && require("node:fs").existsSync(sessionFile)) {
+				const sessionData = parseSessionFile(sessionFile);
+				if (sessionData) {
+					dbManager.withCorruptionRecovery(() => {
+						indexSession(dbManager, sessionData);
+						// Keep session_files metadata in sync with the final on-disk state.
+						// Pi appends the closing session entry on shutdown after the last
+						// message_end, so without this upsert the stored size/mtime would be
+						// stale and the next startup would re-parse this file unnecessarily.
+						upsertSessionFileMetadata(dbManager, sessionFile, sessionData.id);
+					});
+				}
+			}
+		} catch {
+			// Silent fail — don't block shutdown
+		} finally {
+			try {
+				await Promise.all([
+					waitForSessionBackfill(SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS),
+					waitForLiveSessionIndex(SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS),
+				]);
+			} catch {
+				// Best effort only — shutdown should not be held up by indexing errors.
+			}
+			try {
+				dbManager.close();
+			} catch {
+				/* best effort — never block shutdown */
+			}
+		}
+	});
 }

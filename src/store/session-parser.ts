@@ -157,7 +157,7 @@ export function parseSessionFile(filePath: string): ParsedSession | null {
   if (!sessionId || !sessionCwd || !sessionTimestamp) return null;
 
   // Decode project name from cwd-encoded directory name
-  // The directory is named like "--Users-chandrateja-Documents-pi-hermes-memory--"
+  // The directory is named like "--Users-chandrateja-Documents-gsd-pi-hermes-memory--"
   // We extract the last segment as the project name
   const project = sessionCwd.split('/').pop() ?? sessionCwd;
 
@@ -210,7 +210,7 @@ export function getSessionFiles(sessionsDir: string, projectDir?: string): strin
 
 /**
  * Decode a project directory name to a human-readable project name.
- * "--Users-chandrateja-Documents-pi-hermes-memory--" → "pi-hermes-memory"
+ * "--Users-chandrateja-Documents-gsd-pi-hermes-memory--" → "memory"
  */
 export function decodeProjectDir(dirName: string): string {
   // Remove leading/trailing dashes

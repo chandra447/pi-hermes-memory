@@ -1,4 +1,4 @@
-# Tasks — Pi Hermes Memory Extension
+# Tasks — GSD Pi Hermes Memory Extension
 
 > **Workflow**: When you start a task, change `[ ]` to `[~]`. When done, change to `[x]` and note the commit hash.
 > Progress is tracked per-epic. Each epic has a clear definition of done.
@@ -74,6 +74,8 @@ _Done when: memory snapshot appears in system prompt at session start and does N
 - [x] Frozen snapshot: write to memory mid-session → system prompt unchanged — `028c5ad`
 - [x] Empty memory files → no block appended (system prompt untouched) — `028c5ad`
 - [x] Second session (manual verification — needs Pi restart): memory saved in session 1 appears in session 2's system prompt
+
+
 ---
 
 ## Epic 5: Background Learning Loop
@@ -91,7 +93,9 @@ _Done when: after N turns, a background pi process reviews the conversation and 
 - [x] Successful auto-save shows `💾 Memory auto-reviewed and updated` notification — `164eef9`
 - [x] "Nothing to save" response → no notification shown — `164eef9`
 - [x] Background review failure does NOT crash or block the main agent — `164eef9`
+
 - [x] Counter resets to 0 after review triggers — `164eef9`
+
 ---
 
 ## Epic 6: Session Flush
@@ -103,8 +107,10 @@ _Done when: before compaction and session shutdown, agent gets one turn to save 
 - [x] Flush skips if user turn count < `flushMinTurns` (default 6) — `001a8d4`
 - [x] Flush builds conversation snapshot from `ctx.sessionManager.getBranch()` — `001a8d4`
 - [x] Flush uses `pi.exec("pi", ["-p", "--no-session", ...])` with flush prompt — `001a8d4`
+
 - [x] Flush failure does NOT prevent compaction or session shutdown — `001a8d4`
 - [x] After flush (manual verification — needs Pi restart), any saved memories are available in next session
+
 ---
 
 ## Epic 7: Insights Command & UX Polish
@@ -114,14 +120,18 @@ _Done when: `/memory-insights` shows formatted output and the extension is polis
 - [x] `/memory-insights` command registered and appears in Pi command list — `543e262`
 - [x] Shows MEMORY section with numbered entries (truncated to 100 chars) — `543e262`
 - [x] Shows USER PROFILE section with numbered entries — `543e262`
+
 - [x] Shows "(empty)" when no entries exist — `543e262`
 - [x] Formatted with box drawing characters (╔══╗, etc.) — `543e262`
 - [x] Notification displays (manual verification — needs Pi TUI) correctly in Pi's TUI
+
 ---
+
 
 ## Epic 8: Configuration & Settings
 
 _Done when: users can customize behavior via `~/.pi/agent/hermes-memory-config.json`._
+
 - [x] Read config from `~/.pi/agent/hermes-memory-config.json` — `src/config.ts`
 - [x] All `MemoryConfig` fields are configurable with type validation
 - [x] Missing keys fall back to defaults
@@ -129,22 +139,27 @@ _Done when: users can customize behavior via `~/.pi/agent/hermes-memory-config.j
 
 ---
 
+
 ## Epic 9: Testing
 
 _Done when: all core paths have automated tests and the extension passes a manual smoke test._
 
 ### Unit Tests
+
 - [x] `content-scanner.ts` — 11 threat patterns + 5 invisible unicode chars tested — `3f61b61`
 - [x] `memory-store.ts` — test `add` success, persistence, duplicate → no-op, exceeds limit → error — `24151a0`
 - [x] `memory-store.ts` — test `replace` success, no match → error, multi-match → error — `24151a0`
 - [x] `memory-store.ts` — test `remove` success, no match → error — `24151a0`
 - [x] `memory-store.ts` — test frozen snapshot doesn't update after add — `24151a0`
+
 - [x] `memory-store.ts` — test `loadFromDisk` reads existing files, handles missing files — `24151a0`
 - [x] `config.ts` — test defaults, overrides, partial config, invalid values — current
 - [x] `handlers/` — test background-review, session-flush, insights, system-prompt — current
 - [x] `integration/` — test cross-module contracts (config→store, security pipeline, getMessageText) — current
 
 ### Integration Tests
+
+
 - [x] Extension loads in Pi via `pi -e ./src/index.ts` — no errors — verified
 - [x] `memory` tool callable by LLM (manual verification — no API key) — manual verification required
 - [x] System prompt contains (manual verification — needs Pi runtime) memory block after `session_start` — manual verification required
@@ -152,6 +167,7 @@ _Done when: all core paths have automated tests and the extension passes a manua
 - [x] Survives Pi session (manual verification — needs Pi restart) restart — memory persists across `/new` — manual verification required
 
 ### Manual Smoke Tests
+
 - [x] Full E2E (manual verification — needs full conversation): install → use 10+ turns → verify auto-review saves memory
 - [x] Full E2E (manual verification — needs full conversation): long conversation → trigger compaction → verify flush saves memory
 - [x] Full E2E (manual verification — needs full conversation): session 1 saves memory → quit → session 2 recalls it
@@ -166,7 +182,7 @@ _Done when: extension is installable via `pi install` and has user-facing docs._
 
 - [x] `README.md` — What it does, installation, usage, configuration — `ed22fa6`
 - [x] `README.md` — Example screenshots (manual verification — needs Pi TUI) of `/memory-insights` output — requires Pi TUI
-- [x] Verify `pi install github:chandra447/pi-hermes-memory` works end-to-end — requires Pi CLI
+-  [x ]  Ve r ify  `pi install github:efrembaraldo/gsd-pi-hermes-memory` works end-to-end — requires Pi CLI
 - [x] Tag v0.1.0 release on GitHub — `7983f09`
 
 ---
@@ -174,21 +190,24 @@ _Done when: extension is installable via `pi install` and has user-facing docs._
 ## Summary
 
 | Epic | Status | Notes |
-|---|---|---|
+| --- | --- | --- |
 | 1 — Project Scaffold | Complete | TypeScript compiles clean, extension loads in Pi |
 | 2 — Core Memory | Complete (auto) / 2 pending (manual) | Tool registration + execute tested; LLM interaction needs Pi runtime |
 | 3 — Content Scanning | Complete | 25 tests, all threat patterns covered |
 | 4 — System Prompt | Complete (auto) / 1 pending (manual) | Frozen snapshot tested; cross-session needs Pi restart |
 | 5 — Background Loop | Complete | 10 tests, all trigger conditions covered |
 | 6 — Session Flush | Complete (auto) / 1 pending (manual) | Flush logic tested; cross-session persistence needs Pi restart |
+
 | 7 — Insights | Complete (auto) / 1 pending (manual) | Command output tested; TUI display needs Pi runtime |
 | 8 — Configuration | Complete | Config file + tests + README docs |
 | 9 — Testing | Complete (auto) / 9 pending (manual) | 119 automated tests; E2E smoke tests need Pi runtime |
 | 10 — Documentation | Complete (auto) / 2 pending (manual) | README + LICENSE + tag v0.1.0; screenshots need Pi TUI |
 
-**Automated test coverage: 119 tests, 0 failures, 0 type errors.**
+**Automated test coverage: 119 tests, 0 failures, 0 type e
+rrors.**
 
-**Manual verification required:** Run `pi -e ./src/index.ts` or `pi install github:chandra447/pi-hermes-memory`, then:
+**Manual verification required:** Run `pi -e ./src/index.ts` or `pi install github:efrembaraldo/gsd-pi-hermes-memory`, then:
+
 1. Have the LLM save a memory and verify it appears in `~/.pi/agent/memory/MEMORY.md`
 2. Start a new session (`/new`) and verify the memory appears in the system prompt
 3. Use 10+ turns and verify auto-review triggers

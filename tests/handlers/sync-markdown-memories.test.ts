@@ -374,7 +374,7 @@ describe('memory sqlite sync + markdown backfill', () => {
   it('migrates a populated legacy database before startup reconciliation', async () => {
     dbManager.close();
     const legacyDir = path.join(agentRoot, 'memory');
-    const targetDir = path.join(agentRoot, 'pi-hermes-memory');
+    const targetDir = path.join(agentRoot, 'gsd-pi-hermes-memory');
     fs.mkdirSync(legacyDir, { recursive: true });
     const legacyManager = new DatabaseManager(legacyDir);
     legacyManager.getDb().prepare(`
@@ -397,7 +397,7 @@ describe('memory sqlite sync + markdown backfill', () => {
   it('does not create a destination database after critical migration failure', async () => {
     dbManager.close();
     const legacyDir = path.join(agentRoot, 'memory');
-    const targetDir = path.join(agentRoot, 'pi-hermes-memory');
+    const targetDir = path.join(agentRoot, 'gsd-pi-hermes-memory');
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.writeFileSync(path.join(legacyDir, 'sessions.db'), 'populated legacy database', 'utf-8');
     const targetManager = new DatabaseManager(targetDir);
@@ -433,7 +433,7 @@ describe('memory sqlite sync + markdown backfill', () => {
   it('hands a corrupt legacy database to bounded destination recovery', async () => {
     dbManager.close();
     const legacyDir = path.join(agentRoot, 'memory');
-    const targetDir = path.join(agentRoot, 'pi-hermes-memory');
+    const targetDir = path.join(agentRoot, 'gsd-pi-hermes-memory');
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.writeFileSync(path.join(legacyDir, 'sessions.db'), 'not a sqlite database', 'utf-8');
     const targetManager = new DatabaseManager(targetDir);
@@ -456,7 +456,7 @@ describe('memory sqlite sync + markdown backfill', () => {
   it('resolves a migrated file-symlink database at first I/O', { skip: process.platform === 'win32' }, async () => {
     dbManager.close();
     const legacyDir = path.join(agentRoot, 'memory');
-    const targetDir = path.join(agentRoot, 'pi-hermes-memory');
+    const targetDir = path.join(agentRoot, 'gsd-pi-hermes-memory');
     const realDir = path.join(tmpDir, 'real-database');
     const realDbPath = path.join(realDir, 'sessions.db');
     fs.mkdirSync(legacyDir, { recursive: true });

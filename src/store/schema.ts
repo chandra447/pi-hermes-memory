@@ -1,5 +1,5 @@
 /**
- * SQLite schema for pi-hermes-memory v0.4
+ * SQLite schema for gsd-pi-hermes-memory v0.4
  *
  * Tables:
  * - sessions — Pi session metadata

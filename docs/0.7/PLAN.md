@@ -144,7 +144,7 @@ The first version should be heuristic and cheap. LLM-based routing can be evalua
 Injected memory must be clearly marked as untrusted context:
 
 ```xml
-<retrieved-memory source="pi-hermes-memory" security="untrusted-context" scope="project+user" relevance="high">
+<retrieved-memory source="gsd-pi-hermes-memory" security="untrusted-context" scope="project+user" relevance="high">
 Project:
 - This repo uses SQLite FTS5 for memory search.
 - Runtime memory should be retrieved just-in-time, not injected fully into the system prompt.
@@ -273,7 +273,7 @@ Failure memories should become structured enough for similar-error retrieval:
 ```json
 {
   "category": "failure",
-  "project": "pi-hermes-memory",
+  "project": "gsd-pi-hermes-memory",
   "symptom": "Tests fail with module resolution error",
   "error_signature": "Cannot find module src/memory-router.ts",
   "root_cause": "File was referenced before being created",
