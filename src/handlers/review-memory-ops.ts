@@ -171,7 +171,11 @@ export async function resolveFreshRequestAuth(
   model: Model<Api>,
 ): Promise<ResolvedRequestAuth> {
   try {
-    modelRegistry.authStorage?.reload();
+    // authStorage was removed from ModelRegistry's public type surface in
+    // pi-coding-agent 0.81.0; read it structurally so this compiles against
+    // both the old and the new SDK shape. The optional chain already made
+    // the call a no-op at runtime when the property is absent.
+    (modelRegistry as { authStorage?: { reload(): void } }).authStorage?.reload();
   } catch {
     // A malformed or unreadable auth.json must not take the review path down;
     // fall through to whatever credentials are already loaded.
