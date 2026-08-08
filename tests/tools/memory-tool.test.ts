@@ -361,6 +361,50 @@ describe("registerMemoryTool", () => {
     assert.strictEqual(results[0].content, 'Project entry');
   });
 
+  it("resolves the active project store and name for each mutation", async () => {
+    let capturedResult: any;
+    const mockPi = {
+      registerTool: (def: any) => {
+        if (!capturedResult || def.name === "memory_add") capturedResult = def;
+      },
+    } as unknown as ExtensionAPI;
+
+    let activeProjectName = "project-a";
+    const calls: string[] = [];
+    const stores = new Map<string, MemoryStore>();
+    const makeProjectStore = (name: string) => ({
+      add: (target: string, content: string) => {
+        calls.push(`${name}:${target}:${content}`);
+        return {
+          success: true,
+          target,
+          entries: [content],
+          usage: "2% — 20/5000 chars",
+          entry_count: 1,
+          message: "Entry added.",
+        };
+      },
+    }) as unknown as MemoryStore;
+    stores.set("project-a", makeProjectStore("project-a"));
+    stores.set("project-b", makeProjectStore("project-b"));
+
+    registerMemoryTool(
+      mockPi,
+      {} as MemoryStore,
+      () => stores.get(activeProjectName) ?? null,
+      dbManager,
+      () => activeProjectName,
+    );
+
+    await capturedResult.execute("tc-1", { target: "project", content: "first" }, undefined as any, undefined as any, undefined as any);
+    activeProjectName = "project-b";
+    await capturedResult.execute("tc-2", { target: "project", content: "second" }, undefined as any, undefined as any, undefined as any);
+
+    assert.deepStrictEqual(calls, ["project-a:memory:first", "project-b:memory:second"]);
+    const projectRows = getMemories(dbManager, { project: "project-b", target: "memory" });
+    assert.deepStrictEqual(projectRows.map((row) => row.content), ["second"]);
+  });
+
   it("returns a warning instead of failing when SQLite sync errors", async () => {
     let capturedResult: any;
     const mockPi = {

@@ -23,6 +23,7 @@ import {
 import type { MemoryConfig } from "../types.js";
 import { getMessageText } from "../types.js";
 import { execChildPrompt } from "./pi-child-process.js";
+import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
 
 /**
@@ -123,10 +124,10 @@ export function isCorrection(text: string, config?: CorrectionPatternConfig): bo
 export function setupCorrectionDetector(
   pi: ExtensionAPI,
   store: MemoryStore,
-  projectStore: MemoryStore | null,
+  projectStore: ProjectStoreRef,
   config: MemoryConfig,
   dbManager: DatabaseManager | null = null,
-  projectName?: string | null,
+  projectName: ProjectNameRef = null,
   deps: { runDirectMemoryCompletion?: typeof runDirectMemoryCompletion } = {},
 ): void {
   if (!config.correctionDetection) return;
@@ -178,9 +179,11 @@ export function setupCorrectionDetector(
       // Only include last few exchanges (correction context is recent)
       const recentParts = parts.slice(-6);
 
+      const activeProjectStore = resolveProjectStore(projectStore);
+      const activeProjectName = resolveProjectName(projectName);
       const currentMemory = store.getMemoryEntries().join(ENTRY_DELIMITER);
       const currentUser = store.getUserEntries().join(ENTRY_DELIMITER);
-      const currentProject = projectStore ? projectStore.getMemoryEntries().join(ENTRY_DELIMITER) : null;
+      const currentProject = activeProjectStore ? activeProjectStore.getMemoryEntries().join(ENTRY_DELIMITER) : null;
 
       const promptBody = [
         "--- Current Memory ---",
@@ -224,7 +227,7 @@ export function setupCorrectionDetector(
           const directResult = await runDirect(
             ctx,
             store,
-            projectStore,
+            activeProjectStore,
             {
               systemPrompt: DIRECT_CORRECTION_SYSTEM_PROMPT,
               userPrompt: promptBody.join("\n"),
@@ -233,7 +236,7 @@ export function setupCorrectionDetector(
               signal: ctx.signal,
             },
             dbManager,
-            projectName,
+            activeProjectName,
           );
           if (directResult.ok) {
             savedViaLlm = directResult.appliedCount > 0;
@@ -259,7 +262,7 @@ export function setupCorrectionDetector(
         if (correctionText) {
           const directive = extractCorrectionDirective(correctionText);
           const failureReason = "User corrected the agent";
-          const scopedProjectName = projectStore ? projectName?.trim() || null : null;
+          const scopedProjectName = activeProjectStore ? activeProjectName : null;
           await store.addFailure(directive, {
             category: "correction",
             failureReason,

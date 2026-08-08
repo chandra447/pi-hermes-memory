@@ -13,6 +13,7 @@
  * The subprocess child process modifies files on disk, so the parent MUST
  * reload from disk after a subprocess-based consolidation completes.
  */
+import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -292,8 +293,8 @@ export function registerConsolidateCommand(
   pi: ExtensionAPI,
   store: MemoryStore,
   timeoutMs: number = DEFAULT_CONSOLIDATION_TIMEOUT_MS,
-  projectStore: MemoryStore | null = null,
-  projectName?: string | null,
+  projectStore: ProjectStoreRef = null,
+  projectName: ProjectNameRef = null,
   llmConfig: ConsolidationLlmConfig = {},
   dbManager: DatabaseManager | null = null,
   deps: { runDirectMemoryCompletion?: typeof runDirectMemoryCompletion } = {},
@@ -302,6 +303,8 @@ export function registerConsolidateCommand(
     description: "Manually trigger memory consolidation to free up space",
     handler: async (_args, ctx) => {
       const results: string[] = [];
+      const activeProjectStore = resolveProjectStore(projectStore);
+      const activeProjectName = resolveProjectName(projectName);
       const targets: Array<{
         label: string;
         store: MemoryStore;
@@ -313,10 +316,10 @@ export function registerConsolidateCommand(
         { label: "failure", store, target: "failure", toolTarget: "failure" },
       ];
 
-      if (projectStore) {
+      if (activeProjectStore) {
         targets.push({
-          label: projectName ? `project:${projectName}` : "project",
-          store: projectStore,
+          label: activeProjectName ? `project:${activeProjectName}` : "project",
+          store: activeProjectStore,
           target: "memory",
           toolTarget: "project",
         });
@@ -359,7 +362,7 @@ export function registerConsolidateCommand(
           llmConfig,
           ctx,
           dbManager,
-          projectName,
+          activeProjectName,
           deps,
         );
 

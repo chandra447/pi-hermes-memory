@@ -16,9 +16,10 @@ import { applyRecentMessageLimit, collectMessageParts } from "./message-parts.js
 import { execChildPrompt } from "./pi-child-process.js";
 import { runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult } from "./review-memory-ops.js";
 
+import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 export interface BackgroundReviewOptions {
   dbManager?: DatabaseManager | null;
-  projectName?: string | null;
+  projectName?: ProjectNameRef;
   deps?: BackgroundReviewDeps;
 }
 
@@ -116,7 +117,7 @@ async function runSubprocessReview(
 export function setupBackgroundReview(
   pi: ExtensionAPI,
   store: MemoryStore,
-  projectStore: MemoryStore | null,
+  projectStore: ProjectStoreRef,
   config: MemoryConfig,
   options: BackgroundReviewOptions = {},
 ): void {
@@ -183,11 +184,13 @@ export function setupBackgroundReview(
     }
 
     const parts = applyRecentMessageLimit(allParts, config.reviewRecentMessages);
+    const activeProjectStore = resolveProjectStore(projectStore);
+    const activeProjectName = resolveProjectName(projectName);
     const promptInput: ReviewPromptInput = {
       parts,
       currentMemory: store.getMemoryEntries().join("\n§\n"),
       currentUser: store.getUserEntries().join("\n§\n"),
-      currentProject: projectStore ? projectStore.getMemoryEntries().join("\n§\n") : null,
+      currentProject: activeProjectStore ? activeProjectStore.getMemoryEntries().join("\n§\n") : null,
     };
 
     const subprocessPrompt = buildSubprocessReviewPrompt(promptInput);
@@ -210,10 +213,10 @@ export function setupBackgroundReview(
           const directResult = await runDirectReview(
             ctx as Pick<ExtensionContext, "model" | "modelRegistry">,
             store,
-            projectStore,
+            activeProjectStore,
             { userPrompt: directPrompt, systemPrompt: DIRECT_REVIEW_SYSTEM_PROMPT, config, timeoutMs: 120000 },
             dbManager,
-            projectName,
+            activeProjectName,
           );
 
           if (directResult.ok) {

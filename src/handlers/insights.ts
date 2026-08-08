@@ -4,14 +4,16 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
+import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 
-export function registerInsightsCommand(pi: ExtensionAPI, store: MemoryStore, projectStore: MemoryStore | null, projectName: string): void {
+export function registerInsightsCommand(pi: ExtensionAPI, store: MemoryStore, projectStore: ProjectStoreRef, projectName: ProjectNameRef): void {
   pi.registerCommand("memory-insights", {
-    description: "Show what's stored in persistent memory",
     handler: async (_args, ctx) => {
       const memoryEntries = store.getMemoryEntries();
       const userEntries = store.getUserEntries();
-      const projectEntries = projectStore ? projectStore.getMemoryEntries() : null;
+      const activeProjectStore = resolveProjectStore(projectStore);
+      const activeProjectName = resolveProjectName(projectName);
+      const projectEntries = activeProjectStore ? activeProjectStore.getMemoryEntries() : null;
 
       const lines: string[] = [];
       lines.push("");
@@ -52,9 +54,8 @@ export function registerInsightsCommand(pi: ExtensionAPI, store: MemoryStore, pr
       }
       lines.push("");
 
-      // Project section
       if (projectEntries !== null) {
-        lines.push(`  📁 PROJECT MEMORY: ${projectName}`);
+        lines.push(`  📁 PROJECT MEMORY: ${activeProjectName ?? ""}`);
         lines.push("  " + "─".repeat(44));
         if (projectEntries.length === 0) {
           lines.push("  (empty)");

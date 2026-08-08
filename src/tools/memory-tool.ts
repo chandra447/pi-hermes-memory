@@ -19,6 +19,7 @@ import {
   syncMemoryEntry,
 } from "../store/sqlite-memory-store.js";
 import { MEMORY_TOOL_DESCRIPTION } from "../constants.js";
+import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 import type { MemoryCategory, MemoryResult } from "../types.js";
 import { createSharedToolResultRenderer } from "./shared-output-view.js";
 import { memoryResultView } from "./tool-result-views.js";
@@ -223,23 +224,23 @@ type MemoryToolParams = {
   category?: MemoryCategory;
   failure_reason?: string;
 };
-
 export function registerMemoryTool(
   pi: ExtensionAPI,
   store: MemoryStore,
-  projectStore: MemoryStore | null,
+  projectStore: ProjectStoreRef,
   dbManager: DatabaseManager | null = null,
-  projectName?: string | null,
+  projectName: ProjectNameRef = null,
 ): void {
   const reconciledStores = new WeakSet<MemoryStore>();
-  if (typeof store.setMutationObserver === "function") {
-    store.setMutationObserver((target, entries) => reconcileStoreScope(entries, target, dbManager, projectName));
-    reconciledStores.add(store);
-  }
-  if (projectStore && typeof projectStore.setMutationObserver === "function") {
-    projectStore.setMutationObserver((_target, entries) => reconcileStoreScope(entries, "project", dbManager, projectName));
-    reconciledStores.add(projectStore);
-  }
+  const attachMutationObserver = (candidate: MemoryStore | null): void => {
+    if (!candidate || reconciledStores.has(candidate) || typeof candidate.setMutationObserver !== "function") return;
+    candidate.setMutationObserver((target, entries) =>
+      reconcileStoreScope(entries, target, dbManager, resolveProjectName(projectName)),
+    );
+    reconciledStores.add(candidate);
+  };
+  attachMutationObserver(store);
+  attachMutationObserver(resolveProjectStore(projectStore));
 
   if (typeof pi.on === "function") {
     pi.on("tool_result", (event) => {
@@ -256,9 +257,11 @@ export function registerMemoryTool(
   ) => {
     const { target: rawTarget, content, old_text, category, failure_reason } = params;
     const target = rawTarget === "project" ? "memory" : rawTarget;
-    const activeStore = rawTarget === "project" ? projectStore : store;
+    const activeProjectStore = resolveProjectStore(projectStore);
+    const activeProjectName = resolveProjectName(projectName);
+    const activeStore = rawTarget === "project" ? activeProjectStore : store;
 
-    if (rawTarget === "project" && !projectStore) {
+    if (rawTarget === "project" && !activeProjectStore) {
       return {
         content: [{
           type: "text" as const,
@@ -275,6 +278,7 @@ export function registerMemoryTool(
     }
 
     const store_ = activeStore!;
+    attachMutationObserver(store_);
     let result: MemoryResult;
     let syncWarning: string | null = null;
     const syncHandled = reconciledStores.has(store_);
@@ -291,13 +295,13 @@ export function registerMemoryTool(
             failureReason: failure_reason,
           });
           if (result.success && !syncHandled) {
-            syncWarning = await syncAddToSqlite(rawTarget, content, memoryCategory, failure_reason, dbManager, projectName);
+            syncWarning = await syncAddToSqlite(rawTarget, content, memoryCategory, failure_reason, dbManager, activeProjectName);
           }
         } else {
           result = await store_.add(target, content, signal);
           if (result.success && !syncHandled) {
-            await syncEvictionsFromSqlite(rawTarget, result.evicted_entries, dbManager, projectName);
-            syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, projectName);
+            await syncEvictionsFromSqlite(rawTarget, result.evicted_entries, dbManager, activeProjectName);
+            syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, activeProjectName);
           }
         }
         break;
@@ -306,20 +310,20 @@ export function registerMemoryTool(
         if (!content) throw new Error("content is required for 'replace' action.");
         result = await store_.replace(target, old_text, content);
         if (result.success && !syncHandled) {
-          syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, projectName);
+          syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, activeProjectName);
         }
         break;
       case "remove":
         if (!old_text) throw new Error("old_text is required for 'remove' action.");
         result = await store_.remove(target, old_text);
         if (result.success && !syncHandled) {
-          syncWarning = await syncRemoveFromSqlite(rawTarget, old_text, dbManager, projectName);
+          syncWarning = await syncRemoveFromSqlite(rawTarget, old_text, dbManager, activeProjectName);
         }
         break;
     }
 
     if (result.success && !syncHandled && typeof store_.getRawEntriesForSync === "function") {
-      const reconciliationWarning = await reconcileStoreScope(store_.getRawEntriesForSync(target), rawTarget, dbManager, projectName);
+      const reconciliationWarning = await reconcileStoreScope(store_.getRawEntriesForSync(target), rawTarget, dbManager, activeProjectName);
       if (reconciliationWarning !== undefined) syncWarning = reconciliationWarning;
     }
 

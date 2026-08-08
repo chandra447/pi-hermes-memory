@@ -16,6 +16,7 @@ import type { MemoryConfig } from "../types.js";
 import { collectMessageParts } from "./message-parts.js";
 import { execChildPrompt } from "./pi-child-process.js";
 import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
+import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 
 function buildDirectFlushUserPrompt(
   store: MemoryStore,
@@ -50,10 +51,10 @@ function buildDirectFlushUserPrompt(
 export function setupSessionFlush(
   pi: ExtensionAPI,
   store: MemoryStore,
-  projectStore: MemoryStore | null,
+  projectStore: ProjectStoreRef,
   config: MemoryConfig,
   dbManager: DatabaseManager | null = null,
-  projectName?: string | null,
+  projectName: ProjectNameRef = null,
   deps: { runDirectMemoryCompletion?: typeof runDirectMemoryCompletion } = {},
 ): void {
   let userTurnCount = 0;
@@ -79,22 +80,24 @@ export function setupSessionFlush(
     }
 
     const parts = collectMessageParts(entries, config.flushRecentMessages);
+    const activeProjectStore = resolveProjectStore(projectStore);
+    const activeProjectName = resolveProjectName(projectName);
 
     if (usesDirectTransport(config)) {
       try {
         const directResult = await runDirect(
           ctx,
           store,
-          projectStore,
+          activeProjectStore,
           {
             systemPrompt: DIRECT_FLUSH_SYSTEM_PROMPT,
-            userPrompt: buildDirectFlushUserPrompt(store, projectStore, parts),
+            userPrompt: buildDirectFlushUserPrompt(store, activeProjectStore, parts),
             config,
             timeoutMs,
             signal,
           },
           dbManager,
-          projectName,
+          activeProjectName,
         );
         if (directResult.ok) return;
       } catch {

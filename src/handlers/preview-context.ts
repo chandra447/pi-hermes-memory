@@ -8,6 +8,7 @@ import { MemoryStore } from "../store/memory-store.js";
 import type { StandingInstructions } from "../store/standing-instructions.js";
 import { resolveMemoryPolicyPrompt } from "../prompt-context.js";
 import type { MemoryConfig } from "../types.js";
+import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 
 function appendStandingBlock(lines: string[], standing: StandingInstructions | null): number {
   const rendered = standing?.render();
@@ -24,8 +25,8 @@ function appendStandingBlock(lines: string[], standing: StandingInstructions | n
 export function registerPreviewContextCommand(
   pi: ExtensionAPI,
   store: MemoryStore,
-  projectStore: MemoryStore | null,
-  projectName: string,
+  projectStore: ProjectStoreRef,
+  projectName: ProjectNameRef,
   config: Pick<MemoryConfig, "memoryMode" | "memoryPolicyStyle" | "memoryPolicyCustomText"> = { memoryMode: "policy-only" },
   standing: StandingInstructions | null = null,
 ): void {
@@ -59,9 +60,10 @@ export function registerPreviewContextCommand(
         ctx.ui.notify(lines.join("\n"), "info");
         return;
       }
-
+      const activeProjectStore = resolveProjectStore(projectStore);
+      const activeProjectName = resolveProjectName(projectName);
       const memoryBlock = store.formatForSystemPrompt();
-      const projectBlock = projectStore ? projectStore.formatProjectBlock(projectName) : "";
+      const projectBlock = activeProjectStore ? activeProjectStore.formatProjectBlock(activeProjectName ?? "") : "";
 
       const lines: string[] = [];
       lines.push("");
@@ -81,10 +83,9 @@ export function registerPreviewContextCommand(
         lines.push(memoryBlock);
         lines.push("");
       }
-
       if (projectBlock) {
         blockCount++;
-        lines.push(`  ── PROJECT MEMORY (${projectName}) ─────────────────────────`);
+        lines.push(`  ── PROJECT MEMORY (${activeProjectName ?? ""}) ─────────────────────────`);
         lines.push(projectBlock);
         lines.push("");
       }
