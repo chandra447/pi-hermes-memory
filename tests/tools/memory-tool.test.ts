@@ -404,6 +404,48 @@ describe("registerMemoryTool", () => {
     const projectRows = getMemories(dbManager, { project: "project-b", target: "memory" });
     assert.deepStrictEqual(projectRows.map((row) => row.content), ["second"]);
   });
+  it("reconciles rebound project-store mutations in the project SQLite scope", async () => {
+    let activeProjectName = "project-a";
+    type MutationObserver = (
+      target: "memory" | "user" | "failure",
+      entries: string[],
+    ) => Promise<string | null | undefined>;
+    const observers = new Map<string, MutationObserver>();
+    const stores = new Map<string, MemoryStore>();
+    const makeProjectStore = (name: string) => ({
+      setMutationObserver: (observer: MutationObserver) => {
+        observers.set(name, observer);
+      },
+    }) as unknown as MemoryStore;
+    stores.set("project-a", makeProjectStore("project-a"));
+    stores.set("project-b", makeProjectStore("project-b"));
+    const mockPi = {
+      registerTool: () => {},
+    } as unknown as ExtensionAPI;
+
+    const configureProjectStore = registerMemoryTool(
+      mockPi,
+      {} as MemoryStore,
+      () => stores.get(activeProjectName) ?? null,
+      dbManager,
+      () => activeProjectName,
+    );
+
+    await observers.get("project-a")?.("memory", ["first project entry"]);
+    activeProjectName = "project-b";
+    configureProjectStore(stores.get("project-b") ?? null);
+    await observers.get("project-b")?.("memory", ["second project entry"]);
+
+    assert.deepStrictEqual(
+      getMemories(dbManager, { target: "memory", project: "project-a" }).map((row) => row.content),
+      ["first project entry"],
+    );
+    assert.deepStrictEqual(
+      getMemories(dbManager, { target: "memory", project: "project-b" }).map((row) => row.content),
+      ["second project entry"],
+    );
+    assert.deepStrictEqual(getMemories(dbManager, { target: "memory", project: null }), []);
+  });
 
   it("returns a warning instead of failing when SQLite sync errors", async () => {
     let capturedResult: any;

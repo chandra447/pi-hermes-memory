@@ -155,6 +155,7 @@ export default function (pi: ExtensionAPI) {
   const projectStoreRef = () => projectStore;
   const projectNameRef = () => projectName;
   let configureProjectStore: (candidate: MemoryStore | null) => void = () => {};
+  let configureMemoryToolProjectStore: (candidate: MemoryStore | null) => void = () => {};
   // Never written by review, consolidation or the correction detector — see
   // store/standing-instructions.ts for why provenance has to be structural.
   const standingStore = config.standingInstructionsEnabled !== false
@@ -190,6 +191,7 @@ export default function (pi: ExtensionAPI) {
       projectMemoryDir = nextProjectMemoryDir;
       projectStore = createProjectStore(nextProject);
       configureProjectStore(projectStore);
+      configureMemoryToolProjectStore(projectStore);
     }
     project = nextProject;
     projectName = nextProject.name ?? "";
@@ -228,7 +230,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── 3. Register action-specific memory write tools with SQLite sync ──
-  registerMemoryTool(pi, store, projectStoreRef, dbManager, projectNameRef);
+  configureMemoryToolProjectStore = registerMemoryTool(pi, store, projectStoreRef, dbManager, projectNameRef);
 
   // ── 4. Register the skill tool ──
   registerSkillTool(pi, skillStore);

@@ -230,17 +230,25 @@ export function registerMemoryTool(
   projectStore: ProjectStoreRef,
   dbManager: DatabaseManager | null = null,
   projectName: ProjectNameRef = null,
-): void {
+): (candidate: MemoryStore | null) => void {
   const reconciledStores = new WeakSet<MemoryStore>();
-  const attachMutationObserver = (candidate: MemoryStore | null): void => {
+  const attachMutationObserver = (candidate: MemoryStore | null, isProjectStore = false): void => {
     if (!candidate || reconciledStores.has(candidate) || typeof candidate.setMutationObserver !== "function") return;
     candidate.setMutationObserver((target, entries) =>
-      reconcileStoreScope(entries, target, dbManager, resolveProjectName(projectName)),
+      reconcileStoreScope(
+        entries,
+        isProjectStore && target === "memory" ? "project" : target,
+        dbManager,
+        resolveProjectName(projectName),
+      ),
     );
     reconciledStores.add(candidate);
   };
+  const configureProjectStore = (candidate: MemoryStore | null): void => {
+    attachMutationObserver(candidate, true);
+  };
   attachMutationObserver(store);
-  attachMutationObserver(resolveProjectStore(projectStore));
+  configureProjectStore(resolveProjectStore(projectStore));
 
   if (typeof pi.on === "function") {
     pi.on("tool_result", (event) => {
@@ -410,4 +418,5 @@ Remove one existing entry. The target and old_text fields are required.`,
       old_text: Type.String({ description: "Substring identifying the entry to remove." }),
     }),
   );
+  return configureProjectStore;
 }

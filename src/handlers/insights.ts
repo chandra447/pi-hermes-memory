@@ -8,6 +8,7 @@ import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type Proj
 
 export function registerInsightsCommand(pi: ExtensionAPI, store: MemoryStore, projectStore: ProjectStoreRef, projectName: ProjectNameRef): void {
   pi.registerCommand("memory-insights", {
+    description: "Show what's stored in persistent memory",
     handler: async (_args, ctx) => {
       const memoryEntries = store.getMemoryEntries();
       const userEntries = store.getUserEntries();
