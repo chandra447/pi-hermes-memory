@@ -2,6 +2,7 @@ import { DatabaseManager } from './db.js';
 import {
   buildFallbackFts5Query,
   buildNaturalLanguageFallbackQuery,
+  collectSignificantSearchTerms,
   hasExplicitFts5Operator,
   isFts5QueryError,
   normalizeFts5Query,
@@ -46,6 +47,16 @@ function escapeLikePattern(text: string): string {
 }
 
 function collectLikeTerms(query: string): string[] {
+  // Prefer significant terms so glue words (search/memory/相关/...) don't
+  // expand LIKE fallback into unrelated transcript hits.
+  const significant = collectSignificantSearchTerms(query);
+  if (significant.length > 0) {
+    return significant;
+  }
+
+  // No significant terms: only keep pure punctuation/symbol tokens so
+  // intentional substring searches like "%" still work via escaped LIKE.
+  // All-stopword NL must not LIKE-match on "memory" / "search" / etc.
   const terms: string[] = [];
 
   for (const match of query.matchAll(QUERY_TOKEN_PATTERN)) {
@@ -55,8 +66,11 @@ function collectLikeTerms(query: string): string[] {
       continue;
     }
 
-    const rawValue = phrase ?? term ?? '';
-    if (rawValue.length > 0) terms.push(rawValue);
+    const rawValue = (phrase ?? term ?? '').trim();
+    if (!rawValue) continue;
+    if (/^[\p{P}\p{S}]+$/u.test(rawValue)) {
+      terms.push(rawValue);
+    }
   }
 
   return terms;
@@ -177,47 +191,50 @@ export function searchSessions(
   };
 
   const normalizedQuery = normalizeFts5Query(query);
-  if (normalizedQuery.length === 0) {
-    return [];
-  }
-
-  const exactResults = executeSearch({ type: 'fts', query: normalizedQuery });
-  if (exactResults.length > 0) {
-    return exactResults;
-  }
-
   const explicitOperatorQuery = hasExplicitFts5Operator(query);
-  if (explicitOperatorQuery) {
-    // Same recovery as searchMemories: only when the raw operator query fails
-    // to parse do we retry it as natural language; valid operator queries that
-    // match nothing keep their exact semantics.
-    if (!ftsParseError) {
+
+  // All-stopword / punctuation-only NL: skip FTS MATCH, but still allow LIKE
+  // fallback for intentional substrings such as "%" (escaped wildcards).
+  if (normalizedQuery.length > 0) {
+    const exactResults = executeSearch({ type: 'fts', query: normalizedQuery });
+    if (exactResults.length > 0) {
       return exactResults;
     }
-    const nlQuery = normalizeNaturalLanguageFts5Query(query);
-    if (nlQuery.length > 0 && nlQuery !== normalizedQuery) {
-      const nlResults = executeSearch({ type: 'fts', query: nlQuery });
-      if (nlResults.length > 0) {
-        return nlResults;
+
+    if (explicitOperatorQuery) {
+      // Same recovery as searchMemories: only when the raw operator query
+      // fails to parse do we retry it as natural language; valid operator
+      // queries that match nothing keep their exact semantics.
+      if (!ftsParseError) {
+        return exactResults;
       }
-      const nlFallback = buildNaturalLanguageFallbackQuery(query);
-      if (nlFallback && nlFallback !== nlQuery) {
-        const nlFallbackResults = executeSearch({ type: 'fts', query: nlFallback });
-        if (nlFallbackResults.length > 0) {
-          return nlFallbackResults;
+      const nlQuery = normalizeNaturalLanguageFts5Query(query);
+      if (nlQuery.length > 0 && nlQuery !== normalizedQuery) {
+        const nlResults = executeSearch({ type: 'fts', query: nlQuery });
+        if (nlResults.length > 0) {
+          return nlResults;
+        }
+        const nlFallback = buildNaturalLanguageFallbackQuery(query);
+        if (nlFallback && nlFallback !== nlQuery) {
+          const nlFallbackResults = executeSearch({ type: 'fts', query: nlFallback });
+          if (nlFallbackResults.length > 0) {
+            return nlFallbackResults;
+          }
         }
       }
+      const likeTerms = collectLikeTerms(query);
+      return executeSearch({ type: 'like', terms: likeTerms });
     }
-    const likeTerms = collectLikeTerms(query);
-    return executeSearch({ type: 'like', terms: likeTerms });
-  }
 
-  const fallbackQuery = buildFallbackFts5Query(query);
-  if (fallbackQuery && fallbackQuery !== normalizedQuery) {
-    const fallbackResults = executeSearch({ type: 'fts', query: fallbackQuery });
-    if (fallbackResults.length > 0) {
-      return fallbackResults;
+    const fallbackQuery = buildFallbackFts5Query(query);
+    if (fallbackQuery && fallbackQuery !== normalizedQuery) {
+      const fallbackResults = executeSearch({ type: 'fts', query: fallbackQuery });
+      if (fallbackResults.length > 0) {
+        return fallbackResults;
+      }
     }
+  } else if (explicitOperatorQuery) {
+    return [];
   }
 
   const likeTerms = collectLikeTerms(query);
