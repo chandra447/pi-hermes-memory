@@ -822,9 +822,9 @@ describe("setupBackgroundReview", () => {
     const subprocessPrompt = buildSubprocessReviewPrompt(input);
     const directPrompt = buildDirectReviewUserPrompt(input);
 
-    assert.match(subprocessPrompt, /save using the memory tool/i);
+    assert.match(subprocessPrompt, /save using memory_add/i);
     assert.match(directPrompt, /Conversation to Review/);
-    assert.doesNotMatch(directPrompt, /save using the memory tool/i);
+    assert.doesNotMatch(directPrompt, /save using memory_add/i);
     assert.ok(subprocessPrompt.includes("uses pnpm"));
     assert.ok(directPrompt.includes("monorepo layout"));
   });
