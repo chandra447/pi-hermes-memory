@@ -229,15 +229,17 @@ Memory blocks are wrapped in `<memory-context>` XML tags with a guard note ("NOT
 
 Once installed, the extension works automatically for durable memory. Skills are available through the `skill_manage` tool during normal work when the agent decides a reusable procedure is worth saving.
 
-### The `memory` Tool
+### Memory write tools
 
-The agent gets a `memory` tool it can call proactively:
+The agent gets action-specific memory tools it can call proactively:
 
-| Action | Target | What it does |
+| Tool | Required fields | What it does |
 |---|---|---|
-| `add` | `memory` or `user` | Append a new entry |
-| `replace` | `memory` or `user` | Update an existing entry (matched by substring) |
-| `remove` | `memory` or `user` | Delete an entry (matched by substring) |
+| `memory_add` | `target`, `content` | Append a new durable entry |
+| `memory_replace` | `target`, `old_text`, `content` | Update an existing entry matched by substring |
+| `memory_remove` | `target`, `old_text` | Delete an existing entry matched by substring |
+
+Targets are `memory`, `user`, `project`, and `failure`. Failure writes may also include `category` and `failure_reason`.
 
 ### The `skill_manage` Tool
 
@@ -351,7 +353,7 @@ For users who prefer source anchors over snippets, `sessionSearch.variant` can b
 The extension keeps Markdown memory as the human-readable source of truth, and mirrors successful writes into the SQLite-backed search store used by `memory_search`.
 
 This means:
-- Fresh `memory` tool writes become searchable immediately
+- Fresh `memory_add`, `memory_replace`, and `memory_remove` writes become searchable immediately
 - Older Markdown entries can be backfilled with `/memory-sync-markdown`
 - SQLite search does **not** replace the core Markdown limit
 

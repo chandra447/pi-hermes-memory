@@ -209,7 +209,7 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ── 3. Register the memory tool (with project store + SQLite sync) ──
+  // ── 3. Register action-specific memory write tools with SQLite sync ──
   registerMemoryTool(pi, store, projectStore, dbManager, projectName);
 
   // ── 4. Register the skill tool ──

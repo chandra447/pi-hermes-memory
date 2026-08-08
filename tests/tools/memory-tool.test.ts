@@ -11,7 +11,7 @@ import { MemoryStore } from "../../src/store/memory-store.js";
 import { DatabaseManager } from "../../src/store/db.js";
 import { getMemories, syncMemoryEntry } from "../../src/store/sqlite-memory-store.js";
 import { ENTRY_DELIMITER, MEMORY_FILE } from "../../src/constants.js";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Value } from "typebox/value";
 
 describe("registerMemoryTool", () => {
   let tmpDir: string;
@@ -27,7 +27,7 @@ describe("registerMemoryTool", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("registers tool with name 'memory' and correct parameters", () => {
+  it("registers action-specific memory tools with required parameters", () => {
     const registeredTools: any[] = [];
 
     const mockPi = {
@@ -36,22 +36,18 @@ describe("registerMemoryTool", () => {
       },
     } as unknown as ExtensionAPI;
 
-    const mockStore = {
-      add: () => ({ success: true, target: "memory", entries: ["test"], usage: "10% — 10/100 chars", entry_count: 1 }),
-      replace: () => ({ success: true, target: "memory", entries: [], usage: "0% — 0/100 chars", entry_count: 0 }),
-      remove: () => ({ success: true, target: "memory", entries: [], usage: "0% — 0/100 chars", entry_count: 0 }),
-    } as unknown as MemoryStore;
+    registerMemoryTool(mockPi, {} as MemoryStore, null);
 
-    registerMemoryTool(mockPi, mockStore, null);
-
-    assert.strictEqual(registeredTools.length, 1, "should register exactly one tool");
-    const tool = registeredTools[0];
-    assert.strictEqual(tool.name, "memory", "tool name should be 'memory'");
-    assert.strictEqual(tool.label, "Memory", "tool label should be 'Memory'");
-    assert.ok(tool.description.length > 0, "description should not be empty");
-    assert.ok(tool.promptSnippet.length > 0, "promptSnippet should not be empty");
-    assert.ok(Array.isArray(tool.promptGuidelines), "promptGuidelines should be an array");
-    assert.ok(tool.parameters, "parameters schema should be defined");
+    assert.deepStrictEqual(
+      registeredTools.map((tool) => tool.name),
+      ["memory_add", "memory_replace", "memory_remove"],
+    );
+    for (const tool of registeredTools) {
+      assert.ok(tool.description.length > 0);
+      assert.ok(tool.promptSnippet.length > 0);
+      assert.ok(Array.isArray(tool.promptGuidelines));
+      assert.ok(tool.parameters);
+    }
   });
 
   it("execute add returns JSON with usage field", async () => {
@@ -59,7 +55,7 @@ describe("registerMemoryTool", () => {
 
     const mockPi = {
       registerTool: (def: any) => {
-        capturedResult = def;
+        if (!capturedResult || def.name === "memory_add") capturedResult = def;
       },
     } as unknown as ExtensionAPI;
 
@@ -91,7 +87,7 @@ describe("registerMemoryTool", () => {
 
     const mockPi = {
       registerTool: (def: any) => {
-        capturedResult = def;
+        if (!capturedResult || def.name === "memory_add") capturedResult = def;
       },
     } as unknown as ExtensionAPI;
 
@@ -128,7 +124,7 @@ describe("registerMemoryTool", () => {
     let capturedResult: any;
     const mockPi = {
       registerTool: (def: any) => {
-        capturedResult = def;
+        if (!capturedResult || def.name === "memory_add") capturedResult = def;
       },
     } as unknown as ExtensionAPI;
 
@@ -154,7 +150,9 @@ describe("registerMemoryTool", () => {
   it("prunes same-scope SQLite orphans after a Markdown mutation", async () => {
     let capturedResult: any;
     const mockPi = {
-      registerTool: (definition: any) => { capturedResult = definition; },
+    registerTool: (definition: any) => {
+      if (!capturedResult || definition.name === "memory_add") capturedResult = definition;
+    },
     } as unknown as ExtensionAPI;
     const store = new MemoryStore({
       memoryMode: "policy-only",
@@ -196,7 +194,9 @@ describe("registerMemoryTool", () => {
   it("reconciles SQLite from fresh authoritative Markdown state", async () => {
     let capturedResult: any;
     const mockPi = {
-      registerTool: (definition: any) => { capturedResult = definition; },
+    registerTool: (definition: any) => {
+      if (!capturedResult || definition.name === "memory_add") capturedResult = definition;
+    },
     } as unknown as ExtensionAPI;
     const store = new MemoryStore({
       memoryMode: "policy-only",
@@ -248,7 +248,7 @@ describe("registerMemoryTool", () => {
     let capturedResult: any;
     const mockPi = {
       registerTool: (def: any) => {
-        capturedResult = def;
+        if (!capturedResult || def.name === "memory_add") capturedResult = def;
       },
     } as unknown as ExtensionAPI;
 
@@ -288,7 +288,7 @@ describe("registerMemoryTool", () => {
     let capturedResult: any;
     const mockPi = {
       registerTool: (def: any) => {
-        capturedResult = def;
+        if (!capturedResult || def.name === "memory_add") capturedResult = def;
       },
     } as unknown as ExtensionAPI;
 
@@ -329,7 +329,7 @@ describe("registerMemoryTool", () => {
     let capturedResult: any;
     const mockPi = {
       registerTool: (def: any) => {
-        capturedResult = def;
+        if (!capturedResult || def.name === "memory_add") capturedResult = def;
       },
     } as unknown as ExtensionAPI;
 
@@ -365,7 +365,7 @@ describe("registerMemoryTool", () => {
     let capturedResult: any;
     const mockPi = {
       registerTool: (def: any) => {
-        capturedResult = def;
+        if (!capturedResult || def.name === "memory_add") capturedResult = def;
       },
     } as unknown as ExtensionAPI;
 
@@ -399,7 +399,7 @@ describe("registerMemoryTool", () => {
     let capturedResult: any;
     const mockPi = {
       registerTool: (def: any) => {
-        capturedResult = def;
+        if (!capturedResult || def.name === "memory_add") capturedResult = def;
       },
     } as unknown as ExtensionAPI;
 
@@ -426,61 +426,89 @@ describe("registerMemoryTool", () => {
     assert.strictEqual(rows.length, 0, "SQLite should stay unchanged when core add fails");
   });
 
-  it("execute add without content returns error", async () => {
-    let capturedResult: any;
-
+  it("registers action-specific schemas that reject incomplete mutations", () => {
+    const registeredTools: Record<string, any> = {};
     const mockPi = {
-      registerTool: (def: any) => {
-        capturedResult = def;
+      registerTool: (definition: any) => {
+        registeredTools[definition.name] = definition;
       },
     } as unknown as ExtensionAPI;
 
-    const mockStore = {} as unknown as MemoryStore;
+    registerMemoryTool(mockPi, {} as MemoryStore, null);
 
-    registerMemoryTool(mockPi, mockStore, null);
-    const result = await capturedResult.execute("tc-1", { action: "add", target: "memory" }, undefined as any, undefined as any, undefined as any);
-
-    const parsed = JSON.parse(result.content[0].text);
-    assert.strictEqual(parsed.success, false, "should fail without content");
-    assert.ok(parsed.error.includes("required"), "error should mention required content");
+    assert.deepStrictEqual(Object.keys(registeredTools).sort(), [
+      "memory_add",
+      "memory_remove",
+      "memory_replace",
+    ]);
+    assert.strictEqual(
+      Value.Check(registeredTools.memory_add.parameters, {
+        action: "add",
+        target: "failure",
+        category: "tool-quirk",
+        failure_reason: "missing content",
+      }),
+      false,
+      "add without content must fail schema validation",
+    );
+    assert.strictEqual(
+      Value.Check(registeredTools.memory_replace.parameters, {
+        target: "memory",
+        content: "new",
+      }),
+      false,
+      "replace without old_text must fail schema validation",
+    );
+    assert.strictEqual(
+      Value.Check(registeredTools.memory_remove.parameters, { target: "memory" }),
+      false,
+      "remove without old_text must fail schema validation",
+    );
+    assert.strictEqual(
+      Value.Check(registeredTools.memory_add.parameters, {
+        target: "memory",
+        content: "durable fact",
+      }),
+      true,
+    );
+    assert.strictEqual(
+      Value.Check(registeredTools.memory_replace.parameters, {
+        target: "memory",
+        old_text: "old",
+        content: "new",
+      }),
+      true,
+    );
+    assert.strictEqual(
+      Value.Check(registeredTools.memory_remove.parameters, {
+        target: "memory",
+        old_text: "old",
+      }),
+      true,
+    );
   });
 
-  it("execute replace without old_text returns error", async () => {
+  it("execute delegates remove to store.remove", async () => {
     let capturedResult: any;
+    let removeArgs: any;
 
     const mockPi = {
       registerTool: (def: any) => {
-        capturedResult = def;
+        if (def.name === "memory_remove") capturedResult = def;
       },
     } as unknown as ExtensionAPI;
 
-    const mockStore = {} as unknown as MemoryStore;
-
-    registerMemoryTool(mockPi, mockStore, null);
-    const result = await capturedResult.execute("tc-1", { action: "replace", target: "memory", content: "new" }, undefined as any, undefined as any, undefined as any);
-
-    const parsed = JSON.parse(result.content[0].text);
-    assert.strictEqual(parsed.success, false, "should fail without old_text");
-    assert.ok(parsed.error.includes("old_text"), "error should mention old_text");
-  });
-
-  it("execute remove without old_text returns error", async () => {
-    let capturedResult: any;
-
-    const mockPi = {
-      registerTool: (def: any) => {
-        capturedResult = def;
+    const mockStore = {
+      remove: (...args: any[]) => {
+        removeArgs = args;
+        return { success: true, target: "memory", entries: [], usage: "0% — 0/5000 chars", entry_count: 0 };
       },
-    } as unknown as ExtensionAPI;
-
-    const mockStore = {} as unknown as MemoryStore;
+    } as unknown as MemoryStore;
 
     registerMemoryTool(mockPi, mockStore, null);
-    const result = await capturedResult.execute("tc-1", { action: "remove", target: "memory" }, undefined as any, undefined as any, undefined as any);
+    await capturedResult.execute("tc-1", { target: "memory", old_text: "old entry" }, undefined as any, undefined as any, undefined as any);
 
-    const parsed = JSON.parse(result.content[0].text);
-    assert.strictEqual(parsed.success, false, "should fail without old_text");
-    assert.ok(parsed.error.includes("old_text"), "error should mention old_text");
+    assert.deepStrictEqual(removeArgs, ["memory", "old entry"], "should pass target, old_text to store.remove");
   });
 
   it("execute delegates replace to store.replace", async () => {
@@ -489,7 +517,7 @@ describe("registerMemoryTool", () => {
 
     const mockPi = {
       registerTool: (def: any) => {
-        capturedResult = def;
+        if (def.name === "memory_replace") capturedResult = def;
       },
     } as unknown as ExtensionAPI;
 
@@ -506,26 +534,4 @@ describe("registerMemoryTool", () => {
     assert.deepStrictEqual(replaceArgs, ["memory", "old", "new"], "should pass target, old_text, content to store.replace");
   });
 
-  it("execute delegates remove to store.remove", async () => {
-    let capturedResult: any;
-    let removeArgs: any;
-
-    const mockPi = {
-      registerTool: (def: any) => {
-        capturedResult = def;
-      },
-    } as unknown as ExtensionAPI;
-
-    const mockStore = {
-      remove: (...args: any[]) => {
-        removeArgs = args;
-        return { success: true, target: "memory", entries: [], usage: "0% — 0/5000 chars", entry_count: 0 };
-      },
-    } as unknown as MemoryStore;
-
-    registerMemoryTool(mockPi, mockStore, null);
-    await capturedResult.execute("tc-1", { action: "remove", target: "memory", old_text: "old entry" }, undefined as any, undefined as any, undefined as any);
-
-    assert.deepStrictEqual(removeArgs, ["memory", "old entry"], "should pass target, old_text to store.remove");
-  });
 });

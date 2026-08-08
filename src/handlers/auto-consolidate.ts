@@ -170,7 +170,7 @@ function buildConsolidationPrompt(
     `--- Current ${labelForTarget(target, toolTarget)} Entries ---`,
     entries.join(ENTRY_DELIMITER) || "(empty)",
     "",
-    `Use the memory tool to consolidate. Target: '${toolTarget}'`,
+    `Use memory_add, memory_replace, or memory_remove to consolidate. Target: '${toolTarget}'`,
   ].join("\n");
 }
 

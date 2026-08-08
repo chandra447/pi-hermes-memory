@@ -55,7 +55,7 @@ Returns matching memory entries with project context and dates.`,
 
       const stats = getMemoryStats(dbManager);
       if (stats.total === 0) {
-        const result: SearchResult = { success: false, message: 'No memories in extended store yet. Use the memory tool with add action to store memories.' };
+        const result: SearchResult = { success: false, message: 'No memories in extended store yet. Use memory_add to store memories.' };
         return { content: [{ type: 'text' as const, text: result.message! }], details: result };
       }
 

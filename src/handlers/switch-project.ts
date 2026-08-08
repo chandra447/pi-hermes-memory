@@ -38,7 +38,7 @@ export function registerSwitchProjectCommand(pi: ExtensionAPI, config?: MemoryCo
 
       if (projects.length === 0) {
         ctx.ui.notify(
-          "\n  📁 No project memories found.\n\n  Project memory is automatically created when you use the memory tool with\n  target 'project' while working in a project directory.\n",
+          "\n  📁 No project memories found.\n\n  Project memory is automatically created when you use memory_add with\n  target 'project' while working in a project directory.\n",
           "info",
         );
         return;
@@ -65,7 +65,7 @@ export function registerSwitchProjectCommand(pi: ExtensionAPI, config?: MemoryCo
       }
 
       lines.push("");
-      lines.push("  Use the memory tool with target 'project' to manage");
+      lines.push("  Use memory_add with target 'project' to manage");
       lines.push("  project-scoped memory. Project is auto-detected from");
       lines.push(`  your current directory: ${process.cwd()}`);
 
