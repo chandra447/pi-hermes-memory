@@ -254,7 +254,13 @@ export function setupCorrectionDetector(
 
       // Also save as a failure memory for learning
       try {
-        const lastUserMsg = recentParts.find(p => p.startsWith("[USER]"));
+        let lastUserMsg: string | undefined;
+        for (let i = recentParts.length - 1; i >= 0; i--) {
+          if (recentParts[i].startsWith("[USER]")) {
+            lastUserMsg = recentParts[i];
+            break;
+          }
+        }
         const correctionText = lastUserMsg ? lastUserMsg.replace(/^\[USER\]:\s*/, "") : "";
         if (correctionText) {
           const directive = extractCorrectionDirective(correctionText);

@@ -441,6 +441,30 @@ describe("setupCorrectionDetector handler", () => {
     assert.strictEqual(failures[0].project, null);
   });
 
+  it("saves the latest user message as the correction failure", async () => {
+    const pi = createMockPi();
+    const correctionStore = new MemoryStore({ ...config, memoryDir: tmpDir } as any);
+    await correctionStore.loadFromDisk();
+    setupCorrectionDetector(pi, correctionStore, null, config);
+
+    const branch = [
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "First, use Maven for the build." }] } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "I will use Maven." }] } },
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "Continue with the implementation." }] } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "Implemented." }] } },
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "No, that is incorrect. Use javac only, not Maven." }] } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "Understood." }] } },
+    ];
+
+    fireMessageEnd("user", "No, that is incorrect. Use javac only, not Maven.");
+    await fireTurnEnd(branch);
+
+    const failures = correctionStore.getFailureEntries();
+    assert.strictEqual(failures.length, 1);
+    assert.match(failures[0], /use javac only, not Maven/i);
+    assert.doesNotMatch(failures[0], /First, use Maven/i);
+  });
+
   it("syncs project correction saves into SQLite with project scope", async () => {
     const pi = createMockPi();
     const correctionStore = new MemoryStore({ ...config, memoryDir: tmpDir } as any);
