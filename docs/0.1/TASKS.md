@@ -7,7 +7,7 @@
 
 ## Epic 1: Project Scaffold & Repo Setup
 
-_Done when: repo is on GitHub, TypeScript compiles clean, extension loads in Pi without errors._
+_Done when: repo is on GitHub, TypeScript compiles clean, extension loads in GSD Pi without errors._
 
 - [x] `PLAN.md` — Full implementation plan with Hermes source file reference map — `efddcc4`
 - [x] `AGENTS.md` — Project context and architecture docs — `efddcc4`
@@ -18,20 +18,20 @@ _Done when: repo is on GitHub, TypeScript compiles clean, extension loads in Pi 
 - [x] `src/constants.ts` — Prompts, defaults, delimiter — `efddcc4`
 - [x] `src/store/content-scanner.ts` — Injection/exfiltration pattern detection — `efddcc4`
 - [x] `src/store/memory-store.ts` — Core `MemoryStore` class with CRUD, atomic writes, frozen snapshot — `efddcc4`
-- [x] `src/tools/memory-tool.ts` — `registerMemoryTool()` with Pi tool API — `efddcc4`
+- [x] `src/tools/memory-tool.ts` — `registerMemoryTool()` with GSD Pi tool API — `efddcc4`
 - [x] `src/handlers/background-review.ts` — Learning loop via `pi.exec()` — `efddcc4`
 - [x] `src/handlers/session-flush.ts` — Pre-compaction/shutdown flush — `efddcc4`
 - [x] `src/handlers/insights.ts` — `/memory-insights` command — `efddcc4`
 - [x] `src/index.ts` — Extension entry point wiring everything — `efddcc4`
 - [x] GitHub repo created and initial commit pushed — `efddcc4`
 - [x] `npm install` + `npm run check` passes with zero errors
-- [x] Extension loads in Pi via `pi -e ./src/index.ts` without runtime errors — verified
+- [x] Extension loads in GSD Pi via `pi -e ./src/index.ts` without runtime errors — verified
 
 ---
 
 ## Epic 2: Core Memory — Store & Tool
 
-_Done when: agent can add/replace/remove entries, they persist to disk, and survive a Pi session restart._
+_Done when: agent can add/replace/remove entries, they persist to disk, and survive a GSD Pi session restart._
 
 - [x] `MemoryStore.loadFromDisk()` correctly reads existing MEMORY.md and USER.md — `24151a0`
 - [x] `MemoryStore.add()` validates content, enforces char limit, persists atomically — `24151a0`
@@ -73,7 +73,7 @@ _Done when: memory snapshot appears in system prompt at session start and does N
 - [x] Block format matches Hermes: `═` separator, header line, then content — `028c5ad`
 - [x] Frozen snapshot: write to memory mid-session → system prompt unchanged — `028c5ad`
 - [x] Empty memory files → no block appended (system prompt untouched) — `028c5ad`
-- [x] Second session (manual verification — needs Pi restart): memory saved in session 1 appears in session 2's system prompt
+- [x] Second session (manual verification — needs GSD Pi restart): memory saved in session 1 appears in session 2's system prompt
 
 
 ---
@@ -109,7 +109,7 @@ _Done when: before compaction and session shutdown, agent gets one turn to save 
 - [x] Flush uses `pi.exec("pi", ["-p", "--no-session", ...])` with flush prompt — `001a8d4`
 
 - [x] Flush failure does NOT prevent compaction or session shutdown — `001a8d4`
-- [x] After flush (manual verification — needs Pi restart), any saved memories are available in next session
+- [x] After flush (manual verification — needs GSD Pi restart), any saved memories are available in next session
 
 ---
 
@@ -117,13 +117,13 @@ _Done when: before compaction and session shutdown, agent gets one turn to save 
 
 _Done when: `/memory-insights` shows formatted output and the extension is polished for users._
 
-- [x] `/memory-insights` command registered and appears in Pi command list — `543e262`
+- [x] `/memory-insights` command registered and appears in GSD Pi command list — `543e262`
 - [x] Shows MEMORY section with numbered entries (truncated to 100 chars) — `543e262`
 - [x] Shows USER PROFILE section with numbered entries — `543e262`
 
 - [x] Shows "(empty)" when no entries exist — `543e262`
 - [x] Formatted with box drawing characters (╔══╗, etc.) — `543e262`
-- [x] Notification displays (manual verification — needs Pi TUI) correctly in Pi's TUI
+- [x] Notification displays (manual verification — needs GSD Pi TUI) correctly in Pi's TUI
 
 ---
 
@@ -160,19 +160,19 @@ _Done when: all core paths have automated tests and the extension passes a manua
 ### Integration Tests
 
 
-- [x] Extension loads in Pi via `pi -e ./src/index.ts` — no errors — verified
+- [x] Extension loads in GSD Pi via `pi -e ./src/index.ts` — no errors — verified
 - [x] `memory` tool callable by LLM (manual verification — no API key) — manual verification required
-- [x] System prompt contains (manual verification — needs Pi runtime) memory block after `session_start` — manual verification required
-- [x] `/memory-insights` (manual verification — needs Pi runtime) command runs and shows output — manual verification required
-- [x] Survives Pi session (manual verification — needs Pi restart) restart — memory persists across `/new` — manual verification required
+- [x] System prompt contains (manual verification — needs GSD Pi runtime) memory block after `session_start` — manual verification required
+- [x] `/memory-insights` (manual verification — needs GSD Pi runtime) command runs and shows output — manual verification required
+- [x] Survives GSD Pi session (manual verification — needs GSD Pi restart) restart — memory persists across `/new` — manual verification required
 
 ### Manual Smoke Tests
 
 - [x] Full E2E (manual verification — needs full conversation): install → use 10+ turns → verify auto-review saves memory
 - [x] Full E2E (manual verification — needs full conversation): long conversation → trigger compaction → verify flush saves memory
 - [x] Full E2E (manual verification — needs full conversation): session 1 saves memory → quit → session 2 recalls it
-- [x] Security: try injecting (manual verification — needs Pi runtime) "ignore previous instructions" → verify blocked
-- [x] Security: try saving (manual verification — needs Pi runtime) `curl ${API_KEY}` → verify blocked
+- [x] Security: try injecting (manual verification — needs GSD Pi runtime) "ignore previous instructions" → verify blocked
+- [x] Security: try saving (manual verification — needs GSD Pi runtime) `curl ${API_KEY}` → verify blocked
 
 ---
 
@@ -181,8 +181,8 @@ _Done when: all core paths have automated tests and the extension passes a manua
 _Done when: extension is installable via `gsd install` and has user-facing docs._
 
 - [x] `README.md` — What it does, installation, usage, configuration — `ed22fa6`
-- [x] `README.md` — Example screenshots (manual verification — needs Pi TUI) of `/memory-insights` output — requires Pi TUI
--  [x ]  Ve r ify  `gsd install github:efrembaraldo/gsd-pi-hermes-memory` works end-to-end — requires Pi CLI
+- [x] `README.md` — Example screenshots (manual verification — needs GSD Pi TUI) of `/memory-insights` output — requires GSD Pi TUI
+-  [x ]  Ve r ify  `gsd install github:efrembaraldo/gsd-pi-hermes-memory` works end-to-end — requires GSD Pi CLI
 - [x] Tag v0.1.0 release on GitHub — `7983f09`
 
 ---
@@ -191,17 +191,17 @@ _Done when: extension is installable via `gsd install` and has user-facing docs.
 
 | Epic | Status | Notes |
 | --- | --- | --- |
-| 1 — Project Scaffold | Complete | TypeScript compiles clean, extension loads in Pi |
-| 2 — Core Memory | Complete (auto) / 2 pending (manual) | Tool registration + execute tested; LLM interaction needs Pi runtime |
+| 1 — Project Scaffold | Complete | TypeScript compiles clean, extension loads in GSD Pi |
+| 2 — Core Memory | Complete (auto) / 2 pending (manual) | Tool registration + execute tested; LLM interaction needs GSD Pi runtime |
 | 3 — Content Scanning | Complete | 25 tests, all threat patterns covered |
-| 4 — System Prompt | Complete (auto) / 1 pending (manual) | Frozen snapshot tested; cross-session needs Pi restart |
+| 4 — System Prompt | Complete (auto) / 1 pending (manual) | Frozen snapshot tested; cross-session needs GSD Pi restart |
 | 5 — Background Loop | Complete | 10 tests, all trigger conditions covered |
-| 6 — Session Flush | Complete (auto) / 1 pending (manual) | Flush logic tested; cross-session persistence needs Pi restart |
+| 6 — Session Flush | Complete (auto) / 1 pending (manual) | Flush logic tested; cross-session persistence needs GSD Pi restart |
 
-| 7 — Insights | Complete (auto) / 1 pending (manual) | Command output tested; TUI display needs Pi runtime |
+| 7 — Insights | Complete (auto) / 1 pending (manual) | Command output tested; TUI display needs GSD Pi runtime |
 | 8 — Configuration | Complete | Config file + tests + README docs |
-| 9 — Testing | Complete (auto) / 9 pending (manual) | 119 automated tests; E2E smoke tests need Pi runtime |
-| 10 — Documentation | Complete (auto) / 2 pending (manual) | README + LICENSE + tag v0.1.0; screenshots need Pi TUI |
+| 9 — Testing | Complete (auto) / 9 pending (manual) | 119 automated tests; E2E smoke tests need GSD Pi runtime |
+| 10 — Documentation | Complete (auto) / 2 pending (manual) | README + LICENSE + tag v0.1.0; screenshots need GSD Pi TUI |
 
 **Automated test coverage: 119 tests, 0 failures, 0 type e
 rrors.**

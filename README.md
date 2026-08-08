@@ -10,7 +10,7 @@
 
 </div>
 
-Your Pi agent normally forgets everything when you close a session. **This extension fixes that.**
+Your GSD Pi agent normally forgets everything when you close a session. **This extension fixes that.**
 
 - 🔍 **Search every conversation** — "what did we discuss about auth?" finds it instantly
 - 🧠 **Persistent memory** — facts, preferences, corrections survive across sessions
@@ -44,11 +44,11 @@ If you’re upgrading from older versions, startup now auto-migrates extension d
 - legacy extension root: `~/.gsd/agent/memory` → `~/.gsd/agent/gsd-pi-hermes-memory`
 - legacy flat skills: `~/.gsd/agent/gsd-pi-hermes-memory/skills/*.md` → `~/.gsd/agent/gsd-pi-hermes-memory/skills/<slug>/SKILL.md`
 
-This resolves Pi skill index conflicts like:
+This resolves GSD Pi skill index conflicts like:
 
 - `name "..." does not match parent directory "skills"`
 
-No manual action is needed. Launch Pi once after upgrade to let migration/normalization run.
+No manual action is needed. Launch GSD Pi once after upgrade to let migration/normalization run.
 
 ## Features
 
@@ -82,7 +82,7 @@ The extension manages three types of knowledge:
 | --- | --- | --- | --- |
 | **Memory** (MEMORY.md) | Facts — env details, project conventions, tool quirks | 5,000 chars max | Searchable by default |
 | **User Profile** (USER.md) | Who you are — name, preferences, communication style | 5,000 chars max | Searchable by default |
-| **Skills** (Pi-native `SKILL.md`) | Procedures — *how* to do something, reusable across sessions | Unlimited | Discoverable by Pi + manageable via the `skill_manage` tool |
+| **Skills** (Pi-native `SKILL.md`) | Procedures — *how* to do something, reusable across sessions | Unlimited | Discoverable by GSD Pi + manageable via the `skill_manage` tool |
 
 ![Memory + Skills Architecture](docs/images/memory-architecture.svg)
 
@@ -124,7 +124,7 @@ pi -e /path/to/gsd-pi-hermes-memory/src/index.ts
 
 ### Homebrew / Node ABI mismatches
 
-`better-sqlite3` is a native addon. If Pi is installed via Homebrew and the extension was compiled for a different Node ABI, session search may warn:
+`better-sqlite3` is a native addon. If GSD Pi is installed via Homebrew and the extension was compiled for a different Node ABI, session search may warn:
 
 ```text
 was compiled against a different Node.js version using NODE_MODULE_VERSION ...
@@ -137,7 +137,7 @@ cd ~/.gsd/agent/npm/node_modules/better-sqlite3
 npm rebuild better-sqlite3
 ```
 
-Or install Pi with npm so the host runtime and extension install share one Node toolchain.
+Or install GSD Pi with npm so the host runtime and extension install share one Node toolchain.
 
 ## Two-Tier Memory Architecture
 
@@ -312,7 +312,7 @@ On discovery, the extension returns the active project's skills directory as a s
 
 - `~/.gsd/agent/projects-memory/<project>/skills/`
 
-This lets Pi discover project skills as native skills without copying them into the global skills folder.
+This lets GSD Pi discover project skills as native skills without copying them into the global skills folder.
 
 ### Memory vs User Profile vs Skills
 
@@ -326,7 +326,7 @@ This lets Pi discover project skills as native skills without copying them into 
 
 ### Session History Search
 
-By default, the extension indexes your Pi session history into a SQLite database with FTS5 full-text search. The agent can search across all past conversations using the `session_search` tool:
+By default, the extension indexes your GSD Pi session history into a SQLite database with FTS5 full-text search. The agent can search across all past conversations using the `session_search` tool:
 
 | Tool | What it does |
 |---|---|---|
@@ -427,7 +427,7 @@ This means skills build up naturally over time without you having to ask.
 | `/memory-consolidate` | Manually trigger memory consolidation to free space |
 | `/memory-interview` | Answer a few questions to pre-fill your user profile |
 | `/memory-switch-project` | List all project memories and their entry counts |
-| `/memory-index-sessions` | Import past Pi sessions into the search database |
+| `/memory-index-sessions` | Import past GSD Pi sessions into the search database |
 | `/memory-sync-markdown` | Backfill Markdown memories into the SQLite search store |
 | `/memory-preview-context` | Preview the memory policy or legacy memory blocks appended to the system prompt |
 | `/learn-memory-tool` | Skill that teaches users how to use the memory system |
@@ -534,7 +534,7 @@ Create `~/.gsd/agent/hermes-memory-config.json`:
 | `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.gsd/agent/sessions/` |
 | `llmModelOverride` | unset | Optional model override for background review (direct and subprocess), correction save, session flush, and consolidation |
 | `llmThinkingOverride` | unset | Optional thinking override for those LLM calls; valid values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. If `llmModelOverride` is set and this is omitted, review/child calls default to `off` |
-| `childExtensionPaths` | unset | Trusted provider/auth adapter entry paths explicitly allowed in isolated child Pi processes; sibling packages matching the `*-oauth-adapter`/`*-auth-adapter` naming convention (including scoped packages, via their `package.json` `pi.extensions` manifest) are detected automatically — this setting is only needed for adapters that don't match that convention. In-process direct transport (the default for review/flush/correction/consolidation) doesn't need this at all, since it reads whatever provider auth is already registered |
+| `childExtensionPaths` | unset | Trusted provider/auth adapter entry paths explicitly allowed in isolated child GSD Pi processes; sibling packages matching the `*-oauth-adapter`/`*-auth-adapter` naming convention (including scoped packages, via their `package.json` `pi.extensions` manifest) are detected automatically — this setting is only needed for adapters that don't match that convention. In-process direct transport (the default for review/flush/correction/consolidation) doesn't need this at all, since it reads whatever provider auth is already registered |
 | `nudgeInterval` | `10` | Turns between auto-reviews |
 | `nudgeToolCalls` | `15` | Tool calls between auto-reviews (OR with turns) |
 | `reviewRecentMessages` | `0` | Recent messages included in background review (`0` = all) |
@@ -551,7 +551,7 @@ Create `~/.gsd/agent/hermes-memory-config.json`:
 | `failureInjectionEnabled` | `true` | Legacy mode only: enable/disable injecting recent failure memories into the system prompt |
 | `failureInjectionMaxAgeDays` | `7` | Legacy mode only: maximum age in days for injected failure memories |
 | `failureInjectionMaxEntries` | `5` | Legacy mode only: maximum number of failure memories to inject |
-| `flushOnCompact` | `true` | Flush memories before Pi compacts context |
+| `flushOnCompact` | `true` | Flush memories before GSD Pi compacts context |
 | `flushOnShutdown` | `true` | Flush memories when session ends |
 | `flushMinTurns` | `6` | Minimum turns before flush triggers |
 | `flushRecentMessages` | `0` | Recent messages included in session flush (`0` = all) |
@@ -595,9 +595,9 @@ The `sessions.db` SQLite database stores session history and extended memory ent
 - **Session search requires indexing**: Past sessions must be indexed before they're searchable. Run `/memory-index-sessions` to bulk-import, or let the extension auto-index on session shutdown.
 - **Older Markdown memories may need backfill**: If you saved memories before the SQLite mirror existed or search looks stale, run `/memory-sync-markdown`.
 - **Core memory limits still apply**: SQLite search mirroring does not bypass the 5,000-char core Markdown limit. If consolidation cannot free space, the write fails instead of becoming SQLite-only memory invisibly.
-- **System prompts are invisible**: Pi's TUI does not display the system prompt. Use `/memory-preview-context` to inspect whether policy-only or legacy memory injection is active.
-- **Project skill visibility depends on Pi discovery cycles**: project skills are exposed through `resources_discover` using the active project's `skills/` path. If a moved or newly created project skill doesn't show up immediately in a running session, trigger a reload/new session so Pi refreshes discovered resources.
-- **Project move requires active project context**: in `/memory-skills`, the `p` hotkey is disabled when Pi is not currently in a detected project directory.
+- **System prompts are invisible**: GSD Pi's TUI does not display the system prompt. Use `/memory-preview-context` to inspect whether policy-only or legacy memory injection is active.
+- **Project skill visibility depends on GSD Pi discovery cycles**: project skills are exposed through `resources_discover` using the active project's `skills/` path. If a moved or newly created project skill doesn't show up immediately in a running session, trigger a reload/new session so GSD Pi refreshes discovered resources.
+- **Project move requires active project context**: in `/memory-skills`, the `p` hotkey is disabled when GSD Pi is not currently in a detected project directory.
 - **Skills still need curation**: Skills are saved by the agent through the `skill_manage` tool when it decides a reusable procedure is worth keeping. They may still need review. You can move, delete, or edit them directly in `~/.gsd/agent/gsd-pi-hermes-memory/skills/` or the active project's `skills/` folder.
 
 ## Architecture

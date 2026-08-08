@@ -22,7 +22,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SCOPE = "@earendil-works";
+const SCOPE = "@gsd";
 // pi-tui is a direct dependency rather than a peer, but its types cross the
 // boundary (ExtensionCommandContext.ui.custom takes a pi-tui TUI). Leaving it
 // at a different version yields a duplicate-private-property error instead of

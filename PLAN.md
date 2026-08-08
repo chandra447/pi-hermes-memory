@@ -1,14 +1,14 @@
 # GSD Pi Hermes Memory Extension — Complete Implementation Plan
 
 > **Status**: Ready for implementation  
-> **Approach**: Installable Pi extension using `gsd install`  
+> **Approach**: Installable GSD Pi extension using `gsd install`  
 > **Model for subagents**: `glm-5-turbo`
 
 ---
 
 ## What We're Building
 
-An installable Pi extension that brings **Hermes-style persistent memory and a learning loop** to any Pi user. After `gsd install`, the user gets:
+An installable GSD Pi extension that brings **Hermes-style persistent memory and a learning loop** to any GSD Pi user. After `gsd install`, the user gets:
 
 1. **Persistent Memory** — Two curated markdown files (`MEMORY.md`, `USER.md`) surviving across sessions, injected into the system prompt as a frozen snapshot at session start. The LLM can add/replace/remove entries via a `memory` tool.
 
@@ -39,7 +39,7 @@ When implementing in a new session, read these files **first** in this order. Ev
 | --- | --- |
 | `hermes-agent/agent/insights.py` | `InsightsEngine` class — how Hermes generates usage reports from session history. Our `/memory-insights` is a simpler version. |
 | `hermes-agent/hermes_state.py` | SQLite session store — **we don't need this** (Pi has `SessionManager`). Skim to understand session schema only. |
-| `hermes-agent/hermes_cli/plugins.py` | Plugin system — `PluginContext.register_tool()`, `register_hook()`, `register_command()`. Interesting pattern but Pi has its own `ExtensionAPI`. |
+| `hermes-agent/hermes_cli/plugins.py` | Plugin system — `PluginContext.register_tool()`, `register_hook()`, `register_command()`. Interesting pattern but GSD Pi has its own `ExtensionAPI`. |
 
 ### Key line ranges for quick access
 
@@ -152,9 +152,9 @@ Before any write, content is scanned for:
 
 ---
 
-## Architecture: Hermes → Pi Extension Mapping
+## Architecture: Hermes → GSD Pi Extension Mapping
 
-| Hermes Concept | Pi Extension Equivalent | Implementation Detail |
+| Hermes Concept | GSD Pi Extension Equivalent | Implementation Detail |
 | --- | --- | --- |
 | `MemoryStore` class | `MemoryStore` class in `memory-store.ts` | Same §-delimited entries, char limits, frozen snapshot |
 | `MEMORY.md` / `USER.md` in `~/.hermes/memories/` | Same files in `~/.gsd/agent/memory/` | Resolved via `ctx.cwd` or hardcoded `~/.gsd/agent/memory/` |
@@ -165,7 +165,7 @@ Before any write, content is scanned for:
 | Content scanning regex patterns | Same patterns ported to TypeScript in `content-scanner.ts` | Identical security posture |
 | `fcntl`/`msvcrt` file locking → atomic rename | `fs.mkdtemp` + `fs.writeFile` + `fs.rename` | Node.js atomic write pattern |
 | `InsightsEngine` + SQLite | `/memory-insights` command reading from MemoryStore | Simpler — no SQLite needed |
-| `MemoryProvider` abstract class | Not in v1 — single built-in provider | Future: external backends as separate Pi package |
+| `MemoryProvider` abstract class | Not in v1 — single built-in provider | Future: external backends as separate GSD Pi package |
 | Entry delimiter `§` (section sign) | Same `"\n§\n"` delimiter | Preserves compatibility with any migrated files |
 
 ---
@@ -874,7 +874,7 @@ import {
 } from "./constants.js";
 
 export default function (pi: ExtensionAPI) {
-  // Configuration (future: read from Pi settings)
+  // Configuration (future: read from GSD Pi settings)
   const config: MemoryConfig = {
     memoryCharLimit: DEFAULT_MEMORY_CHAR_LIMIT,
     userCharLimit: DEFAULT_USER_CHAR_LIMIT,
@@ -922,7 +922,7 @@ export default function (pi: ExtensionAPI) {
 {
   "name": "gsd-pi-hermes-memory",
   "version": "1.0.0",
-  "description": "Hermes-style persistent memory and learning loop for Pi coding agent",
+  "description": "Hermes-style persistent memory and learning loop for GSD Pi coding agent",
   "main": "src/index.ts",
   "pi": {
     "extensions": ["./src/index.ts"]
@@ -969,7 +969,7 @@ Files: `background-review.ts`, `session-flush.ts`
 Files: `insights.ts`, `README.md`
 
 - `/memory-insights` command
-- Configuration support (char limits, nudge interval) via Pi settings
+- Configuration support (char limits, nudge interval) via GSD Pi settings
 - README with installation and usage
 - npm publish for `gsd install`
 
@@ -981,7 +981,7 @@ Files: `insights.ts`, `README.md`
 
 1. **`pi.exec()` for background review** — Stays within Pi's intended extension API. Spawns `pi -p --no-session` for isolated one-shot reviews that have the same memory tool available.
 
-2. **No SQLite** — Pi has its own `SessionManager`, so we read conversation history directly from `ctx.sessionManager.getEntries()`. No need for a separate database.
+2. **No SQLite** — GSD Pi has its own `SessionManager`, so we read conversation history directly from `ctx.sessionManager.getEntries()`. No need for a separate database.
 
 3. **Frozen snapshot pattern** — Memory is injected into the system prompt once at session start and never updated mid-session. This preserves Pi's prompt caching behavior.
 
@@ -989,7 +989,7 @@ Files: `insights.ts`, `README.md`
 
 5. **§ delimiter** — Preserved from Hermes for consistency and easy migration.
 
-6. **No external providers in v1** — Single built-in markdown store. External backends (Honcho, Mem0, etc.) can be added as separate Pi packages later.
+6. **No external providers in v1** — Single built-in markdown store. External backends (Honcho, Mem0, etc.) can be added as separate GSD Pi packages later.
 
 7. **Best-effort background operations** — Review and flush failures never block the main agent. All background work is wrapped in try/catch.
 

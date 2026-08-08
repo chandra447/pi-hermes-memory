@@ -13,17 +13,18 @@
     "resolveJsonModule": true,
     "declaration": true,
     "sourceMap": true,
+    "baseUrl": ".",
     "paths": {
-      "@gsd/pi-coding-agent": ["./node_modules/@earendil-works/pi-coding-agent"],
-      "@gsd/pi-coding-agent/*": ["./node_modules/@earendil-works/pi-coding-agent/*"],
-      "@gsd/pi-ai": ["./node_modules/@earendil-works/pi-ai"],
-      "@gsd/pi-ai/*": ["./node_modules/@earendil-works/pi-ai/*"],
-      "@gsd/pi-tui": ["./node_modules/@earendil-works/pi-tui"],
-      "@gsd/pi-tui/*": ["./node_modules/@earendil-works/pi-tui/*"],
-      "@gsd/pi-agent-core": ["./node_modules/@earendil-works/pi-agent-core"],
-      "@gsd/pi-agent-core/*": ["./node_modules/@earendil-works/pi-agent-core/*"]
+      "@gsd/pi-coding-agent": ["./vendor/@gsd/pi-coding-agent"],
+      "@gsd/pi-coding-agent/*": ["./vendor/@gsd/pi-coding-agent/dist/*"],
+      "@gsd/pi-ai": ["./vendor/@gsd/pi-ai"],
+      "@gsd/pi-ai/*": ["./vendor/@gsd/pi-ai/dist/*"],
+      "@gsd/pi-tui": ["./vendor/@gsd/pi-tui"],
+      "@gsd/pi-tui/*": ["./vendor/@gsd/pi-tui/dist/*"],
+      "@gsd/pi-agent-core": ["./vendor/@gsd/pi-agent-core"],
+      "@gsd/pi-agent-core/*": ["./vendor/@gsd/pi-agent-core/dist/*"]
     }
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist", "vendor"]
 }

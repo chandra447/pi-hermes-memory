@@ -148,7 +148,7 @@ This eliminates false positives like "no worries, I'll handle it" and "actually,
 **`tests/handlers/background-review.test.ts`** — Add tool-call trigger tests
 
 ### Key Decision: Count from Branch, Not Events
-Rather than depending on unknown Pi event names like `tool_end`, count tool-use entries from `ctx.sessionManager.getBranch()` at `turn_end` time. More robust and testable.
+Rather than depending on unknown GSD Pi event names like `tool_end`, count tool-use entries from `ctx.sessionManager.getBranch()` at `turn_end` time. More robust and testable.
 
 ---
 

@@ -46,7 +46,7 @@ Future phase. Depends on a working runtime injection hook and router.
 
 Future phase. Do not start until the policy-only default proves insufficient.
 
-- [ ] Identify Pi hook/API for per-turn context injection or closest supported equivalent
+- [ ] Identify GSD Pi hook/API for per-turn context injection or closest supported equivalent
 - [ ] `src/index.ts` — wire router/search/ranker/packer into the selected hook
 - [ ] No-memory path — inject nothing when router skips retrieval
 - [ ] Retrieved-memory path — inject small block when router finds eligible memories

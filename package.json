@@ -17,10 +17,13 @@
     ]
   },
   "scripts": {
+    "precheck": "node scripts/setup-types.mjs",
     "check": "node scripts/ensure-dev.mjs check && tsc --noEmit",
     "check:min-sdk": "node scripts/ensure-dev.mjs check && node scripts/check-min-sdk.mjs",
+    "pretest": "node scripts/setup-types.mjs",
     "test": "node scripts/ensure-dev.mjs test && tests/run-all.sh",
-    "postinstall": "node scripts/setup-gsd-aliases.mjs"
+    "setup:types": "node scripts/setup-types.mjs",
+    "prepublishOnly": "node scripts/setup-types.mjs && npm run check && npm test"
   },
   "keywords": [
     "pi-package",
@@ -48,12 +51,18 @@
     "url": "https://github.com/efrembaraldo/gsd-pi-hermes-memory"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.80.1",
-    "@earendil-works/pi-coding-agent": ">=0.80.1"
+    "@gsd/pi-coding-agent": "*",
+    "@gsd/pi-ai": "*"
+  },
+  "peerDependenciesMeta": {
+    "@gsd/pi-coding-agent": {
+      "optional": true
+    },
+    "@gsd/pi-ai": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.80.2",
-    "@earendil-works/pi-coding-agent": "^0.80.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.10.0",
     "tsx": "^4.21.0",
@@ -61,7 +70,38 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "^0.80.2",
     "better-sqlite3": "^12.9.0"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/sdk": "^0.91.1",
+    "@anthropic-ai/vertex-sdk": "^0.14.4",
+    "@aws-sdk/client-bedrock-runtime": "^3.1048.0",
+    "@smithy/node-http-handler": "^4.7.3",
+    "@google/genai": "^1.52.0",
+    "@mistralai/mistralai": "^2.2.1",
+    "http-proxy-agent": "^7.0.2",
+    "https-proxy-agent": "^7.0.6",
+    "openai": "^6.26.0",
+    "partial-json": "^0.1.7",
+    "@sinclair/typebox": "^0.34.0",
+    "get-east-asian-width": "^1.6.0",
+    "marked": "^15.0.0",
+    "@mariozechner/jiti": "^2.6.0",
+    "@silvia-odwyer/photon-node": "^0.3.0",
+    "chalk": "^5.6.0",
+    "cross-spawn": "^7.0.6",
+    "diff": "^8.0.0",
+    "extract-zip": "^2.0.1",
+    "glob": "^11.0.0",
+    "highlight.js": "^11.10.0",
+    "hosted-git-info": "^8.0.0",
+    "ignore": "^7.0.0",
+    "minimatch": "^10.0.0",
+    "proper-lockfile": "^4.1.0",
+    "sql.js": "^1.14.0",
+    "strip-ansi": "^7.1.0",
+    "undici": "^7.0.0",
+    "yaml": "^2.6.0",
+    "@opengsd/contracts": "^1.12.0"
   }
 }

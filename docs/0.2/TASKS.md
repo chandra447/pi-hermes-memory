@@ -70,7 +70,7 @@ _Done when: background review triggers based on EITHER turn count OR tool call c
 _Done when: the agent can create/update/delete skill documents, skills appear in a progressive index in the system prompt, and skills are auto-created after complex tasks._
 
 ### Research & Design
-- [x] Read Pi's skill discovery API — Pi uses `~/.pi/agent/skills/` with SKILL.md frontmatter format (`c6317dd`)
+- [x] Read Pi's skill discovery API — GSD Pi uses `~/.pi/agent/skills/` with SKILL.md frontmatter format (`c6317dd`)
 - [x] Decide: write to `~/.pi/agent/memory/skills/` — isolated from user skills (`c6317dd`)
 - [x] Read Hermes `skill_manage` tool source for reference patterns (`c6317dd`)
 

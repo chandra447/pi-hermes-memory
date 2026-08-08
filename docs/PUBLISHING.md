@@ -6,7 +6,7 @@ The [package gallery](https://pi.dev/packages) automatically displays any npm pa
 
 ## What We Need
 
-### 1. Update `package.json` with Pi manifest
+### 1. Update `package.json` with GSD Pi manifest
 
 Current state:
 ```json
@@ -22,7 +22,7 @@ Target state:
 {
   "name": "gsd-pi-hermes-memory",
   "version": "0.1.0",
-  "description": "Persistent memory and self-directed learning loop for Pi — ported from the Hermes agent harness.",
+  "description": "Persistent memory and self-directed learning loop for GSD Pi — ported from the Hermes agent harness.",
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -52,9 +52,9 @@ Target state:
 
 Key changes:
 - `"keywords": ["pi-package", ...]` — **required** for pi.dev listing
-- `"pi": { "extensions": ["./src/index.ts"] }` — tells Pi where the entry point is
+- `"pi": { "extensions": ["./src/index.ts"] }` — tells GSD Pi where the entry point is
 - `"files": ["src", "README.md", "LICENSE"]` — only publish what's needed
-- `"peerDependencies"` — Pi provides the API, no runtime deps needed
+- `"peerDependencies"` — GSD Pi provides the API, no runtime deps needed
 - `"pi": { "image": "..." }` — optional preview image for the gallery
 
 ### 2. npm account setup

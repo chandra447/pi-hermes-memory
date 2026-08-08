@@ -1,6 +1,6 @@
 # GSD Pi Hermes Memory — Roadmap
 
-> From markdown files to a pluggable memory substrate for any Pi agent harness.
+> From markdown files to a pluggable memory substrate for any GSD Pi agent harness.
 
 ## Where We Are (v0.1.0)
 
@@ -128,7 +128,7 @@ graph LR
 
 Hermes creates skills after complex tasks (5+ tool calls). Skills are SKILL.md files in `~/.hermes/skills/` with progressive disclosure. We adapt this for Pi's existing skill infrastructure at `~/.gsd/agent/skills/`.
 
-**Key insight**: Pi already has a skill system. Our skill tool should write SKILL.md files that are compatible with Pi's skill discovery. This means our skills are immediately usable as Pi slash commands — no separate ecosystem needed.
+**Key insight**: GSD Pi already has a skill system. Our skill tool should write SKILL.md files that are compatible with Pi's skill discovery. This means our skills are immediately usable as GSD Pi slash commands — no separate ecosystem needed.
 
 - [ ] `skill` tool — register via `pi.registerTool()` with actions: `create`, `patch`, `edit`, `delete`
 - [x] Skill storage split by scope: global skills in `~/.gsd/agent/skills/<slug>/SKILL.md`, project skills in `~/.gsd/agent/projects-memory/<project>/skills/<slug>/SKILL.md` (discovered via `resources_discover`)
@@ -284,7 +284,7 @@ Agent has access to tools:
 
 - [ ] `better-sqlite3` dependency — SQLite with FTS5
 - [ ] `src/store/db.ts` — DatabaseManager (lazy init, WAL mode, auto-create tables)
-- [ ] `src/store/session-parser.ts` — JSONL parser for Pi session files
+- [ ] `src/store/session-parser.ts` — JSONL parser for GSD Pi session files
 - [ ] `src/store/session-indexer.ts` — index sessions + messages into SQLite
 - [ ] `src/store/session-search.ts` — FTS5 search across session history
 - [ ] `src/store/sqlite-memory-store.ts` — extended memory store (unlimited, searchable)
@@ -392,7 +392,7 @@ Future phase
 
 ## v1.0.0 — Production Memory Substrate
 
-**Goal**: The memory layer that any Pi agent harness can build on top of.
+**Goal**: The memory layer that any GSD Pi agent harness can build on top of.
 
 ### Deliverables
 
