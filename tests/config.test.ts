@@ -326,7 +326,7 @@ describe("loadConfig", () => {
   it("accepts valid llmThinkingOverride values and ignores invalid ones", () => {
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
 
-    for (const level of ["off", "minimal", "low", "medium", "high", "xhigh"] as const) {
+    for (const level of ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const) {
       fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ llmThinkingOverride: level }));
       const config = loadConfig(TEST_CONFIG_PATH);
       assert.strictEqual(config.llmThinkingOverride, level);
