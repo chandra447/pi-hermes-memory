@@ -31,6 +31,7 @@ describe("loadConfig", () => {
     assert.strictEqual(config.memoryOverflowStrategy, "auto-consolidate");
     assert.strictEqual(config.autoConsolidate, true);
     assert.strictEqual(config.consolidationTimeoutMs, 180000);
+    assert.strictEqual(config.autoConsolidationWarnOnFailure, true);
     assert.strictEqual(config.failureInjectionEnabled, true);
     assert.strictEqual(config.failureInjectionMaxAgeDays, 7);
     assert.strictEqual(config.failureInjectionMaxEntries, 5);
@@ -82,6 +83,7 @@ describe("loadConfig", () => {
       projectsMemoryDir: "my-memory",
       llmModelOverride: " openrouter/deepseek/deepseek-v4-flash ",
       llmThinkingOverride: "minimal",
+      autoConsolidationWarnOnFailure: false,
     }));
     const config = loadConfig(TEST_CONFIG_PATH);
     assert.strictEqual(config.memoryMode, "legacy-inject");
@@ -92,6 +94,7 @@ describe("loadConfig", () => {
     assert.strictEqual(config.reviewRecentMessages, 25);
     assert.strictEqual(config.flushRecentMessages, 40);
     assert.strictEqual(config.failureInjectionEnabled, false);
+    assert.strictEqual(config.autoConsolidationWarnOnFailure, false);
     assert.strictEqual(config.failureInjectionMaxAgeDays, 30);
     assert.strictEqual(config.failureInjectionMaxEntries, 2);
     assert.strictEqual(config.projectsMemoryDir, "my-memory");
