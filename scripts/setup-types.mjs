@@ -59,9 +59,10 @@ const PACKAGES = [
 ];
 
 function allVendorReady() {
-	return PACKAGES.every((name) =>
-		existsSync(join(VENDOR, name, "dist", "index.js"))
-		&& existsSync(join(VENDOR, name, "package.json")),
+	return PACKAGES.every(
+		(name) =>
+			existsSync(join(VENDOR, name, "dist", "index.js")) &&
+			existsSync(join(VENDOR, name, "package.json")),
 	);
 }
 
@@ -70,8 +71,10 @@ function allSymlinksReady() {
 		const linkPath = join(NODE_MODULES_GSD, name);
 		if (!existsSync(linkPath)) return false;
 		try {
-			return lstatSync(linkPath).isSymbolicLink()
-				&& readlinkSync(linkPath) === join("..", "..", "vendor", "@gsd", name);
+			return (
+				lstatSync(linkPath).isSymbolicLink() &&
+				readlinkSync(linkPath) === join("..", "..", "vendor", "@gsd", name)
+			);
 		} catch {
 			return false;
 		}
@@ -79,7 +82,9 @@ function allSymlinksReady() {
 }
 
 if (allVendorReady() && allSymlinksReady()) {
-	console.log("[setup-types] vendor/@gsd/* + node_modules/@gsd/* already ready, skipping");
+	console.log(
+		"[setup-types] vendor/@gsd/* + node_modules/@gsd/* already ready, skipping",
+	);
 	process.exit(0);
 }
 
@@ -92,7 +97,11 @@ const candidates = [
 let sourceRoot = null;
 for (const candidate of candidates) {
 	if (!candidate) continue;
-	if (existsSync(join(candidate, "packages", "pi-coding-agent", "dist", "index.js"))) {
+	if (
+		existsSync(
+			join(candidate, "packages", "pi-coding-agent", "dist", "index.js"),
+		)
+	) {
 		sourceRoot = candidate;
 		break;
 	}
@@ -145,7 +154,10 @@ for (const name of PACKAGES) {
 		continue;
 	}
 	mkdirSync(targetPkg, { recursive: true });
-	copyFileSync(join(sourcePkg, "package.json"), join(targetPkg, "package.json"));
+	copyFileSync(
+		join(sourcePkg, "package.json"),
+		join(targetPkg, "package.json"),
+	);
 	copyTree(sourceDist, join(targetPkg, "dist"));
 	copied += 1;
 }
@@ -168,7 +180,9 @@ if (existsSync(piAiPkgPath)) {
 			writeFileSync(piAiPkgPath, JSON.stringify(piAiPkg, null, "\t") + "\n");
 		}
 	} catch (err) {
-		console.warn(`[setup-types] could not patch ${piAiPkgPath}: ${err.message}`);
+		console.warn(
+			`[setup-types] could not patch ${piAiPkgPath}: ${err.message}`,
+		);
 	}
 }
 
@@ -187,12 +201,16 @@ if (existsSync(NODE_MODULES)) {
 		if (existsSync(join(VENDOR, name))) {
 			try {
 				if (existsSync(linkPath)) {
-					try { unlinkSync(linkPath); } catch {}
+					try {
+						unlinkSync(linkPath);
+					} catch {}
 				}
 				symlinkSync(target, linkPath, "dir");
 				linked += 1;
 			} catch (err) {
-				console.warn(`[setup-types] failed to link ${linkPath}: ${err.message}`);
+				console.warn(
+					`[setup-types] failed to link ${linkPath}: ${err.message}`,
+				);
 			}
 		}
 	}

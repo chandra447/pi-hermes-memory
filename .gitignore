@@ -28,3 +28,77 @@ docs/0.4/RELEASE-POST.md
 docs/0.4/linkedin_post.md
 .codex
 .serena
+
+# >>> gsd-project-init >>>
+.envrc
+gsd
+.gsd-id
+
+# The .gsd symlink points at an absolute path — machine-specific, never commit.
+.gsd
+# Runtime/ephemeral state inside .gsd-state/projects/<hash>/
+.gsd-state/
+#.gsd-state/projects/*/activity/
+#.gsd-state/projects/*/agent/
+#.gsd-state/projects/*/audit/
+#.gsd-state/projects/*/audit/events.jsonl
+#.gsd-state/projects/*/auto.lock
+#.gsd-state/projects/*/completed-units*.json
+#.gsd-state/projects/*/doctor-history.jsonl
+#.gsd-state/projects/*/exec/
+#.gsd-state/projects/*/forensic/
+#.gsd-state/projects/*/graphs/
+#.gsd-state/projects/*/gsd.db
+#.gsd-state/projects/*/gsd.db-*
+#.gsd-state/projects/*/hook-state.json
+#.gsd-state/projects/*/journal/
+#.gsd-state/projects/*/metrics.json
+#.gsd-state/projects/*/milestones/**/continue.md
+#.gsd-state/projects/*/milestones/**/*-CONTINUE.md
+#.gsd-state/projects/*/notifications.jsonl
+#.gsd-state/projects/*/parallel/
+#.gsd-state/projects/*/quarantine/
+#.gsd-state/projects/*/reports/
+#.gsd-state/projects/*/runtime/
+#.gsd-state/projects/*/sessions/
+#.gsd-state/projects/*/state-manifest.json
+#.gsd-state/projects/*/STATE.md
+#.gsd-state/projects/*/uat/
+#.gsd-state/projects/*/worktrees/
+# <<< gsd-project-init <<<
+.gsd-sessions/
+
+# Locally-copied type declarations for @gsd/pi-* workspace packages.
+# Populated by scripts/setup-types.mjs from a built gsd-pi checkout.
+vendor/
+
+# ── GSD baseline (auto-generated) ──
+.gsd-worktrees/
+.gsd-backups/
+.mcp.json
+.bg-shell/
+nul
+nul.*
+con
+con.*
+prn
+prn.*
+aux
+aux.*
+com[1-9]
+com[1-9].*
+lpt[1-9]
+lpt[1-9].*
+*~
+*.code-workspace
+.next/
+build/
+__pycache__/
+*.pyc
+.venv/
+venv/
+target/
+*.log
+coverage/
+.cache/
+tmp/
