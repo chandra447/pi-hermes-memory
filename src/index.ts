@@ -52,6 +52,7 @@ import { registerStandingPinCommand } from "./handlers/standing-pin.js";
 import { StandingInstructions } from "./store/standing-instructions.js";
 import { STANDING_FILE } from "./constants.js";
 import { loadConfig } from "./config.js";
+import { shouldWarnAutoConsolidationFailure } from "./auto-consolidation-warning.js";
 import { detectProject, detectProjectSkills } from "./project.js";
 import { buildPromptContext } from "./prompt-context.js";
 import { migrateLegacyProjectMemoryDirs } from "./project-memory-migration.js";
@@ -245,8 +246,8 @@ export default function (pi: ExtensionAPI) {
   setupSessionFlush(pi, store, projectStoreRef, config, dbManager, projectNameRef);
 
   // ── 7. Setup auto-consolidation (inject consolidator into stores) ──
-  // A failed auto-consolidation is otherwise invisible outside the tool result,
-  // so log the reason for whoever is watching the session (#135).
+  // Keep the failure in the tool result regardless; session-console logging is
+  // separately configurable for users who already monitor tool results (#135).
   const runAutoConsolidation = async (
     target: "memory" | "user" | "failure",
     targetStore: MemoryStore,
@@ -264,7 +265,7 @@ export default function (pi: ExtensionAPI) {
     );
     if (result.deferred) {
       console.info(`⏳ Auto-consolidation for '${toolTarget}' deferred: ${result.error ?? "another session holds the consolidation lock"}`);
-    } else if (!result.consolidated) {
+    } else if (shouldWarnAutoConsolidationFailure(config.autoConsolidationWarnOnFailure, result.consolidated)) {
       console.warn(`⚠️ Auto-consolidation failed for '${toolTarget}': ${result.error ?? "no reason reported"}`);
     }
     return result;

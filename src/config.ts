@@ -59,6 +59,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   failureInjectionMaxAgeDays: DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
   failureInjectionMaxEntries: DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
   consolidationTimeoutMs: DEFAULT_CONSOLIDATION_TIMEOUT_MS,
+  autoConsolidationWarnOnFailure: true,
   nudgeToolCalls: DEFAULT_NUDGE_TOOL_CALLS,
   standingInstructionsEnabled: true,
   projectsMemoryDir: DEFAULT_PROJECTS_MEMORY_DIR,
@@ -124,6 +125,9 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
             + " Consolidation spawns a child agent turn and is routinely killed mid-run at lower values.",
           );
         }
+      }
+      if (typeof parsed.autoConsolidationWarnOnFailure === "boolean") {
+        config.autoConsolidationWarnOnFailure = parsed.autoConsolidationWarnOnFailure;
       }
       if (typeof parsed.failureInjectionEnabled === "boolean") config.failureInjectionEnabled = parsed.failureInjectionEnabled;
       if (typeof parsed.failureInjectionMaxAgeDays === "number") config.failureInjectionMaxAgeDays = parsed.failureInjectionMaxAgeDays;
