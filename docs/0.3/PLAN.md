@@ -50,7 +50,7 @@ waiting for the user's answer before moving to the next:
    (e.g., prefer action over planning, specific workflows, etc.)
 7. Is there anything you want me to always remember?
 
-After each answer, save it to the 'user' target using the memory tool.
+After each answer, save it to the 'user' target using memory_add. Use memory_replace when updating an existing answer.
 Be conversational — don't firehose all questions at once.
 If the user already has entries in USER.md, acknowledge them and offer to
 update or skip.
@@ -67,7 +67,7 @@ update or skip.
 ### Design Decisions
 
 - **Runs as a command, not auto-triggered**: Auto-trigger would interrupt the user's first session. A command gives them control.
-- **Uses existing memory tool**: No new write path — interview answers flow through `content-scanner.ts` for security.
+- **Uses existing memory write tools**: No new write path — interview answers flow through `content-scanner.ts` for security.
 - **Aware of existing entries**: If `USER.md` already has content, the agent acknowledges it and offers to update/skip rather than overwriting.
 - **Conversational, not form-like**: Agent asks one question at a time, adapts follow-ups based on answers. Feels natural, not like filling a web form.
 

@@ -38,7 +38,7 @@ describe('memory sqlite sync + markdown backfill', () => {
     let capturedTool: any;
     const mockPi = {
       registerTool: (def: any) => {
-        capturedTool = def;
+        if (!capturedTool || def.name === "memory_add") capturedTool = def;
       },
     } as unknown as ExtensionAPI;
 

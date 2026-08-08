@@ -215,14 +215,14 @@ updated: 2026-04-27
 ```typescript
 export const COMBINED_REVIEW_PROMPT = `Review the conversation above and consider two things:
 
-**Memory**: Has the user revealed things about themselves — their persona, desires, preferences, or personal details? Has the user expressed expectations about how you should behave, their work style, or ways they want you to operate? If so, save using the memory tool.
+**Memory**: Has the user revealed things about themselves — their persona, desires, preferences, or personal details? Has the user expressed expectations about how you should behave, their work style, or ways they want you to operate? If so, save using memory_add.
 
 **Skills**: Was a complex, non-trivial approach used to complete a task — one that required trial and error, multiple tool calls, or changing course? If so, save a reusable procedure using the skill tool with action 'create'. Include: when to use it, step-by-step procedure, pitfalls to avoid, and how to verify success.
 
 Only act if there's something genuinely worth saving. If nothing stands out, just say 'Nothing to save.' and stop.`;
 ```
 
-**Note on pi.exec() child tools**: The child `pi` process loads the same installed extension, so it has access to both the `memory` and `skill` tools. This is the same mechanism that makes the existing memory tool work in background review.
+**Note on pi.exec() child tools**: The child `pi` process loads the same installed extension, so it has access to the memory write tools and `skill_manage`. This is the same mechanism that makes the existing memory tools work in background review.
 
 **`src/index.ts`** — Wire SkillStore, registerSkillTool, setupSkillAutoTrigger, registerSkillsCommand; inject skill index into system prompt at `before_agent_start`. Pass `config.memoryDir + "/skills/"` directly to SkillStore constructor (no memoryDirPath getter needed).
 

@@ -147,7 +147,7 @@ When Hermes memory hits capacity, it automatically merges related entries and re
 
 - [ ] When `add()` would exceed char limit, trigger auto-consolidation instead of returning error
 - [ ] Consolidation via `pi.exec()` — spawn a one-shot process with a consolidation prompt
-- [ ] Consolidation prompt — "Memory is at capacity. Merge related entries, remove outdated ones, keep the most important facts. Use the memory tool to make changes."
+- [ ] Consolidation prompt — "Memory is at capacity. Merge related entries, remove outdated ones, keep the most important facts. Use memory_add, memory_replace, or memory_remove to make changes."
 - [ ] After consolidation, retry the original `add()`
 - [ ] Config: `autoConsolidate: boolean` (default: true)
 - [ ] `/memory-consolidate` command — manual consolidation trigger
