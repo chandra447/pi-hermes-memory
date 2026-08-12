@@ -274,10 +274,22 @@ export async function triggerConsolidation(
       consolidated: false,
       error: describeConsolidationFailure(result, timeoutMs),
     };
-  } catch (err) {
+} catch (err) {
+    const message = String(err);
+    if (message.includes("extension ctx is stale")) {
+      // Session replaced/reloaded while consolidation was running. The new
+      // session re-initializes the store and will consolidate on its own next
+      // write, so this is a skip, not a failure — report it as deferred so the
+      // caller asks for a retry instead of surfacing a stale-ctx error.
+      return {
+        consolidated: false,
+        deferred: true,
+        error: "session replaced or reloaded during consolidation — will consolidate on next write",
+      };
+    }
     return {
       consolidated: false,
-      error: `Consolidation failed: ${String(err).slice(0, 200)}`,
+      error: `Consolidation failed: ${message.slice(0, 200)}`,
     };
   } finally {
     if (lock) {

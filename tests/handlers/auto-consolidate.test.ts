@@ -359,7 +359,7 @@ describe("triggerConsolidation", () => {
     assert.match(result.error!, /60000ms/);
   });
 
-  it("returns { consolidated: false } when pi.exec throws", async () => {
+it("returns { consolidated: false } when pi.exec throws", async () => {
     const crashPi = {
       on: () => {},
       exec: async () => { throw new Error("network failure"); },
@@ -372,6 +372,22 @@ describe("triggerConsolidation", () => {
     assert.strictEqual(result.consolidated, false);
     assert.ok(result.error!.includes("Consolidation failed"), "should mention failure");
     assert.ok(result.error!.includes("network failure"), "should include original error");
+  });
+
+  it("defers instead of failing when pi.exec throws a stale extension ctx error", async () => {
+    const stalePi = {
+      on: () => {},
+      exec: async () => { throw new Error("This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession()"); },
+      registerTool: () => {},
+      registerCommand: () => {},
+    } as any;
+
+    const result = await triggerConsolidation(stalePi, mockStore, "memory");
+
+    assert.strictEqual(result.consolidated, false);
+    assert.strictEqual(result.deferred, true, "stale ctx should defer, not fail");
+    assert.ok(!result.error!.includes("Consolidation failed"), "should not report a failure");
+    assert.ok(result.error!.includes("session replaced or reloaded"), "should explain the skip");
   });
 
   it("includes user profile entries when target is 'user'", async () => {
