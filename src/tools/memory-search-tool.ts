@@ -6,6 +6,8 @@ import { searchMemories, getMemoryStats } from '../store/sqlite-memory-store.js'
 import type { MemoryCategory } from '../types.js';
 import { createSharedToolResultRenderer } from './shared-output-view.js';
 import { searchResultView } from './tool-result-views.js';
+import { qmdSearch } from '../qmd-client.js';
+import type { MemoryConfig } from '../types.js';
 
 interface SearchResult {
   success: boolean;
@@ -14,7 +16,11 @@ interface SearchResult {
   output?: string;
 }
 
-export function registerMemorySearchTool(pi: ExtensionAPI, dbManager: DatabaseManager): void {
+export function registerMemorySearchTool(
+  pi: ExtensionAPI,
+  dbManager: DatabaseManager,
+  config?: MemoryConfig,
+): void {
   pi.registerTool({
     name: 'memory_search',
     label: 'Memory Search',
@@ -57,6 +63,25 @@ Returns matching memory entries with project context and dates.`,
       if (stats.total === 0) {
         const result: SearchResult = { success: false, message: 'No memories in extended store yet. Use memory_add to store memories.' };
         return { content: [{ type: 'text' as const, text: result.message! }], details: result };
+      }
+
+      // Optional qmd semantic search: try it first when enabled; fall back to
+      // SQLite FTS5 on any failure (qmd missing, binary error, timeout).
+      if (config?.qmdSearch) {
+        const qmdDir = config.memoryDir;
+        if (qmdDir) {
+          const qmdResult = await qmdSearch(query, qmdDir, Math.min(args.limit || 10, 20));
+          if (qmdResult.ok && qmdResult.hits.length > 0) {
+            const lines = qmdResult.hits.map((hit) => {
+              const label = hit.path;
+              const snippet = hit.snippet ? ` — ${hit.snippet.slice(0, 200)}` : '';
+              return `- ${label}${snippet}`;
+            });
+            const output = `Found ${qmdResult.hits.length} memories matching "${query}" (qmd semantic search):\n\n${lines.join('\n')}`;
+            const result: SearchResult = { success: true, count: qmdResult.hits.length, output };
+            return { content: [{ type: 'text' as const, text: output }], details: result };
+          }
+        }
       }
 
       const results = searchMemories(dbManager, query, { project, target, category, limit });

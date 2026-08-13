@@ -57,6 +57,7 @@ import { buildPromptContext } from "./prompt-context.js";
 import { migrateLegacyProjectMemoryDirs } from "./project-memory-migration.js";
 import { AGENT_ROOT } from "./paths.js";
 import { isDatabaseMigrationPending } from "./extension-root-migration.js";
+import { reindexQmd } from "./qmd-client.js";
 
 export function resolveProjectSkillDiscovery(
   skillStore: SkillStore,
@@ -234,6 +235,22 @@ export default function (pi: ExtensionAPI) {
 
   // ── 4. Register the skill tool ──
   registerSkillTool(pi, skillStore);
+
+  // ── 4b. Optional qmd semantic search (opt-in; requires the qmd CLI) ──
+  registerMemorySearchTool(pi, dbManager, config);
+  if (config.qmdSearch) {
+    // Keep the qmd index fresh after memory writes. Hooked on tool_result
+    // (additive — memory-tool.ts already listens for its own purposes) and
+    // fire-and-forget: a failed reindex must never affect the turn.
+    pi.on("tool_result", (event) => {
+      if (!event.toolName.startsWith("memory_")) return;
+      const details = event.details as { success?: unknown } | undefined;
+      if (details?.success === false) return;
+      const dir = config.memoryDir;
+      if (!dir) return;
+      void reindexQmd(dir).catch(() => undefined);
+    });
+  }
 
   // ── 5. Setup background learning loop (with tool-call-aware nudge) ──
   setupBackgroundReview(pi, store, projectStoreRef, config, {

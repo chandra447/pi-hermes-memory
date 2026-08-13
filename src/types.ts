@@ -84,6 +84,12 @@ export interface MemoryConfig {
   consolidationTimeoutMs: number;
   /** Inject pinned STANDING.md instructions into every session. Default: true */
   standingInstructionsEnabled: boolean;
+  /**
+   * Enable optional qmd semantic search (requires the `qmd` CLI installed).
+   * When enabled, memory_search tries qmd first and falls back to SQLite FTS5.
+   * Default: false
+   */
+  qmdSearch?: boolean;
 }
 
 export type MemoryCategory =
