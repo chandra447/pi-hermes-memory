@@ -348,9 +348,14 @@ export class MemoryStore {
   private memoryFullError(target: "memory" | "user" | "failure", contentLength: number): MemoryResult {
     const current = this.charCount(target);
     const limit = this.charLimit(target);
+    const entries = this.entriesFor(target).map((raw) => this.decodeEntry(raw).text);
     return {
       success: false,
-      error: `Memory at ${current}/${limit} chars. Adding this entry (${contentLength} chars) would exceed the limit. Replace or remove existing entries first.`,
+      error: `Memory at ${current}/${limit} chars. Adding this entry (${contentLength} chars) would exceed the limit. Replace or remove existing entries first (see the entries list below), then retry this add — all in this turn.`,
+      target,
+      usage: `${current}/${limit} chars`,
+      entry_count: entries.length,
+      entries,
     };
   }
 
