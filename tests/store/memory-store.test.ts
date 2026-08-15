@@ -366,6 +366,67 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.ok(raw.includes(existing));
     });
 
+    it("includes current entries in memoryFullError response under reject strategy", async () => {
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 140,
+        memoryOverflowStrategy: "reject",
+      }));
+      await store.loadFromDisk();
+
+      const first = `${TEST_MARKER} first`;
+      const second = `${TEST_MARKER} second`;
+      assert.ok((await store.add("memory", first)).success);
+      assert.ok((await store.add("memory", second)).success);
+
+      const result = await store.add("memory", `${TEST_MARKER} ${"x".repeat(100)}`);
+      await settle();
+
+      assert.ok(!result.success);
+      assert.match(result.error ?? "", /see the entries list below/);
+      assert.equal(result.target, "memory");
+      assert.match(result.usage ?? "", /^\d+\/140 chars$/);
+      assert.equal(result.entry_count, 2);
+      assert.deepEqual(result.entries, [first, second]);
+
+      // Metadata comments must not leak into the decoded entries (#178 regression)
+      for (const entry of result.entries ?? []) {
+        assert.ok(!entry.includes("<!--"), "decoded entry must not leak metadata comment");
+        assert.ok(!entry.includes("created="), "decoded entry must not leak created metadata");
+      }
+    });
+
+    it("includes current entries in memoryFullError response when fifo-evict cannot fit the new entry", async () => {
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 80,
+        memoryOverflowStrategy: "fifo-evict",
+      }));
+      await store.loadFromDisk();
+
+      const existing = `${TEST_MARKER} keep me`;
+      assert.ok((await store.add("memory", existing)).success);
+
+      const result = await store.add("memory", `${TEST_MARKER} ${"x".repeat(120)}`);
+      await settle();
+
+      assert.ok(!result.success);
+      assert.match(result.error ?? "", /see the entries list below/);
+      assert.equal(result.target, "memory");
+      assert.match(result.usage ?? "", /^\d+\/80 chars$/);
+      assert.equal(result.entry_count, 1);
+      assert.deepEqual(result.entries, [existing]);
+
+      // Metadata comments must not leak into the decoded entries (#178 regression)
+      for (const entry of result.entries ?? []) {
+        assert.ok(!entry.includes("<!--"), "decoded entry must not leak metadata comment");
+        assert.ok(!entry.includes("created="), "decoded entry must not leak created metadata");
+      }
+
+      // Existing entry must remain on disk — fifo-evict rotated nothing because
+      // the new entry alone exceeds the limit.
+      const raw = await readRaw(memoryPath);
+      assert.ok(raw.includes(existing));
+    });
+
     it("returns error for empty content", async () => {
       const store = new MemoryStore(makeConfig());
 
