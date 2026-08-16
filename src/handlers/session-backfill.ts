@@ -32,6 +32,7 @@ export interface ScheduleSessionBackfillOptions {
   indexSessionsFn?: typeof indexChangedSessions;
   maxFilesToIndex?: number;
   touchBackfillTimestampFn?: typeof touchBackfillTimestamp;
+  maxMessageLength?: number;
 }
 
 function formatBackfillResult(result: BulkIndexResult): string {
@@ -68,6 +69,7 @@ export function scheduleSessionBackfill(
   const indexSessionsFn = options.indexSessionsFn ?? indexChangedSessions;
   const maxFilesToIndex = options.maxFilesToIndex ?? SESSION_BACKFILL_MAX_FILES;
   const touchBackfillTimestampFn = options.touchBackfillTimestampFn ?? touchBackfillTimestamp;
+  const maxMessageLength = options.maxMessageLength;
 
   if (state.inProgress) {
     return false;
@@ -90,7 +92,7 @@ export function scheduleSessionBackfill(
   state.promise = new Promise<void>((resolve) => {
     setTimeoutFn(() => {
       try {
-        const result = indexSessionsFn(dbManager, sessionsDir, { maxFilesToIndex });
+        const result = indexSessionsFn(dbManager, sessionsDir, { maxFilesToIndex, maxMessageLength });
         if (!result.reachedLimit) touchBackfillTimestampFn(dbManager);
         notifyBestEffort(options.notify, formatBackfillResult(result), result.errors.length > 0 || result.reachedLimit ? 'warning' : 'info');
       } catch (err) {

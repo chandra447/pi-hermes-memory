@@ -15,6 +15,8 @@ import {
   DEFAULT_OVERFLOW_GRACE_MS,
   DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
   DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
+  DEFAULT_MAX_MESSAGE_LENGTH,
+  DEFAULT_SESSION_RETENTION_DAYS,
 } from "./constants.js";
 import { AGENT_ROOT, normalizeConfiguredMemoryDir, normalizeProjectsMemoryDir } from "./paths.js";
 
@@ -66,6 +68,8 @@ const DEFAULT_CONFIG: MemoryConfig = {
   standingInstructionsEnabled: true,
   projectsMemoryDir: DEFAULT_PROJECTS_MEMORY_DIR,
   sessionSearch: { variant: "legacy" },
+  maxMessageLength: DEFAULT_MAX_MESSAGE_LENGTH,
+  sessionRetentionDays: DEFAULT_SESSION_RETENTION_DAYS,
 };
 
 export const DEFAULT_CONFIG_PATH = path.join(
@@ -163,6 +167,12 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
           (parsed.childExtensionPaths as string[]).map((item) => item.trim()).filter(Boolean),
         )];
         if (childExtensionPaths.length > 0) config.childExtensionPaths = childExtensionPaths;
+      }
+      if (typeof parsed.maxMessageLength === "number" && Number.isFinite(parsed.maxMessageLength) && parsed.maxMessageLength > 0) {
+        config.maxMessageLength = Math.floor(parsed.maxMessageLength);
+      }
+      if (typeof parsed.sessionRetentionDays === "number" && Number.isFinite(parsed.sessionRetentionDays) && parsed.sessionRetentionDays > 0) {
+        config.sessionRetentionDays = Math.floor(parsed.sessionRetentionDays);
       }
       if (hasMemoryOverflowStrategy) {
         config.autoConsolidate = config.memoryOverflowStrategy === "auto-consolidate";

@@ -28,7 +28,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
 import { DatabaseManager } from "./store/db.js";
-import { indexSession, upsertSessionFileMetadata } from "./store/session-indexer.js";
+import { indexSession, upsertSessionFileMetadata, pruneOldSessions } from "./store/session-indexer.js";
 import { scheduleSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-backfill.js";
 import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-live-index.js";
 import { parseSessionFile } from "./store/session-parser.js";
@@ -203,18 +203,35 @@ export default function (pi: ExtensionAPI) {
     if (projectStore) await projectStore.loadFromDisk();
     if (standingStore) await standingStore.load();
 
-    if (persistenceInitialized) scheduleSessionBackfill(dbManager, sessionsDir, {
-      notify: (message, level) => {
-        const ui = (ctx as { ui?: { notify?: (message: string, level?: string) => void } }).ui;
-        if (ui?.notify) {
-          ui.notify(message, level);
-        } else if (level === "error" || level === "warning") {
-          console.warn(message);
-        } else {
-          console.info(message);
+    if (persistenceInitialized) {
+      // Prune sessions older than the configured retention window
+      if (config.sessionRetentionDays && config.sessionRetentionDays > 0) {
+        try {
+          const pruneResult = pruneOldSessions(dbManager, config.sessionRetentionDays);
+          if (pruneResult.sessionsRemoved > 0) {
+            console.info(
+              `🧠 Pruned ${pruneResult.sessionsRemoved} old session(s) (> ${config.sessionRetentionDays} days old)`,
+            );
+          }
+        } catch (err) {
+          console.warn(`⚠️ Session pruning failed: ${err instanceof Error ? err.message : String(err)}`);
         }
-      },
-    });
+      }
+
+      scheduleSessionBackfill(dbManager, sessionsDir, {
+        notify: (message, level) => {
+          const ui = (ctx as { ui?: { notify?: (message: string, level?: string) => void } }).ui;
+          if (ui?.notify) {
+            ui.notify(message, level);
+          } else if (level === "error" || level === "warning") {
+            console.warn(message);
+          } else {
+            console.info(message);
+          }
+        },
+        maxMessageLength: config.maxMessageLength,
+      });
+    }
   });
 
   registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir);

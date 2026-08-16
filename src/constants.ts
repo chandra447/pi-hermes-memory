@@ -34,6 +34,10 @@ export const DEFAULT_OVERFLOW_GRACE_MS = 180000;
 export const DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS = 7;
 export const DEFAULT_FAILURE_INJECTION_MAX_ENTRIES = 5;
 
+// ─── Message / session retention defaults ───
+export const DEFAULT_MAX_MESSAGE_LENGTH = 8192;
+export const DEFAULT_SESSION_RETENTION_DAYS = 180;
+
 // ─── File names ───
 export const MEMORY_FILE = "MEMORY.md";
 export const USER_FILE = "USER.md";

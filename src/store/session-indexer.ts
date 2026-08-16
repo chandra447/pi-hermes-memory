@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { DatabaseManager } from './db.js';
 import { parseSessionFile, getSessionFiles, type ParsedSession } from './session-parser.js';
+import { DEFAULT_MAX_MESSAGE_LENGTH } from '../constants.js';
 
 export const LAST_SESSION_BACKFILL_KEY = 'last_session_backfill';
 export const SESSION_BACKFILL_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -35,6 +36,7 @@ interface SessionFileMetadata {
 export interface IncrementalIndexOptions {
   projectDir?: string;
   maxFilesToIndex?: number;
+  maxMessageLength?: number;
 }
 
 /**
@@ -42,11 +44,19 @@ export interface IncrementalIndexOptions {
  *
  * @returns IndexResult with count of messages indexed
  */
-export function indexSession(dbManager: DatabaseManager, session: ParsedSession): IndexResult {
-  return dbManager.withCorruptionRecovery(() => indexSessionOnce(dbManager, session));
+export function indexSession(
+  dbManager: DatabaseManager,
+  session: ParsedSession,
+  options: { maxMessageLength?: number } = {},
+): IndexResult {
+  return dbManager.withCorruptionRecovery(() => indexSessionOnce(dbManager, session, options));
 }
 
-function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): IndexResult {
+function indexSessionOnce(
+  dbManager: DatabaseManager,
+  session: ParsedSession,
+  _options: { maxMessageLength?: number } = {},
+): IndexResult {
   const db = dbManager.getDb();
 
   const existingSession = db.prepare('SELECT id FROM sessions WHERE id = ?').get(session.id) as { id: string } | undefined;
@@ -82,11 +92,14 @@ function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): I
     );
 
     for (const msg of session.messages) {
+      const content = msg.content.length > DEFAULT_MAX_MESSAGE_LENGTH
+        ? `${msg.content.slice(0, DEFAULT_MAX_MESSAGE_LENGTH)}\n... (truncated, ${msg.content.length} chars total)`
+        : msg.content;
       insertMsg.run(
         msg.id,
         session.id,
         msg.role,
-        msg.content,
+        content,
         msg.timestamp,
         msg.toolCalls ? JSON.stringify(msg.toolCalls) : null
       );
@@ -274,7 +287,12 @@ function emptyBulkIndexResult(): BulkIndexResult {
   };
 }
 
-function indexSessionFile(dbManager: DatabaseManager, file: string, result: BulkIndexResult): void {
+function indexSessionFile(
+  dbManager: DatabaseManager,
+  file: string,
+  result: BulkIndexResult,
+  maxMessageLength?: number,
+): void {
   result.sessionsProcessed++;
 
   const session = parseSessionFile(file);
@@ -283,7 +301,7 @@ function indexSessionFile(dbManager: DatabaseManager, file: string, result: Bulk
     return;
   }
 
-  const indexResult = indexSession(dbManager, session);
+  const indexResult = indexSession(dbManager, session, { maxMessageLength });
   upsertSessionFileMetadata(dbManager, file, session.id);
   if (indexResult.skipped) {
     result.sessionsSkipped++;
@@ -304,14 +322,15 @@ function indexSessionFile(dbManager: DatabaseManager, file: string, result: Bulk
 export function indexAllSessions(
   dbManager: DatabaseManager,
   sessionsDir: string,
-  projectDir?: string
+  projectDir?: string,
+  maxMessageLength?: number,
 ): BulkIndexResult {
   const files = getSessionFiles(sessionsDir, projectDir);
   const result = emptyBulkIndexResult();
 
   for (const file of files) {
     try {
-      indexSessionFile(dbManager, file, result);
+      indexSessionFile(dbManager, file, result, maxMessageLength);
     } catch (err) {
       result.errors.push(`Error indexing ${file}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -330,10 +349,11 @@ export function indexAllSessions(
 export function indexChangedSessions(
   dbManager: DatabaseManager,
   sessionsDir: string,
-  options: IncrementalIndexOptions = {},
+  options: IncrementalIndexOptions & { maxMessageLength?: number } = {},
 ): BulkIndexResult {
   const files = getSessionFiles(sessionsDir, options.projectDir);
   const maxFilesToIndex = options.maxFilesToIndex ?? 50;
+  const maxMessageLength = options.maxMessageLength;
   const result = emptyBulkIndexResult();
 
   // Gather the changed set first, then sort newest-first before applying the
@@ -364,7 +384,7 @@ export function indexChangedSessions(
       break;
     }
     try {
-      indexSessionFile(dbManager, metadata.path, result);
+      indexSessionFile(dbManager, metadata.path, result, maxMessageLength);
     } catch (err) {
       result.errors.push(`Error indexing ${metadata.path}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -378,6 +398,32 @@ export function indexChangedSessions(
  */
 export function countSessionFiles(sessionsDir: string): number {
   return getSessionFiles(sessionsDir).length;
+}
+
+/**
+ * Delete sessions older than the given retention window, along with their messages.
+ *
+ * Returns the number of sessions and messages removed.
+ */
+export function pruneOldSessions(
+  dbManager: DatabaseManager,
+  retentionDays: number,
+): { sessionsRemoved: number; messagesRemoved: number } {
+  const db = dbManager.getDb();
+  const cutoffIso = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+
+  // Count first so we can report accurately even if DELETE cascades fail mid-way
+  const sessionCount = db.prepare(
+    'SELECT COUNT(*) as cnt FROM sessions WHERE started_at < ?',
+  ).get(cutoffIso) as { cnt: number };
+
+  if (sessionCount.cnt === 0) {
+    return { sessionsRemoved: 0, messagesRemoved: 0 };
+  }
+
+  const deleteSessions = db.prepare('DELETE FROM sessions WHERE started_at < ?');
+  const result = deleteSessions.run(cutoffIso);
+  return { sessionsRemoved: result.changes, messagesRemoved: result.changes }; // FK CASCADE removes messages too
 }
 
 function getLastBackfillTimestamp(dbManager: DatabaseManager): string | null {

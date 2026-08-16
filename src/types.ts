@@ -88,6 +88,10 @@ export interface MemoryConfig {
   autoConsolidationWarnOnFailure: boolean;
   /** Inject pinned STANDING.md instructions into every session. Default: true */
   standingInstructionsEnabled: boolean;
+  /** Max chars per session message content. Oversized messages are truncated on index. Default: 8192 */
+  maxMessageLength?: number;
+  /** Keep sessions from the last N days. Older sessions are pruned on startup. Default: 180 */
+  sessionRetentionDays?: number;
 }
 
 export type MemoryCategory =
