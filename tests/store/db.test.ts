@@ -842,7 +842,7 @@ describe('DatabaseManager', () => {
       assert.doesNotThrow(() => dbManager.getDb());
     });
 
-    it('repairs recoverable corruption on open and preserves readable rows', () => {
+    it('repairs recoverable corruption on open and preserves readable rows', async () => {
       const db = dbManager.getDb();
       db.prepare(`
         INSERT INTO sessions (id, project, cwd, started_at)
@@ -866,6 +866,8 @@ describe('DatabaseManager', () => {
       corruptRecoverableIndexPage(path.join(tmpDir, 'sessions.db'), 'idx_messages_timestamp');
 
       dbManager = new DatabaseManager(tmpDir);
+      assert.doesNotThrow(() => dbManager.getDb());
+      await dbManager.waitForStartupIntegrityScan();
       const repairedDb = dbManager.getDb();
 
       assert.strictEqual(dbManager.getLastRecovery()?.strategy, 'rebuilt');
@@ -880,6 +882,26 @@ describe('DatabaseManager', () => {
       const memory = repairedDb.prepare('SELECT content FROM memories WHERE content = ?').get('recoverable memory') as { content: string } | undefined;
       assert.ok(memory);
       assertQuickCheckOk(repairedDb as InstanceType<typeof Database>);
+      assert.ok(fs.readdirSync(tmpDir).some((name) => name.startsWith('sessions.db.corrupt-')), 'corrupt DB should be quarantined');
+    });
+
+    it('reopened manager runs a fresh integrity scan after close()', async () => {
+      const db = dbManager.getDb();
+      db.prepare(`
+        INSERT INTO sessions (id, project, cwd, started_at)
+        VALUES (?, ?, ?, ?)
+      `).run('reopen-session', 'reopen-project', '/work/reopen', '2026-05-03T00:00:00Z');
+      dbManager.close();
+
+      corruptRecoverableIndexPage(path.join(tmpDir, 'sessions.db'), 'idx_messages_timestamp');
+
+      const reopenedDb = dbManager.getDb();
+      await dbManager.waitForStartupIntegrityScan();
+      const recoveredDb = dbManager.getDb();
+
+      assert.strictEqual(dbManager.getLastRecovery()?.strategy, 'rebuilt');
+      assert.deepStrictEqual(dbManager.getStats(), { sessions: 1, messages: 0, memories: 0 });
+      assertQuickCheckOk(recoveredDb as InstanceType<typeof Database>);
       assert.ok(fs.readdirSync(tmpDir).some((name) => name.startsWith('sessions.db.corrupt-')), 'corrupt DB should be quarantined');
     });
 

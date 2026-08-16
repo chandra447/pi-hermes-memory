@@ -162,6 +162,7 @@ export class DatabaseManager {
   private readonly recoveryOptions: ResolvedDatabaseRecoveryOptions;
   private lastRecovery: DatabaseRecoveryResult | null = null;
   private openGuard: (() => void) | null = null;
+  private pendingOpenIntegrityScan: Promise<void> | null = null;
   private activeRecoveryLease: { coordinator: AtomicLockCoordinator; key: string; token: string } | null = null;
 
   constructor(memoryDir: string, recoveryOptions: DatabaseRecoveryOptions = {}) {
@@ -267,8 +268,9 @@ export class DatabaseManager {
       fs.mkdirSync(dir, { recursive: true });
     }
 
+    let opened: DatabaseLike;
     try {
-      return this.openUnchecked();
+      opened = this.openUnchecked();
     } catch (err) {
       if (!DatabaseManager.isCorruptionError(err)) {
         throw err;
@@ -288,21 +290,57 @@ export class DatabaseManager {
       if (!recoveredDb) throw new Error(`SQLite recovery verification did not open ${this.displayDbPath}`);
       return recoveredDb;
     }
+
+    this.scheduleOpenIntegrityScan(opened);
+    return opened;
+  }
+
+  /**
+   * quick_check walks the whole DB, so open() never pays that cost: the scan
+   * runs after open returns and failures go through the same recovery used
+   * at operation time.
+   */
+  private scheduleOpenIntegrityScan(db: DatabaseLike): void {
+    if (this.pendingOpenIntegrityScan) return;
+    const scan = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        try {
+          if (this.db !== db) {
+            // Manager closed or reopened; the newest open schedules its own
+            // scan, so skip to avoid a stale-handle recovery.
+            return;
+          }
+          this.assertIntegrityOk(db, 'quick_check', 'after open');
+        } catch (err) {
+          try {
+            this.recoverFromCorruption(err);
+          } catch {
+            // Best-effort here; at-operation withCorruptionRecovery still
+            // quarantines and rebuilds if a later statement hits the corruption.
+          }
+        } finally {
+          if (this.pendingOpenIntegrityScan === scan) {
+            this.pendingOpenIntegrityScan = null;
+          }
+          resolve();
+        }
+      }, 0);
+    });
+    this.pendingOpenIntegrityScan = scan;
+  }
+
+  /** Test aid. */
+  async waitForStartupIntegrityScan(): Promise<void> {
+    await this.pendingOpenIntegrityScan;
   }
 
   private openUnchecked(): DatabaseLike {
-    const existed = this.hasExistingMainDatabaseFile();
     const db = new (getDatabaseCtor())(this.dbPath);
     let ok = false;
 
     try {
-      if (existed) {
-        this.assertIntegrityOk(db, 'quick_check', 'before schema initialization');
-      }
-
       this.configureConnection(db);
       this.initializeSchema(db);
-      this.assertIntegrityOk(db, 'quick_check', 'after schema initialization');
       ok = true;
       return db;
     } finally {
@@ -1098,6 +1136,7 @@ export class DatabaseManager {
       try { this.db.close(); } catch { /* best effort — close may throw on a corrupt handle */ }
       this.db = null;
     }
+    this.pendingOpenIntegrityScan = null;
   }
 
   /**
