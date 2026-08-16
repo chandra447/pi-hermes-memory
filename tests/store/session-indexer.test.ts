@@ -16,8 +16,10 @@ import {
   indexCurrentSession,
   indexLiveSession,
   parseSessionManagerSnapshot,
+  truncateMessageContent,
   upsertSessionFileMetadata,
 } from '../../src/store/session-indexer.js';
+import { DEFAULT_MAX_MESSAGE_CONTENT_LENGTH } from '../../src/constants.js';
 import { parseSessionFile, type ParsedSession } from '../../src/store/session-parser.js';
 
 describe('session-indexer', () => {
@@ -79,6 +81,22 @@ describe('session-indexer', () => {
       const msg = db.prepare('SELECT tool_calls FROM messages WHERE id = ?').get('session-1-msg-2') as { tool_calls: string | null };
       assert.ok(msg.tool_calls);
       assert.deepStrictEqual(JSON.parse(msg.tool_calls), ['read']);
+    });
+
+    it('should cap oversized message content while retaining both ends', () => {
+      const content = `begin-${'x'.repeat(DEFAULT_MAX_MESSAGE_CONTENT_LENGTH)}-end`;
+      const session = createTestSession({
+        messages: [{ id: 'oversized-message', role: 'assistant', content, timestamp: '2026-05-03T00:01:00Z' }],
+      });
+
+      indexSession(dbManager, session);
+
+      const stored = dbManager.getDb().prepare('SELECT content FROM messages WHERE id = ?').get('oversized-message') as { content: string };
+      assert.ok(stored.content.length <= DEFAULT_MAX_MESSAGE_CONTENT_LENGTH);
+      assert.match(stored.content, /^begin-/);
+      assert.match(stored.content, /-end$/);
+      assert.match(stored.content, /truncated, \d+ chars total/);
+      assert.strictEqual(truncateMessageContent('short content'), 'short content');
     });
 
     it('should skip already-indexed sessions with no new messages', () => {
@@ -354,6 +372,26 @@ describe('session-indexer', () => {
       assert.strictEqual(parsed.project, 'live-project');
       assert.strictEqual(parsed.messages.length, 2);
       assert.deepStrictEqual(parsed.messages[1].toolCalls, ['read']);
+    });
+
+    it('parseSessionManagerSnapshot skips embedded tool result content', () => {
+      const parsed = parseSessionManagerSnapshot(createSessionManagerSnapshot([
+        {
+          type: 'message',
+          id: 'entry-1',
+          timestamp: '2026-05-03T00:01:00Z',
+          message: {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'Summary of the result.' },
+              { type: 'tool_result', content: [{ type: 'text', text: 'unbounded output' }] },
+            ],
+          },
+        },
+      ]));
+
+      assert.ok(parsed);
+      assert.strictEqual(parsed.messages[0].content, 'Summary of the result.');
     });
 
     it('indexLiveSession prefers the persisted JSONL file when available', () => {

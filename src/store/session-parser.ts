@@ -65,16 +65,8 @@ function extractTextContent(content: unknown): string {
         // Skip tool_use blocks — we track tool calls separately
         break;
       case 'tool_result':
-        // Include tool result text if present
-        if (typeof b.content === 'string') {
-          parts.push(b.content);
-        } else if (Array.isArray(b.content)) {
-          for (const item of b.content) {
-            if (item && typeof item === 'object' && (item as Record<string, unknown>).type === 'text') {
-              parts.push((item as Record<string, unknown>).text as string);
-            }
-          }
-        }
+        // Tool results commonly contain full file or command output. They are
+        // ephemeral and can be very large; tool names are indexed separately.
         break;
     }
   }

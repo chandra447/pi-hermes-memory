@@ -205,7 +205,7 @@ describe('session-parser', () => {
       assert.strictEqual(result, null);
     });
 
-    it('should extract text from tool_result content', () => {
+    it('should skip tool_result content while retaining assistant text', () => {
       const filePath = path.join(tmpDir, 'test.jsonl');
       const lines = [
         JSON.stringify({ type: 'session', id: 's1', timestamp: '2026-05-03T00:00:00Z', cwd: '/test' }),
@@ -215,11 +215,12 @@ describe('session-parser', () => {
           parentId: null,
           timestamp: '2026-05-03T00:01:00Z',
           message: {
-            role: 'user',
+            role: 'assistant',
             content: [
+              { type: 'text', text: 'I inspected the file.' },
               {
                 type: 'tool_result',
-                content: [{ type: 'text', text: 'file contents here' }],
+                content: [{ type: 'text', text: 'large file contents must not be indexed' }],
               },
             ],
             timestamp: Date.now(),
@@ -230,7 +231,7 @@ describe('session-parser', () => {
 
       const result = parseSessionFile(filePath);
       assert.ok(result);
-      assert.strictEqual(result.messages[0].content, 'file contents here');
+      assert.strictEqual(result.messages[0].content, 'I inspected the file.');
     });
   });
 

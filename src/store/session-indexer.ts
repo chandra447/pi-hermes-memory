@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { DEFAULT_MAX_MESSAGE_CONTENT_LENGTH } from '../constants.js';
 import { DatabaseManager } from './db.js';
 import { parseSessionFile, getSessionFiles, type ParsedSession } from './session-parser.js';
 
@@ -35,6 +36,20 @@ interface SessionFileMetadata {
 export interface IncrementalIndexOptions {
   projectDir?: string;
   maxFilesToIndex?: number;
+}
+
+export function truncateMessageContent(
+  content: string,
+  maxLength = DEFAULT_MAX_MESSAGE_CONTENT_LENGTH,
+): string {
+  if (content.length <= maxLength) return content;
+
+  const notice = `\n... (truncated, ${content.length} chars total)\n`;
+  const retainedLength = Math.max(0, maxLength - notice.length);
+  const prefixLength = Math.ceil(retainedLength / 2);
+  const suffixLength = Math.floor(retainedLength / 2);
+  const suffix = suffixLength > 0 ? content.slice(-suffixLength) : '';
+  return `${content.slice(0, prefixLength)}${notice}${suffix}`;
 }
 
 /**
@@ -86,7 +101,7 @@ function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): I
         msg.id,
         session.id,
         msg.role,
-        msg.content,
+        truncateMessageContent(msg.content),
         msg.timestamp,
         msg.toolCalls ? JSON.stringify(msg.toolCalls) : null
       );
@@ -138,16 +153,9 @@ function extractTextContent(content: unknown): string {
         if (typeof b.text === 'string') parts.push(b.text);
         break;
       case 'tool_result':
-        if (typeof b.content === 'string') {
-          parts.push(b.content);
-        } else if (Array.isArray(b.content)) {
-          for (const item of b.content) {
-            if (item && typeof item === 'object' && (item as Record<string, unknown>).type === 'text') {
-              const text = (item as Record<string, unknown>).text;
-              if (typeof text === 'string') parts.push(text);
-            }
-          }
-        }
+        // Tool results can contain unbounded file or command output. Tool
+        // calls are indexed separately, so retaining their output adds bloat
+        // without improving session search.
         break;
     }
   }

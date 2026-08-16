@@ -16,6 +16,12 @@ export const DEFAULT_USER_CHAR_LIMIT = 5000;
 
 // ─── Learning loop defaults ───
 export const DEFAULT_PROJECT_CHAR_LIMIT = 5000;
+/**
+ * Largest session message stored in SQLite. Tool results are excluded during
+ * parsing, but this cap also protects the database from unexpected large text
+ * blocks in future Pi content formats.
+ */
+export const DEFAULT_MAX_MESSAGE_CONTENT_LENGTH = 100 * 1024;
 
 export const DEFAULT_NUDGE_INTERVAL = 10;
 export const DEFAULT_FLUSH_MIN_TURNS = 6;
