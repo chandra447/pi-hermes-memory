@@ -509,3 +509,52 @@ export function getSessionStats(dbManager: DatabaseManager): {
     projects,
   };
 }
+
+/**
+ * Delete sessions older than the given retention window, along with their
+ * messages, to bound the growth of the session index database (see #183).
+ *
+ * `messages` and `session_files` reference `sessions`, but only `session_files`
+ * is declared `ON DELETE CASCADE`. Orphaned `messages` rows are deleted
+ * explicitly first so a `PRAGMA foreign_keys`-enabled delete never trips a
+ * FK constraint, and so an accurate `messagesRemoved` count is reported.
+ *
+ * Returns the number of sessions and messages removed.
+ */
+export function pruneOldSessions(
+  dbManager: DatabaseManager,
+  retentionDays: number,
+): { sessionsRemoved: number; messagesRemoved: number } {
+  const db = dbManager.getDb();
+  const cutoffIso = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+
+  // Count what would be removed so we can report accurately even if a DELETE
+  // fails mid-way. Messages are counted upfront because SQLite does not
+  // surface cascade/orphan counts from DELETE ... RETURNING across tables.
+  const sessionCount = db.prepare(
+    'SELECT COUNT(*) as cnt FROM sessions WHERE started_at < ?',
+  ).get(cutoffIso) as { cnt: number };
+  if (sessionCount.cnt === 0) {
+    return { sessionsRemoved: 0, messagesRemoved: 0 };
+  }
+
+  const messageCount = db.prepare(
+    `SELECT COUNT(*) as cnt FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)`,
+  ).get(cutoffIso) as { cnt: number };
+
+  const prune = () => {
+    const delMessages = db.prepare(
+      'DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)',
+    ).run(cutoffIso);
+    const delSessions = db.prepare('DELETE FROM sessions WHERE started_at < ?').run(cutoffIso);
+    return { messagesRemoved: delMessages.changes, sessionsRemoved: delSessions.changes };
+  };
+
+  const result = db.transaction ? db.transaction(prune)() : prune();
+  // Fall back to the pre-counted values if the transaction changed nothing
+  // unexpectedly (defensive; DELETE should always affect the counted rows).
+  return {
+    sessionsRemoved: result.sessionsRemoved || sessionCount.cnt,
+    messagesRemoved: result.messagesRemoved || messageCount.cnt,
+  };
+}

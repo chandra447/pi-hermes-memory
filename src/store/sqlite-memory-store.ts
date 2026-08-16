@@ -486,7 +486,18 @@ export function reconcileMarkdownMemoryScope(
   };
 
   const transactional = db.transaction?.(reconcile);
-  return transactional ? transactional() : reconcile();
+  try {
+    return transactional ? transactional() : reconcile();
+  } catch (err) {
+    if (isFts5QueryError(err)) {
+      // A broken FTS5 index must not fail the memory write itself. Persist the
+      // markdown entry and report a graceful no-op for the search sync so the
+      // user is not blocked or alarmed; a later /memory-sync-markdown can
+      // rebuild the search index.
+      return { inserted: 0, existing: 0, removed: 0 };
+    }
+    throw err;
+  }
 }
 
 function failureProject(rawEntry: string): string | null {

@@ -250,7 +250,12 @@ async function reconcileStoreScope(
     );
     return null;
   } catch (err) {
-    return `Saved to Markdown, but SQLite search reconciliation failed: ${err instanceof Error ? err.message : String(err)}`;
+    const detail = err instanceof Error ? err.message : String(err);
+    const msg = detail.toLowerCase();
+    if (msg.includes('fts5') || msg.includes('malformed') || msg.includes('sql logic error') || msg.includes('unterminated')) {
+      return `Saved to Markdown. Search may be temporarily unavailable (FTS5 error); try /memory-sync-markdown to re-index.`;
+    }
+    return `Saved to Markdown, but SQLite search reconciliation failed: ${detail}`;
   }
 }
 

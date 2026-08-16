@@ -2,6 +2,27 @@ const FTS5_OPERATOR_PATTERN = /\b(OR|AND|NOT|NEAR)\b/;
 const FTS5_TOKEN_PATTERN = /"([^"]*)"|(\S+)/g;
 const NATURAL_LANGUAGE_CONNECTORS = new Set(['and', 'or', 'not', 'near']);
 
+// Common English stop words that add noise to FTS5 searches. They are silently
+// dropped from natural-language queries so common filler words cannot dominate
+// the FTS5 ranking or produce misleading "AND"-style misses.
+const STOP_WORDS = new Set([
+  'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
+  'may', 'might', 'shall', 'can', 'need', 'dare', 'ought', 'used',
+  'i', 'me', 'my', 'mine', 'we', 'our', 'ours', 'you', 'your', 'yours',
+  'he', 'him', 'his', 'she', 'her', 'hers', 'it', 'its', 'they', 'them',
+  'their', 'theirs', 'that', 'this', 'these', 'those', 'what', 'which',
+  'who', 'whom', 'whose', 'when', 'where', 'why', 'how', 'all', 'each',
+  'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such', 'no',
+  'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 's',
+  't', 'just', 'don', 'now', 'about', 'above', 'after', 'again', 'against',
+  'am', 'at', 'before', 'behind', 'below', 'between', 'by', 'during',
+  'from', 'further', 'into', 'like', 'off', 'over', 'per', 'through',
+  'throughout', 'till', 'to', 'under', 'until', 'up', 'upon', 'via', 'with',
+  'within', 'without', 'as', 'if', 'or', 'but', 'and', 'out', 'of',
+  'for', 'in', 'on', 'any', 'get', 'got', 'here', 'there',
+]);
+
 export function hasExplicitFts5Operator(query: string): boolean {
   return FTS5_OPERATOR_PATTERN.test(query.trim());
 }
@@ -13,6 +34,10 @@ function collectNaturalLanguageTerms(query: string): string[] {
     const phrase = match[1];
     const term = match[2];
     if (phrase === undefined && term && NATURAL_LANGUAGE_CONNECTORS.has(term.toLowerCase())) {
+      continue;
+    }
+    // Skip high-frequency stop words so they cannot dominate FTS5 ranking.
+    if (phrase === undefined && term && STOP_WORDS.has(term.toLowerCase())) {
       continue;
     }
 
@@ -97,5 +122,8 @@ export function buildNaturalLanguageFallbackQuery(query: string): string | null 
 export function isFts5QueryError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
-  return msg.includes('fts5') || msg.includes('unterminated string');
+  return msg.includes('fts5') ||
+    msg.includes('unterminated string') ||
+    msg.includes('malformed') ||
+    msg.includes('sql logic error');
 }
