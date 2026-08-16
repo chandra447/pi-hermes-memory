@@ -88,6 +88,8 @@ export interface MemoryConfig {
   autoConsolidationWarnOnFailure: boolean;
   /** Inject pinned STANDING.md instructions into every session. Default: true */
   standingInstructionsEnabled: boolean;
+  /** Keep sessions from the last N days; older sessions are pruned on startup. Default: 180 */
+  sessionRetentionDays?: number;
 }
 
 export type MemoryCategory =

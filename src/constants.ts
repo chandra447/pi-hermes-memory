@@ -40,6 +40,13 @@ export const DEFAULT_OVERFLOW_GRACE_MS = 180000;
 export const DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS = 7;
 export const DEFAULT_FAILURE_INJECTION_MAX_ENTRIES = 5;
 
+// ─── Session retention defaults ───
+/**
+ * Keep sessions from the last N days. Older sessions are pruned on startup to
+ * bound the size of the session index database (see #183).
+ */
+export const DEFAULT_SESSION_RETENTION_DAYS = 180;
+
 // ─── File names ───
 export const MEMORY_FILE = "MEMORY.md";
 export const USER_FILE = "USER.md";

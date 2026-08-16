@@ -18,6 +18,7 @@ import {
   parseSessionManagerSnapshot,
   truncateMessageContent,
   upsertSessionFileMetadata,
+  pruneOldSessions,
 } from '../../src/store/session-indexer.js';
 import { DEFAULT_MAX_MESSAGE_CONTENT_LENGTH } from '../../src/constants.js';
 import { parseSessionFile, type ParsedSession } from '../../src/store/session-parser.js';
@@ -561,6 +562,46 @@ describe('session-indexer', () => {
       assert.strictEqual(result.sessionsProcessed, 0);
       assert.strictEqual(result.sessionsSkipped, 1);
       assert.strictEqual(result.reachedLimit, undefined);
+    });
+  });
+
+  describe('pruneOldSessions', () => {
+    it('removes nothing when the database is empty', () => {
+      const result = pruneOldSessions(dbManager, 30);
+      assert.deepStrictEqual(result, { sessionsRemoved: 0, messagesRemoved: 0 });
+    });
+
+    it('removes sessions older than the retention window and their messages', () => {
+      indexSession(dbManager, createTestSession({ id: 'old', startedAt: '2020-01-01T00:00:00Z' }));
+      indexSession(dbManager, createTestSession({ id: 'recent', startedAt: new Date().toISOString() }));
+
+      const result = pruneOldSessions(dbManager, 30);
+      assert.strictEqual(result.sessionsRemoved, 1);
+      assert.strictEqual(result.messagesRemoved, 2); // old session has 2 messages
+
+      const stats = getSessionStats(dbManager);
+      assert.strictEqual(stats.totalSessions, 1);
+      assert.strictEqual(stats.totalMessages, 2);
+      const remaining = dbManager.getDb().prepare('SELECT id FROM sessions').all() as { id: string }[];
+      assert.deepStrictEqual(remaining.map((r) => r.id), ['recent']);
+    });
+
+    it('leaves sessions exactly at the retention boundary (not strictly older) untouched', () => {
+      const now = Date.now();
+      const justWithin = new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString(); // 10 days ago
+      indexSession(dbManager, createTestSession({ id: 'within', startedAt: justWithin }));
+
+      const result = pruneOldSessions(dbManager, 30);
+      assert.strictEqual(result.sessionsRemoved, 0);
+      assert.strictEqual(dbManager.getStats().sessions, 1);
+    });
+
+    it('is idempotent across repeated calls', () => {
+      indexSession(dbManager, createTestSession({ id: 'old', startedAt: '2020-01-01T00:00:00Z' }));
+
+      pruneOldSessions(dbManager, 30);
+      const again = pruneOldSessions(dbManager, 30);
+      assert.deepStrictEqual(again, { sessionsRemoved: 0, messagesRemoved: 0 });
     });
   });
 
