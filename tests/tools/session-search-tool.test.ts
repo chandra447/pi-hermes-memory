@@ -135,19 +135,31 @@ describe("registerSessionSearchTool", () => {
     const oversizedContent = `needle ${"x".repeat(6_000_000)}`;
 
     try {
-      indexSession(dbManager, {
-        id: "oversized-session",
-        project: "oversized-project",
-        cwd: "/work/oversized",
-        startedAt: "2026-07-11T00:00:00.000Z",
-        endedAt: null,
-        messages: [{
-          id: "oversized-message",
-          role: "assistant",
-          content: oversizedContent,
-          timestamp: "2026-07-11T00:01:00.000Z",
-        }],
-      });
+      // Seed a pre-cap database row directly. New ingestion paths must cap
+      // message content, but search output still needs to stay bounded for
+      // oversized rows written by older extension versions.
+      const db = dbManager.getDb();
+      db.prepare(`
+        INSERT INTO sessions (id, project, cwd, started_at, ended_at, message_count)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        "oversized-session",
+        "oversized-project",
+        "/work/oversized",
+        "2026-07-11T00:00:00.000Z",
+        null,
+        1,
+      );
+      db.prepare(`
+        INSERT INTO messages (id, session_id, role, content, timestamp)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        "oversized-message",
+        "oversized-session",
+        "assistant",
+        oversizedContent,
+        "2026-07-11T00:01:00.000Z",
+      );
       registerSessionSearchTool(mockPi, dbManager);
 
       const result = await captured.execute("tc-oversized", { query: "needle" });
