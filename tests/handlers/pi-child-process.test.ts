@@ -313,7 +313,7 @@ describe("buildChildPiPromptArgs", () => {
     );
   });
 
-  it("passes configured extensions but excludes unrelated inherited extensions", async () => {
+  it("passes configured extension sources through Pi's -e resolver and excludes inherited extensions", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-child-extensions-"));
     const configured = path.join(dir, "configured.ts");
     const inherited = path.join(dir, "inherited.ts");
@@ -322,12 +322,24 @@ describe("buildChildPiPromptArgs", () => {
     try {
       assert.deepStrictEqual(
         buildChildPiPromptArgs("hello", {
-          childExtensionPaths: [configured, configured, "/missing/adapter.ts", OWN_EXTENSION_PATH],
+          childExtensionPaths: [
+            configured,
+            configured,
+            "~/.pi/agent/extensions/provider.ts",
+            "./relative-provider.ts",
+            "git:github.com/example/provider-extension@v1",
+            "npm:@example/provider-extension@1.0.0",
+            OWN_EXTENSION_PATH,
+          ],
         }, ["-e", inherited, `--extension=${configured}`]),
         [
           "-p", "--no-session", "--no-extensions",
           "-e", OWN_EXTENSION_PATH,
           "-e", configured,
+          "-e", "~/.pi/agent/extensions/provider.ts",
+          "-e", "./relative-provider.ts",
+          "-e", "git:github.com/example/provider-extension@v1",
+          "-e", "npm:@example/provider-extension@1.0.0",
           ...DETECTED_ADAPTER_ARGS,
           "hello",
         ],

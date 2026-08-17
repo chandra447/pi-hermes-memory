@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Portable child extension sources were discarded before Pi could resolve them**: `childExtensionPaths` ran every configured value through Node's cwd-relative `path.resolve()` and required that resulting local path to already exist. This silently dropped Pi-native `~/...`, `git:...`, and `npm:...` extension sources, forcing machine-specific absolute paths for custom providers in isolated subprocesses. Configured sources are now passed unchanged to Pi's standard `-e` resolver, while Hermes-discovered auth adapter paths retain their local existence checks.
+
 ## [0.9.4] - 2026-08-08
 
 ### Added

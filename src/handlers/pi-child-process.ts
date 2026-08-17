@@ -226,31 +226,35 @@ export function detectAuthAdapterExtensionPaths(roots?: string[]): string[] {
   return detected;
 }
 
-function childExtensionPaths(config: ChildLlmConfig): string[] {
-  const candidates = [
-    OWN_EXTENSION_PATH,
-    ...(config.childExtensionPaths ?? []),
-    ...detectAuthAdapterExtensionPaths(),
-  ];
+function childExtensionSources(config: ChildLlmConfig): string[] {
   const seen = new Set<string>();
-  const paths: string[] = [];
-  for (const candidate of candidates) {
+  const sources: string[] = [];
+  const append = (candidate: string | undefined): void => {
     const trimmed = candidate?.trim();
-    if (!trimmed) continue;
-    const normalized = resolve(trimmed);
-    if (seen.has(normalized) || !existsSync(normalized)) continue;
-    seen.add(normalized);
-    paths.push(normalized);
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    sources.push(trimmed);
+  };
+
+  // These paths are discovered by Hermes rather than explicitly trusted in
+  // configuration, so keep the local existence check before forwarding them.
+  if (OWN_EXTENSION_PATH && existsSync(OWN_EXTENSION_PATH)) append(OWN_EXTENSION_PATH);
+  for (const source of config.childExtensionPaths ?? []) append(source);
+  for (const adapterPath of detectAuthAdapterExtensionPaths()) {
+    const normalized = resolve(adapterPath);
+    if (existsSync(normalized)) append(normalized);
   }
-  return paths;
+  return sources;
 }
 
 function appendOwnExtensionArgs(args: string[], config: ChildLlmConfig): void {
   // Skip all packages from settings.json (--no-extensions) — the subprocess
-  // loads only Hermes and explicitly required provider adapters.
+  // loads only Hermes and explicitly trusted provider/auth sources. Leave
+  // configured sources untouched so Pi's -e resolver owns path expansion and
+  // package-source handling exactly as it does for normal CLI invocations.
   args.push("--no-extensions");
-  for (const extensionPath of childExtensionPaths(config)) {
-    args.push("-e", extensionPath);
+  for (const extensionSource of childExtensionSources(config)) {
+    args.push("-e", extensionSource);
   }
 }
 

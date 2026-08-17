@@ -56,7 +56,7 @@ export interface MemoryConfig {
   llmModelOverride?: string;
   /** Override thinking level used for child pi -p subprocess LLM calls. Default: unset */
   llmThinkingOverride?: ThinkingLevel;
-  /** Extra extension entry paths required by child Pi processes, such as provider auth adapters. */
+  /** Trusted Pi extension sources required by child processes, such as custom providers or auth adapters. */
   childExtensionPaths?: string[];
   /** Strategy when memory is full. Default: auto-consolidate */
   memoryOverflowStrategy?: MemoryOverflowStrategy;
