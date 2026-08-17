@@ -88,7 +88,12 @@ export interface MemoryConfig {
   autoConsolidationWarnOnFailure: boolean;
   /** Inject pinned STANDING.md instructions into every session. Default: true */
   standingInstructionsEnabled: boolean;
-  /** Keep sessions from the last N days; older sessions are pruned on startup. Default: 180 */
+  /**
+   * Session retention window in days. A positive value opts in to pruning
+   * sessions (and their messages) older than the window on startup; `0`/omitted
+   * disables pruning so no existing searchable history is silently deleted.
+   * Default: 0 (disabled).
+   */
   sessionRetentionDays?: number;
 }
 

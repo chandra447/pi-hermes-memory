@@ -138,7 +138,10 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (typeof parsed.failureInjectionMaxAgeDays === "number") config.failureInjectionMaxAgeDays = parsed.failureInjectionMaxAgeDays;
       if (typeof parsed.failureInjectionMaxEntries === "number") config.failureInjectionMaxEntries = parsed.failureInjectionMaxEntries;
       if (typeof parsed.nudgeToolCalls === "number") config.nudgeToolCalls = parsed.nudgeToolCalls;
-      if (typeof parsed.sessionRetentionDays === "number" && Number.isFinite(parsed.sessionRetentionDays) && parsed.sessionRetentionDays > 0) {
+      // Accept any finite number >= 0 so a user can both opt in (positive value)
+      // and explicitly disable retention with 0. Invalid/negative values are
+      // ignored, keeping the current (default) semantics.
+      if (typeof parsed.sessionRetentionDays === "number" && Number.isFinite(parsed.sessionRetentionDays) && parsed.sessionRetentionDays >= 0) {
         config.sessionRetentionDays = parsed.sessionRetentionDays;
       }
       if (typeof parsed.standingInstructionsEnabled === "boolean") config.standingInstructionsEnabled = parsed.standingInstructionsEnabled;

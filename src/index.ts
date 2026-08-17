@@ -28,7 +28,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
 import { DatabaseManager } from "./store/db.js";
-import { indexSession, upsertSessionFileMetadata, pruneEphemeralReviewSessions, pruneOldSessions } from "./store/session-indexer.js";
+import { indexSession, upsertSessionFileMetadata, pruneEphemeralReviewSessions, pruneOldSessions, retentionCutoffMs } from "./store/session-indexer.js";
 import { runRecoveryMaintenance } from "./store/recovery-maintenance.js";
 import { scheduleSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-backfill.js";
 import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-live-index.js";
@@ -253,6 +253,9 @@ export default function (pi: ExtensionAPI) {
             console.info(message);
           }
         },
+        // Exclude files older than the retention cutoff so sessions pruned by
+        // retention are never re-indexed and never schedule another backfill.
+        retentionCutoffMs: retentionCutoffMs(config.sessionRetentionDays),
       });
     }
   });
