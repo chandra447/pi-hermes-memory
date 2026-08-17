@@ -40,6 +40,16 @@ export const DEFAULT_OVERFLOW_GRACE_MS = 180000;
 export const DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS = 7;
 export const DEFAULT_FAILURE_INJECTION_MAX_ENTRIES = 5;
 
+// ─── Session retention defaults ───
+/**
+ * Default session retention window in days. `0` means retention pruning is
+ * DISABLED by default -- existing searchable session history is never silently
+ * deleted. Users opt in by setting `sessionRetentionDays` to a positive value
+ * in their config; setting it back to `0` (or omitting it) disables pruning
+ * (see #183).
+ */
+export const DEFAULT_SESSION_RETENTION_DAYS = 0;
+
 // ─── File names ───
 export const MEMORY_FILE = "MEMORY.md";
 export const USER_FILE = "USER.md";

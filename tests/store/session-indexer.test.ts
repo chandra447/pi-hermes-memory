@@ -18,6 +18,7 @@ import {
   parseSessionManagerSnapshot,
   truncateMessageContent,
   upsertSessionFileMetadata,
+  pruneOldSessions,
 } from '../../src/store/session-indexer.js';
 import { DEFAULT_MAX_MESSAGE_CONTENT_LENGTH } from '../../src/constants.js';
 import { parseSessionFile, type ParsedSession } from '../../src/store/session-parser.js';
@@ -561,6 +562,131 @@ describe('session-indexer', () => {
       assert.strictEqual(result.sessionsProcessed, 0);
       assert.strictEqual(result.sessionsSkipped, 1);
       assert.strictEqual(result.reachedLimit, undefined);
+    });
+  });
+
+  describe('retention and backfill alignment', () => {
+    /** Write a session JSONL file and force its mtime to `ms` (ms epoch). */
+    function writeJsonlSessionAt(sessionsDir: string, sessionId: string, ms: number): string {
+      const filePath = path.join(sessionsDir, 'project-a', `${sessionId}.jsonl`);
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      const lines = [
+        JSON.stringify({ type: 'session', id: sessionId, timestamp: new Date(ms).toISOString(), cwd: `/test/${sessionId}` }),
+        JSON.stringify({ type: 'message', id: `${sessionId}-m1`, parentId: null, timestamp: new Date(ms + 1000).toISOString(), message: { role: 'user', content: [{ type: 'text', text: `Hello ${sessionId}` }], timestamp: Date.now() } }),
+      ];
+      fs.writeFileSync(filePath, lines.join('\n'));
+      fs.utimesSync(filePath, new Date(ms), new Date(ms));
+      return filePath;
+    }
+
+    const DAY = 24 * 60 * 60 * 1000;
+    const now = () => Date.now();
+    const cutoffFor = (days: number) => now() - days * DAY;
+
+    it('does not re-index a session file outside the retention cutoff after pruning', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      // A file last modified 60 days ago; retention window of 30 days => expired.
+      writeJsonlSessionAt(sessionsDir, 's1', cutoffFor(60));
+      const cutoff = cutoffFor(30);
+
+      // Fresh index (no cutoff) mirrors the pre-retention state, then retention
+      // pruning removes the session row; the on-disk file stays.
+      indexAllSessions(dbManager, sessionsDir);
+      const pruned = pruneOldSessions(dbManager, 30);
+      assert.strictEqual(pruned.sessionsRemoved, 1);
+      assert.strictEqual(dbManager.getStats().sessions, 0);
+
+      // A later startup backfill, given the same retention cutoff, must NOT
+      // re-queue the expired file -- otherwise the pruned session returns.
+      const result = indexChangedSessions(dbManager, sessionsDir, { retentionCutoffMs: cutoff });
+      assert.strictEqual(result.sessionsProcessed, 0);
+      assert.strictEqual(result.sessionsIndexed, 0);
+      assert.strictEqual(result.sessionsSkipped, 0);
+      assert.strictEqual(dbManager.getStats().sessions, 0);
+    });
+
+    it('does not schedule a startup backfill when only expired files remain', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSessionAt(sessionsDir, 's1', cutoffFor(60));
+      const cutoff = cutoffFor(30);
+      indexAllSessions(dbManager, sessionsDir);
+      pruneOldSessions(dbManager, 30);
+      touchBackfillTimestamp(dbManager);
+
+      // With every file outside the window, needsBackfill must be false so no
+      // backfill is scheduled on the next startup (no repeated re-indexing).
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date(), cutoff), false);
+    });
+
+    it('still indexes files within the retention cutoff even when others are expired', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSessionAt(sessionsDir, 'old', cutoffFor(60));
+      writeJsonlSessionAt(sessionsDir, 'fresh', now());
+      const cutoff = cutoffFor(30);
+
+      const result = indexChangedSessions(dbManager, sessionsDir, { retentionCutoffMs: cutoff });
+      // Only the fresh file is eligible; the expired one is skipped.
+      assert.strictEqual(result.sessionsProcessed, 1);
+      assert.strictEqual(result.sessionsIndexed, 1);
+      const stats = getSessionStats(dbManager);
+      assert.deepStrictEqual(stats.projects[0].sessions, 1); // only the retained session
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date(), cutoff), true);
+    });
+
+    it('prunes only sessions whose file mtime is outside the retention window', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSessionAt(sessionsDir, 'old', cutoffFor(60));
+      writeJsonlSessionAt(sessionsDir, 'recent', now());
+      indexAllSessions(dbManager, sessionsDir);
+
+      const pruned = pruneOldSessions(dbManager, 30);
+      // 'old' has an expired file mtime and is pruned; 'recent' has a fresh
+      // file mtime and is kept, even though both were indexed.
+      assert.strictEqual(pruned.sessionsRemoved, 1);
+      const stats = getSessionStats(dbManager);
+      assert.strictEqual(stats.totalSessions, 1);
+      const remaining = dbManager.getDb().prepare('SELECT id FROM sessions').all() as { id: string }[];
+      assert.deepStrictEqual(remaining.map((r) => r.id), ['recent']);
+    });
+  });
+
+  describe('pruneOldSessions', () => {
+    it('removes nothing when the database is empty', () => {
+      const result = pruneOldSessions(dbManager, 30);
+      assert.deepStrictEqual(result, { sessionsRemoved: 0, messagesRemoved: 0 });
+    });
+
+    it('removes sessions older than the retention window and their messages', () => {
+      indexSession(dbManager, createTestSession({ id: 'old', startedAt: '2020-01-01T00:00:00Z' }));
+      indexSession(dbManager, createTestSession({ id: 'recent', startedAt: new Date().toISOString() }));
+
+      const result = pruneOldSessions(dbManager, 30);
+      assert.strictEqual(result.sessionsRemoved, 1);
+      assert.strictEqual(result.messagesRemoved, 2); // old session has 2 messages
+
+      const stats = getSessionStats(dbManager);
+      assert.strictEqual(stats.totalSessions, 1);
+      assert.strictEqual(stats.totalMessages, 2);
+      const remaining = dbManager.getDb().prepare('SELECT id FROM sessions').all() as { id: string }[];
+      assert.deepStrictEqual(remaining.map((r) => r.id), ['recent']);
+    });
+
+    it('leaves sessions exactly at the retention boundary (not strictly older) untouched', () => {
+      const now = Date.now();
+      const justWithin = new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString(); // 10 days ago
+      indexSession(dbManager, createTestSession({ id: 'within', startedAt: justWithin }));
+
+      const result = pruneOldSessions(dbManager, 30);
+      assert.strictEqual(result.sessionsRemoved, 0);
+      assert.strictEqual(dbManager.getStats().sessions, 1);
+    });
+
+    it('is idempotent across repeated calls', () => {
+      indexSession(dbManager, createTestSession({ id: 'old', startedAt: '2020-01-01T00:00:00Z' }));
+
+      pruneOldSessions(dbManager, 30);
+      const again = pruneOldSessions(dbManager, 30);
+      assert.deepStrictEqual(again, { sessionsRemoved: 0, messagesRemoved: 0 });
     });
   });
 

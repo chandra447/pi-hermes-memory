@@ -32,6 +32,12 @@ export interface ScheduleSessionBackfillOptions {
   indexSessionsFn?: typeof indexChangedSessions;
   maxFilesToIndex?: number;
   touchBackfillTimestampFn?: typeof touchBackfillTimestamp;
+  /**
+   * Optional retention cutoff (ms epoch). Files older than this are excluded
+   * from the backfill file set so that sessions pruned by retention are not
+   * re-indexed and do not repeatedly schedule a startup backfill.
+   */
+  retentionCutoffMs?: number;
 }
 
 function formatBackfillResult(result: BulkIndexResult): string {
@@ -68,13 +74,14 @@ export function scheduleSessionBackfill(
   const indexSessionsFn = options.indexSessionsFn ?? indexChangedSessions;
   const maxFilesToIndex = options.maxFilesToIndex ?? SESSION_BACKFILL_MAX_FILES;
   const touchBackfillTimestampFn = options.touchBackfillTimestampFn ?? touchBackfillTimestamp;
+  const retentionCutoffMs = options.retentionCutoffMs ?? 0;
 
   if (state.inProgress) {
     return false;
   }
 
   try {
-    if (!needsBackfillFn(dbManager, sessionsDir)) {
+    if (!needsBackfillFn(dbManager, sessionsDir, undefined, retentionCutoffMs)) {
       return false;
     }
   } catch (err) {
@@ -90,7 +97,7 @@ export function scheduleSessionBackfill(
   state.promise = new Promise<void>((resolve) => {
     setTimeoutFn(() => {
       try {
-        const result = indexSessionsFn(dbManager, sessionsDir, { maxFilesToIndex });
+        const result = indexSessionsFn(dbManager, sessionsDir, { maxFilesToIndex, retentionCutoffMs });
         if (!result.reachedLimit) touchBackfillTimestampFn(dbManager);
         notifyBestEffort(options.notify, formatBackfillResult(result), result.errors.length > 0 || result.reachedLimit ? 'warning' : 'info');
       } catch (err) {

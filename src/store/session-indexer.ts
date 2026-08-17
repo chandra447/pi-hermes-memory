@@ -36,6 +36,25 @@ interface SessionFileMetadata {
 export interface IncrementalIndexOptions {
   projectDir?: string;
   maxFilesToIndex?: number;
+  /**
+   * Optional retention cutoff (ms epoch). JSONL session files whose mtime is
+   * strictly older than this cutoff are considered outside the retained window
+   * and are skipped entirely (not queued for indexing or counted as changed).
+   * This keeps incremental backfill aligned with session retention pruning:
+   * sessions pruned by pruneOldSessions() are never re-indexed on a later
+   * startup. Omit/0 to index every file (backwards-compatible default).
+   */
+  retentionCutoffMs?: number;
+}
+
+/**
+ * True when a session JSONL file's last-modified time falls within the
+ * retention window (mtime >= cutoff). Files older than the cutoff are treated
+ * as expired and are ineligible for backfill/indexing so that pruned sessions
+ * are not re-surfaced.
+ */
+function isWithinRetention(mtimeMs: number, retentionCutoffMs: number | undefined): boolean {
+  return !retentionCutoffMs || mtimeMs >= retentionCutoffMs;
 }
 
 export function truncateMessageContent(
@@ -354,6 +373,12 @@ export function indexChangedSessions(
   for (const file of files) {
     try {
       const metadata = getSessionFileMetadata(file);
+      if (!isWithinRetention(metadata.mtimeMs, options.retentionCutoffMs)) {
+        // Outside the retained window (e.g. pruned by pruneOldSessions):
+        // never re-queue it for indexing, so a pruned session does not come
+        // back on the next startup backfill.
+        continue;
+      }
       if (storedSessionFileMatches(dbManager, metadata)) {
         result.sessionsSkipped++;
         continue;
@@ -407,18 +432,35 @@ function isRecentBackfillTimestamp(value: string | null, nowMs: number): boolean
  * The check stays cheap: it compares file counts and stored file size/mtime
  * metadata. Full JSONL parsing is left to the scheduled incremental backfill.
  */
-export function needsBackfill(dbManager: DatabaseManager, sessionsDir: string, now = new Date()): boolean {
+export function needsBackfill(
+  dbManager: DatabaseManager,
+  sessionsDir: string,
+  now = new Date(),
+  retentionCutoffMs = 0,
+): boolean {
   const db = dbManager.getDb();
   const files = getSessionFiles(sessionsDir);
   const indexed = db.prepare('SELECT COUNT(*) as count FROM sessions').get() as { count: number };
 
   if (files.length > indexed.count) {
-    return true;
+    // Only files still inside the retention window can demand a backfill;
+    // expired (pruned) files must not.
+    const retainedFiles = files.filter((file) => {
+      try {
+        return isWithinRetention(getSessionFileMetadata(file).mtimeMs, retentionCutoffMs);
+      } catch {
+        return false;
+      }
+    });
+    if (retainedFiles.length > indexed.count) {
+      return true;
+    }
   }
 
   for (const file of files) {
     try {
       const metadata = getSessionFileMetadata(file);
+      if (!isWithinRetention(metadata.mtimeMs, retentionCutoffMs)) continue;
       if (storedSessionFileMatches(dbManager, metadata)) continue;
       return true;
     } catch {
@@ -471,5 +513,85 @@ export function getSessionStats(dbManager: DatabaseManager): {
     totalSessions: totals.sessions,
     totalMessages: totals.messages,
     projects,
+  };
+}
+
+/**
+ * Compute the retention cutoff (ms epoch) from a retention window in days.
+ * Returns 0 (no cutoff) when retention is undefined/zero/disabled.
+ */
+export function retentionCutoffMs(retentionDays: number | undefined): number {
+  if (!retentionDays || retentionDays <= 0) return 0;
+  return Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+}
+
+/**
+ * Delete sessions outside the retention window, along with their messages,
+ * to bound the growth of the session index database (see #183).
+ *
+ * A session is eligible for pruning when its session file's last-mod time is
+ * older than the window (falling back to started_at when no file metadata
+ * exists). This deliberately mirrors the backfill eligibility check in
+ * `needsBackfill`/`indexChangedSessions` (also keyed to file mtime), so a
+ * pruned session's on-disk JSONL file is never re-indexed by a later startup
+ * and never re-triggers a backfill. Retention and backfill therefore agree on
+ * the same eligible file set.
+ *
+ * `messages` and `session_files` reference `sessions`, but only `session_files`
+ * is declared `ON DELETE CASCADE`. Orphaned `messages` rows are deleted
+ * explicitly first so a `PRAGMA foreign_keys`-enabled delete never trips a
+ * FK constraint, and so an accurate `messagesRemoved` count is reported.
+ *
+ * Returns the number of sessions and messages removed.
+ */
+export function pruneOldSessions(
+  dbManager: DatabaseManager,
+  retentionDays: number,
+): { sessionsRemoved: number; messagesRemoved: number } {
+  const db = dbManager.getDb();
+  const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const cutoffIso = new Date(cutoffMs).toISOString();
+
+  // A session is pruned when it falls outside the retention window. We use the
+  // same signal the backfill eligibility uses -- the session file's last-mod
+  // time -- so that a pruned session's on-disk JSONL file is not re-indexed on
+  // a later startup. Sessions without file metadata (e.g. indexed before files
+  // were tracked) fall back to started_at. Both must be strictly older than
+  // the cutoff.
+  const eligibleSessionIds = db.prepare(`
+    SELECT s.id
+    FROM sessions s
+    LEFT JOIN session_files sf ON sf.session_id = s.id
+    WHERE
+      (sf.path IS NOT NULL AND sf.mtime_ms < ?)
+      OR (sf.path IS NULL AND s.started_at < ?)
+  `).all(cutoffMs, cutoffIso) as Array<{ id: string }>;
+
+  if (eligibleSessionIds.length === 0) {
+    return { sessionsRemoved: 0, messagesRemoved: 0 };
+  }
+
+  // Count messages upfront because SQLite does not surface cascade/orphan
+  // counts from DELETE ... RETURNING across tables.
+  const messageCount = db.prepare(
+    `SELECT COUNT(*) as cnt FROM messages WHERE session_id IN (${eligibleSessionIds.map(() => '?').join(',')})`,
+  ).get(...eligibleSessionIds.map((r) => r.id)) as { cnt: number };
+
+  const prune = () => {
+    const delMessages = db.prepare(
+      `DELETE FROM messages WHERE session_id IN (${eligibleSessionIds.map(() => '?').join(',')})`,
+    ).run(...eligibleSessionIds.map((r) => r.id));
+    const delSessions = db.prepare(
+      `DELETE FROM sessions WHERE id IN (${eligibleSessionIds.map(() => '?').join(',')})`,
+    ).run(...eligibleSessionIds.map((r) => r.id));
+    return { messagesRemoved: delMessages.changes, sessionsRemoved: delSessions.changes };
+  };
+
+  const result = db.transaction ? db.transaction(prune)() : prune();
+  // Fall back to the pre-counted values if the transaction changed nothing
+  // unexpectedly (defensive; DELETE should always affect the counted rows).
+  return {
+    sessionsRemoved: result.sessionsRemoved || eligibleSessionIds.length,
+    messagesRemoved: result.messagesRemoved || messageCount.cnt,
   };
 }
