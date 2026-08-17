@@ -41,6 +41,9 @@ describe("loadConfig", () => {
     assert.strictEqual(config.llmModelOverride, undefined);
     assert.strictEqual(config.llmThinkingOverride, undefined);
     assert.strictEqual(config.standingInstructionsEnabled, true);
+    // Retention is disabled by default so existing history is never silently
+    // deleted; a positive value opts in, 0/omitted disables.
+    assert.strictEqual(config.sessionRetentionDays, 0);
   });
 
   it("honors a configured consolidationTimeoutMs, warning only when it is below the default", () => {
@@ -104,6 +107,24 @@ describe("loadConfig", () => {
     // Unset values use defaults
     assert.strictEqual(config.userCharLimit, 5000);
     assert.strictEqual(config.reviewEnabled, true);
+  });
+
+  it("parses sessionRetentionDays as opt-in, accepting explicit 0 to disable", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+
+    // Positive value opts in to retention pruning.
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ sessionRetentionDays: 45 }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).sessionRetentionDays, 45);
+
+    // Explicit 0 disables retention (even after a prior positive value).
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ sessionRetentionDays: 0 }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).sessionRetentionDays, 0);
+
+    // Negative / non-numeric values are ignored, keeping the (disabled) default.
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ sessionRetentionDays: -5 }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).sessionRetentionDays, 0);
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ sessionRetentionDays: "30" }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).sessionRetentionDays, 0);
   });
 
   it("handles partial config (missing keys use defaults)", () => {

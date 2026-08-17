@@ -42,10 +42,13 @@ export const DEFAULT_FAILURE_INJECTION_MAX_ENTRIES = 5;
 
 // ─── Session retention defaults ───
 /**
- * Keep sessions from the last N days. Older sessions are pruned on startup to
- * bound the size of the session index database (see #183).
+ * Default session retention window in days. `0` means retention pruning is
+ * DISABLED by default -- existing searchable session history is never silently
+ * deleted. Users opt in by setting `sessionRetentionDays` to a positive value
+ * in their config; setting it back to `0` (or omitting it) disables pruning
+ * (see #183).
  */
-export const DEFAULT_SESSION_RETENTION_DAYS = 180;
+export const DEFAULT_SESSION_RETENTION_DAYS = 0;
 
 // ─── File names ───
 export const MEMORY_FILE = "MEMORY.md";
