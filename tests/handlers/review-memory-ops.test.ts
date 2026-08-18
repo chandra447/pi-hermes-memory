@@ -63,6 +63,35 @@ describe("buildDirectReviewCompletionOptions", () => {
     assert.strictEqual(off.reasoning, undefined);
     assert.strictEqual(nonReasoning.reasoning, undefined);
   });
+
+  it("forwards llmThinkingOverride max as the direct completion reasoning option", async () => {
+    const modelRegistry = {
+      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "sk-test" }),
+      getAll: () => [mockModel(true)],
+      getAvailable: () => [mockModel(true)],
+    };
+    let reasoning: unknown;
+    const complete = async (_model: unknown, _request: unknown, options: { reasoning?: string }) => {
+      reasoning = options.reasoning;
+      return {
+        stopReason: "stop",
+        content: [{ type: "text", text: JSON.stringify({ operations: [] }) }],
+      };
+    };
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(true), modelRegistry } as never,
+      null as never,
+      null,
+      { userPrompt: "u", systemPrompt: "s", config: { llmThinkingOverride: "max" } },
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(reasoning, "max");
+  });
 });
 
 describe("provider auth resolution", () => {

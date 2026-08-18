@@ -306,6 +306,13 @@ describe("buildChildPiPromptArgs", () => {
     );
   });
 
+  it("forwards llmThinkingOverride max as --thinking max", () => {
+    assert.deepStrictEqual(
+      buildChildPiPromptArgs("hello", { llmThinkingOverride: "max" }, []),
+      ["-p", "--no-session", "--thinking", "max", ...EXT_ARGS, "hello"],
+    );
+  });
+
   it("ignores missing inherited extension paths", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", {}, ["-e", "src/index.ts"]),
