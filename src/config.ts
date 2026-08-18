@@ -21,7 +21,7 @@ import { AGENT_ROOT, normalizeConfiguredMemoryDir, normalizeProjectsMemoryDir } 
 const MEMORY_OVERFLOW_STRATEGIES: readonly MemoryOverflowStrategy[] = ["auto-consolidate", "reject", "fifo-evict"];
 const SESSION_SEARCH_VARIANTS: readonly SessionSearchVariant[] = ["legacy", "anchors"];
 const REVIEW_TRANSPORTS: readonly ReviewTransport[] = ["direct", "subprocess"];
-const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 function isReviewTransport(value: unknown): value is ReviewTransport {
   return typeof value === "string" && REVIEW_TRANSPORTS.includes(value as ReviewTransport);
