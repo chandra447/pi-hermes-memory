@@ -21,6 +21,76 @@ import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
 import { runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult } from "./review-memory-ops.js";
 
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
+
+export function isSubagentSession(ctx: unknown): boolean {
+  if (
+    process.env.PI_SUBAGENT === "1" ||
+    process.env.PI_SUBAGENT === "true" ||
+    process.env.PI_IS_SUBAGENT === "1" ||
+    process.env.PI_IS_SUBAGENT === "true" ||
+    process.env.PI_AGENT_SUBAGENT === "1"
+  ) {
+    return true;
+  }
+
+  if (!ctx || typeof ctx !== "object") {
+    return false;
+  }
+
+  const context = ctx as Record<string, unknown>;
+
+  if (context.isSubagent === true || context.is_subagent === true || context.isSubagentSession === true) {
+    return true;
+  }
+
+  if (typeof context.subagentType === "string" && context.subagentType.length > 0) {
+    return true;
+  }
+
+  if (context.sessionMetadata && typeof context.sessionMetadata === "object") {
+    const meta = context.sessionMetadata as Record<string, unknown>;
+    if (meta.isSubagent === true || meta.is_subagent === true || meta.isSubagentSession === true) {
+      return true;
+    }
+    if (typeof meta.subagentType === "string" && meta.subagentType.length > 0) {
+      return true;
+    }
+    if (typeof meta.parentSessionId === "string" && meta.parentSessionId.length > 0) {
+      return true;
+    }
+  }
+
+  const sessionManager = context.sessionManager as Record<string, unknown> | undefined;
+  if (sessionManager && typeof sessionManager === "object") {
+    if (sessionManager.isSubagent === true || sessionManager.is_subagent === true) {
+      return true;
+    }
+    if (typeof sessionManager.isSubagentSession === "function") {
+      try {
+        if ((sessionManager.isSubagentSession as () => boolean)()) return true;
+      } catch {}
+    }
+    if (typeof sessionManager.getHeader === "function") {
+      try {
+        const header = (sessionManager.getHeader as () => Record<string, unknown> | null)();
+        if (header && typeof header === "object") {
+          if (header.isSubagent === true || header.is_subagent === true) {
+            return true;
+          }
+          if (typeof header.parentSessionId === "string" && header.parentSessionId.length > 0) {
+            return true;
+          }
+          if (typeof header.subagentType === "string" && header.subagentType.length > 0) {
+            return true;
+          }
+        }
+      } catch {}
+    }
+  }
+
+  return false;
+}
+
 export interface BackgroundReviewOptions {
   dbManager?: DatabaseManager | null;
   projectName?: ProjectNameRef;
@@ -146,13 +216,16 @@ export function setupBackgroundReview(
   let userTurnCount = 0;
   let reviewInProgress = false;
 
-  pi.on("message_end", async (event, _ctx) => {
+  pi.on("message_end", async (event, ctx) => {
+    if (isSubagentSession(ctx)) return;
     if (event.message.role === "user") {
       userTurnCount++;
     }
   });
 
   pi.on("turn_end", async (event, ctx) => {
+    if (isSubagentSession(ctx)) return;
+
     turnsSinceReview++;
 
     if (!config.reviewEnabled) return;

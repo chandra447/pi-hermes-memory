@@ -272,6 +272,44 @@ describe('session-search', () => {
     it('should return empty for blank queries', () => {
       assert.deepStrictEqual(searchSessions(dbManager, '   '), []);
     });
+
+    it('should exclude subagent sessions by default', () => {
+      indexSession(dbManager, createTestSession({ id: 'primary-session', messages: [
+        { id: 'p-1', role: 'user', content: 'Debugging database connection timeout in postgres', timestamp: '2026-05-03T00:01:00Z' },
+      ] }));
+      indexSession(dbManager, createTestSession({ id: 'subagent-session', isSubagent: true, messages: [
+        { id: 'sub-1', role: 'user', content: 'Subagent internal task for database connection timeout', timestamp: '2026-05-03T00:02:00Z' },
+      ] }));
+
+      const results = searchSessions(dbManager, 'database connection timeout');
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].sessionId, 'primary-session');
+    });
+
+    it('should include subagent sessions when includeSubagents is true', () => {
+      indexSession(dbManager, createTestSession({ id: 'primary-session', messages: [
+        { id: 'p-1', role: 'user', content: 'Debugging database connection timeout in postgres', timestamp: '2026-05-03T00:01:00Z' },
+      ] }));
+      indexSession(dbManager, createTestSession({ id: 'subagent-session', isSubagent: true, messages: [
+        { id: 'sub-1', role: 'user', content: 'Subagent internal task for database connection timeout', timestamp: '2026-05-03T00:02:00Z' },
+      ] }));
+
+      const results = searchSessions(dbManager, 'database connection timeout', { includeSubagents: true });
+      assert.strictEqual(results.length, 2);
+    });
+
+    it('should filter only subagent sessions when isSubagent is true', () => {
+      indexSession(dbManager, createTestSession({ id: 'primary-session', messages: [
+        { id: 'p-1', role: 'user', content: 'Debugging database connection timeout in postgres', timestamp: '2026-05-03T00:01:00Z' },
+      ] }));
+      indexSession(dbManager, createTestSession({ id: 'subagent-session', isSubagent: true, messages: [
+        { id: 'sub-1', role: 'user', content: 'Subagent internal task for database connection timeout', timestamp: '2026-05-03T00:02:00Z' },
+      ] }));
+
+      const results = searchSessions(dbManager, 'database connection timeout', { isSubagent: true });
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].sessionId, 'subagent-session');
+    });
   });
 
   describe('getIndexedMessageCount', () => {

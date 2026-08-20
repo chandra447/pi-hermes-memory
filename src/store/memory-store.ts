@@ -156,14 +156,9 @@ export class MemoryStore {
     }
 
     // Deduplicate preserving order
-    // Capture frozen snapshot for system prompt injection
+    // Capture snapshot for system prompt injection and context preview
     // Strip metadata comments — the LLM doesn't need to see timestamps
-    const strippedMemory = this.memoryEntries.map((e) => this.stripMetadata(e));
-    const strippedUser = this.userEntries.map((e) => this.stripMetadata(e));
-    this.snapshot = {
-      memory: this.renderBlock("memory", strippedMemory),
-      user: this.renderBlock("user", strippedUser),
-    };
+    this.updateSnapshot();
   }
 
   // ─── CRUD ───
@@ -578,6 +573,13 @@ export class MemoryStore {
   }
 
   /**
+   * Snapshot of memory and user notes for system prompt injection and preview.
+   */
+  getSnapshot(): MemorySnapshot {
+    return { ...this.snapshot };
+  }
+
+  /**
    * All failure entries (no age filter), metadata stripped.
    * Used by consolidation, which must consider the full file size —
    * unlike getFailureEntries(), which filters by age for injection.
@@ -600,6 +602,15 @@ export class MemoryStore {
   }
 
   // ─── Internal helpers ───
+
+  private updateSnapshot(): void {
+    const strippedMemory = this.memoryEntries.map((e) => this.stripMetadata(e));
+    const strippedUser = this.userEntries.map((e) => this.stripMetadata(e));
+    this.snapshot = {
+      memory: this.renderBlock("memory", strippedMemory),
+      user: this.renderBlock("user", strippedUser),
+    };
+  }
 
   /**
    * Encode metadata (created, lastReferenced) as an HTML comment appended to entry text.
@@ -782,6 +793,7 @@ export class MemoryStore {
 
     this.setEntries(target, [...new Set(state.entries)]);
     this.fileFingerprints[filePath] = state.fingerprint;
+    this.updateSnapshot();
   }
 
   /**
@@ -797,6 +809,7 @@ export class MemoryStore {
     const state = await this.readFileState(storagePath);
     this.setEntries(target, [...new Set(state.entries)]);
     this.fileFingerprints[storagePath] = state.fingerprint;
+    this.updateSnapshot();
 
     let finalized = result;
     if (result.success) {
@@ -857,6 +870,7 @@ export class MemoryStore {
           const state = await this.readFileState(storagePath);
           this.setEntries(target, [...new Set(state.entries)]);
           this.fileFingerprints[storagePath] = state.fingerprint;
+          this.updateSnapshot();
           if (!(error instanceof ExternalMemoryWriteConflict)) throw error;
           if (attempt >= MAX_EXTERNAL_WRITE_RETRIES) {
             return await this.finalizeTargetMutation(target, storagePath, {
@@ -884,6 +898,7 @@ export class MemoryStore {
     // Use the memory directory for temp files so rename stays on the same device
     const tmpDir = await fs.mkdtemp(path.join(path.dirname(filePath), ".tmp-"));
     const tmpPath = path.join(tmpDir, "write.tmp");
+    let recoveryPath: string | null = null;
 
     try {
       await fs.writeFile(tmpPath, content, "utf-8");
@@ -903,7 +918,7 @@ export class MemoryStore {
           throw error;
         }
       } else {
-        const recoveryPath = this.recoveryPathFor(filePath);
+        recoveryPath = this.recoveryPathFor(filePath);
         const publishedIdentity = await this.fileIdentity(tmpPath);
         try {
           await fs.rename(filePath, recoveryPath);
@@ -968,6 +983,11 @@ export class MemoryStore {
         this.fileFingerprints[filePath] = publishedState.fingerprint;
         throw new ExternalMemoryWriteConflict();
       }
+
+      if (recoveryPath) {
+        try { await fs.unlink(recoveryPath); } catch { /* ignore */ }
+      }
+
       // Enforce the cap again after publishing the displaced snapshot. An
       // individual source file can be larger than the entire recovery budget.
       await this.pruneRecoveryFiles(filePath);

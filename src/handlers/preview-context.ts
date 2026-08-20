@@ -68,7 +68,7 @@ export function registerPreviewContextCommand(
       const lines: string[] = [];
       lines.push("");
       lines.push("  ╔══════════════════════════════════════════════╗");
-      lines.push("  ║        👀 Injected Context Preview          ║");
+      lines.push("  ║        Injected Context Preview             ║");
       lines.push("  ╚══════════════════════════════════════════════╝");
       lines.push("");
       lines.push("  This is the memory context appended to the system prompt.");

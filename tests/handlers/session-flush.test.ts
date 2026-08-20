@@ -650,4 +650,38 @@ describe("direct transport", () => {
     assert.equal(directCalls.length, 0, "subprocess transport must not invoke direct completion");
     assert.equal(mockPi.execCalls.length, 1);
   });
+
+  // ── Subagent isolation tests (US4 / T023) ──────────────────────────
+
+  describe("subagent isolation", () => {
+    it("bypasses session_before_compact when context indicates subagent", async () => {
+      const config = defaultConfig();
+      setupSessionFlush(mockPi.pi, mockStore, null, config);
+
+      await emitUserTurns(mockPi.handlers, 8);
+
+      const subagentCtx = {
+        sessionManager: { getBranch: () => mockBranch(8) },
+        isSubagent: true,
+      };
+      await emit(mockPi.handlers, "session_before_compact", { signal: undefined }, subagentCtx);
+
+      assert.equal(mockPi.execCalls.length, 0, "subagent compact must not flush memories");
+    });
+
+    it("bypasses session_shutdown when context indicates subagent", async () => {
+      const config = defaultConfig();
+      setupSessionFlush(mockPi.pi, mockStore, null, config);
+
+      await emitUserTurns(mockPi.handlers, 8);
+
+      const subagentCtx = {
+        sessionManager: { getBranch: () => mockBranch(8) },
+        subagentType: "general-purpose",
+      };
+      await emit(mockPi.handlers, "session_shutdown", {}, subagentCtx);
+
+      assert.equal(mockPi.execCalls.length, 0, "subagent shutdown must not flush memories");
+    });
+  });
 });

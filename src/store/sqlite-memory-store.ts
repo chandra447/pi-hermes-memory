@@ -80,6 +80,17 @@ export interface SqliteMemoryRemoveOptions {
   project?: string | null;
 }
 
+export interface SqliteMemoryReplaceOptions {
+  content: string;
+  target: 'memory' | 'user' | 'failure';
+  project?: string | null;
+  category?: MemoryCategory | null;
+  failureReason?: string | null;
+  toolState?: string | null;
+  correctedTo?: string | null;
+  lastReferenced?: string | null;
+}
+
 export interface MarkdownMemoryReconcileResult {
   inserted: number;
   existing: number;
@@ -533,30 +544,21 @@ export function reconcileMarkdownFailureScopes(
 }
 
 /**
- * Best-effort substring replacement for SQLite-backed memory sync.
- * Updates all matches in the scoped slice to recover from prior duplicate rows.
+ * Exact-match replacement for SQLite-backed memory sync.
+ * Updates exact content matches in the scoped slice to prevent multi-row corruption.
  */
 export function replaceSyncedMemories(
   dbManager: DatabaseManager,
   oldText: string,
-  updates: {
-    content: string;
-    target: 'memory' | 'user' | 'failure';
-    project?: string | null;
-    category?: MemoryCategory | null;
-    failureReason?: string | null;
-    toolState?: string | null;
-    correctedTo?: string | null;
-    lastReferenced?: string | null;
-  },
+  updates: SqliteMemoryReplaceOptions,
 ): SqliteMemoryUpdateResult {
   const db = dbManager.getDb();
   const normalizedOldText = normalizeMemoryLookupText(oldText);
   if (!normalizedOldText) return { matched: 0, updated: 0, entries: [] };
   const params: unknown[] = [];
-  const conditions = buildScopeConditions(params, updates.target, updates.project ?? undefined);
-  conditions.push(`content LIKE ? ESCAPE '\\'`);
-  params.push(`%${escapeLikePattern(normalizedOldText)}%`);
+  const conditions = buildScopeConditions(params, updates.target, updates.project);
+  conditions.push('content = ?');
+  params.push(normalizedOldText.trim());
 
   const rows = db.prepare(`
     SELECT ${MEMORY_SELECT_COLUMNS}
@@ -613,8 +615,8 @@ export function replaceSyncedMemories(
 }
 
 /**
- * Best-effort substring removal for SQLite-backed memory sync.
- * Deletes all matches in the scoped slice to recover from prior duplicate rows.
+ * Exact-match removal for SQLite-backed memory sync.
+ * Deletes exact content matches in the scoped slice to prevent multi-row data loss.
  */
 export function removeSyncedMemories(
   dbManager: DatabaseManager,
@@ -625,9 +627,9 @@ export function removeSyncedMemories(
   const normalizedOldText = normalizeMemoryLookupText(oldText);
   if (!normalizedOldText) return { matched: 0, removed: 0 };
   const params: unknown[] = [];
-  const conditions = buildScopeConditions(params, options.target, options.project ?? undefined);
-  conditions.push(`content LIKE ? ESCAPE '\\'`);
-  params.push(`%${escapeLikePattern(normalizedOldText)}%`);
+  const conditions = buildScopeConditions(params, options.target, options.project);
+  conditions.push('content = ?');
+  params.push(normalizedOldText.trim());
 
   const matchingIds = db.prepare(`
     SELECT id
@@ -651,38 +653,14 @@ export function removeSyncedMemories(
 
 /**
  * Exact removal for Markdown entries whose full content is known.
- * Used for FIFO eviction cleanup, where substring matching could remove
- * unrelated SQLite mirror rows that merely contain the evicted text.
+ * Delegates to exact removal to ensure consistency across sync paths.
  */
 export function removeExactSyncedMemories(
   dbManager: DatabaseManager,
   content: string,
   options: SqliteMemoryRemoveOptions,
 ): SqliteMemoryRemoveResult {
-  const db = dbManager.getDb();
-  const params: unknown[] = [];
-  const conditions = buildScopeConditions(params, options.target, options.project ?? undefined);
-  conditions.push('content = ?');
-  params.push(content.trim());
-
-  const matchingIds = db.prepare(`
-    SELECT id
-    FROM memories
-    WHERE ${conditions.join(' AND ')}
-  `).all(...params) as Array<{ id: number }>;
-
-  if (matchingIds.length === 0) {
-    return { matched: 0, removed: 0 };
-  }
-
-  const deleteParams = matchingIds.map((row) => row.id);
-  const placeholders = deleteParams.map(() => '?').join(', ');
-  const result = db.prepare(`DELETE FROM memories WHERE id IN (${placeholders})`).run(...deleteParams);
-
-  return {
-    matched: matchingIds.length,
-    removed: result.changes,
-  };
+  return removeSyncedMemories(dbManager, content, options);
 }
 
 /**

@@ -22,6 +22,7 @@ import { collectMessageParts } from "./message-parts.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
 import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
+import { isSubagentSession } from "./background-review.js";
 
 function buildDirectFlushUserPrompt(
   store: MemoryStore,
@@ -65,7 +66,8 @@ export function setupSessionFlush(
   let userTurnCount = 0;
   const runDirect = deps.runDirectMemoryCompletion ?? runDirectMemoryCompletion;
 
-  pi.on("message_end", async (event, _ctx) => {
+  pi.on("message_end", async (event, ctx) => {
+    if (isSubagentSession(ctx)) return;
     if (event.message.role === "user") userTurnCount++;
   });
 
@@ -75,6 +77,7 @@ export function setupSessionFlush(
     signal?: AbortSignal,
     timeoutMs = 30000,
   ): Promise<void> {
+    if (isSubagentSession(ctx)) return;
     if (userTurnCount < config.flushMinTurns) return;
 
     let entries;
@@ -137,6 +140,7 @@ export function setupSessionFlush(
 
   // Flush before compaction (can afford to wait)
   pi.on("session_before_compact", async (event, ctx) => {
+    if (isSubagentSession(ctx)) return;
     if (!config.flushOnCompact) return;
     await flush(ctx, event.signal, 30000);
   });
@@ -144,6 +148,7 @@ export function setupSessionFlush(
   // Flush before session shutdown. Pi awaits async session_shutdown handlers
   // before invalidating the session, so await the bounded flush here.
   pi.on("session_shutdown", async (_event, ctx) => {
+    if (isSubagentSession(ctx)) return;
     if (!config.flushOnShutdown) return;
     await flush(ctx, undefined, 10000);
   });

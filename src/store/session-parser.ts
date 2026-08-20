@@ -11,6 +11,7 @@ export interface ParsedSession {
   startedAt: string;
   endedAt: string | null;
   messages: ParsedMessage[];
+  isSubagent?: boolean;
 }
 
 /**
@@ -105,6 +106,7 @@ export function parseSessionFile(filePath: string): ParsedSession | null {
   let sessionId: string | null = null;
   let sessionCwd: string | null = null;
   let sessionTimestamp: string | null = null;
+  let isSubagent = false;
   const messages: ParsedMessage[] = [];
 
   for (const line of lines) {
@@ -120,6 +122,14 @@ export function parseSessionFile(filePath: string): ParsedSession | null {
         sessionId = entry.id ?? null;
         sessionCwd = entry.cwd ?? null;
         sessionTimestamp = entry.timestamp ?? null;
+        if (
+          entry.isSubagent === true ||
+          entry.is_subagent === true ||
+          (typeof entry.parentSessionId === 'string' && entry.parentSessionId.length > 0) ||
+          (typeof entry.subagentType === 'string' && entry.subagentType.length > 0)
+        ) {
+          isSubagent = true;
+        }
         break;
 
       case 'message': {
@@ -160,6 +170,7 @@ export function parseSessionFile(filePath: string): ParsedSession | null {
     startedAt: sessionTimestamp,
     endedAt: null, // We don't know when it ended from the JSONL
     messages,
+    isSubagent: isSubagent || undefined,
   };
 }
 

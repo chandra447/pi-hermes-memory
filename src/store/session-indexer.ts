@@ -68,8 +68,8 @@ function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): I
   const before = db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?').get(session.id) as { count: number };
 
   const insertSession = db.prepare(`
-    INSERT OR IGNORE INTO sessions (id, project, cwd, started_at, ended_at, message_count)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO sessions (id, project, cwd, started_at, ended_at, message_count, is_subagent)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
   const insertMsg = db.prepare(`
@@ -82,7 +82,8 @@ function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): I
     SET project = ?,
         cwd = ?,
         ended_at = COALESCE(?, ended_at),
-        message_count = (SELECT COUNT(*) FROM messages WHERE session_id = ?)
+        message_count = (SELECT COUNT(*) FROM messages WHERE session_id = ?),
+        is_subagent = COALESCE(?, is_subagent)
     WHERE id = ?
   `);
 
@@ -93,7 +94,8 @@ function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): I
       session.cwd,
       session.startedAt,
       session.endedAt,
-      session.messages.length
+      session.messages.length,
+      session.isSubagent ? 1 : 0
     );
 
     for (const msg of session.messages) {
@@ -107,7 +109,14 @@ function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): I
       );
     }
 
-    updateSession.run(session.project, session.cwd, session.endedAt, session.id, session.id);
+    updateSession.run(
+      session.project,
+      session.cwd,
+      session.endedAt,
+      session.id,
+      session.isSubagent !== undefined ? (session.isSubagent ? 1 : 0) : null,
+      session.id
+    );
   };
 
   if (db.transaction) {
@@ -205,6 +214,17 @@ export function parseSessionManagerSnapshot(sessionManager: SessionManagerSnapsh
     .map(parseMessageEntry)
     .filter((msg): msg is ParsedSession['messages'][number] => msg !== null);
 
+  const headerObj = header as Record<string, unknown>;
+  const sessionManagerObj = sessionManager as Record<string, unknown>;
+  const isSubagent = Boolean(
+    headerObj.isSubagent ||
+    headerObj.is_subagent ||
+    (typeof headerObj.parentSessionId === 'string' && headerObj.parentSessionId.length > 0) ||
+    (typeof headerObj.subagentType === 'string' && headerObj.subagentType.length > 0) ||
+    sessionManagerObj.isSubagent ||
+    sessionManagerObj.is_subagent
+  );
+
   return {
     id: header.id,
     project: header.cwd.split('/').pop() ?? header.cwd,
@@ -212,6 +232,7 @@ export function parseSessionManagerSnapshot(sessionManager: SessionManagerSnapsh
     startedAt: header.timestamp,
     endedAt: null,
     messages,
+    isSubagent: isSubagent || undefined,
   };
 }
 
