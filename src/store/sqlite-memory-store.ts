@@ -80,6 +80,17 @@ export interface SqliteMemoryRemoveOptions {
   project?: string | null;
 }
 
+export interface SqliteMemoryReplaceOptions {
+  content: string;
+  target: 'memory' | 'user' | 'failure';
+  project?: string | null;
+  category?: MemoryCategory | null;
+  failureReason?: string | null;
+  toolState?: string | null;
+  correctedTo?: string | null;
+  lastReferenced?: string | null;
+}
+
 export interface MarkdownMemoryReconcileResult {
   inserted: number;
   existing: number;
@@ -539,22 +550,13 @@ export function reconcileMarkdownFailureScopes(
 export function replaceSyncedMemories(
   dbManager: DatabaseManager,
   oldText: string,
-  updates: {
-    content: string;
-    target: 'memory' | 'user' | 'failure';
-    project?: string | null;
-    category?: MemoryCategory | null;
-    failureReason?: string | null;
-    toolState?: string | null;
-    correctedTo?: string | null;
-    lastReferenced?: string | null;
-  },
+  updates: SqliteMemoryReplaceOptions,
 ): SqliteMemoryUpdateResult {
   const db = dbManager.getDb();
   const normalizedOldText = normalizeMemoryLookupText(oldText);
   if (!normalizedOldText) return { matched: 0, updated: 0, entries: [] };
   const params: unknown[] = [];
-  const conditions = buildScopeConditions(params, updates.target, updates.project ?? undefined);
+  const conditions = buildScopeConditions(params, updates.target, updates.project);
   conditions.push('content = ?');
   params.push(normalizedOldText.trim());
 
@@ -625,7 +627,7 @@ export function removeSyncedMemories(
   const normalizedOldText = normalizeMemoryLookupText(oldText);
   if (!normalizedOldText) return { matched: 0, removed: 0 };
   const params: unknown[] = [];
-  const conditions = buildScopeConditions(params, options.target, options.project ?? undefined);
+  const conditions = buildScopeConditions(params, options.target, options.project);
   conditions.push('content = ?');
   params.push(normalizedOldText.trim());
 

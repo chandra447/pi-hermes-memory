@@ -98,21 +98,6 @@ export type MemoryCategory =
   | "convention"
   | "tool-quirk";
 
-export interface SqliteMemoryRemoveOptions {
-  target: "memory" | "user" | "failure" | "project";
-  project?: string | null;
-}
-
-export interface SqliteMemoryReplaceOptions {
-  target: "memory" | "user" | "failure" | "project";
-  project?: string | null;
-  category?: MemoryCategory | null;
-  failureReason?: string | null;
-  toolState?: string | null;
-  correctedTo?: string | null;
-  lastReferenced?: string | null;
-}
-
 export interface ValidatedCorrectionResult {
   hasActionableCorrection: boolean;
   directive: string;

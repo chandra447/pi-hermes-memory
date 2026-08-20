@@ -360,6 +360,88 @@ describe('sqlite-memory-store', () => {
       const all = getMemories(dbManager);
       assert.strictEqual(all.length, 0);
     });
+
+    it('removes global memory without touching identical project-scoped memory', () => {
+      addMemory(dbManager, 'shared configuration fact', 'memory', null);
+      addMemory(dbManager, 'shared configuration fact', 'memory', 'project-a');
+      addMemory(dbManager, 'shared configuration fact', 'memory', 'project-b');
+
+      const result = removeSyncedMemories(dbManager, 'shared configuration fact', {
+        target: 'memory',
+        project: null,
+      });
+
+      assert.strictEqual(result.matched, 1);
+      assert.strictEqual(result.removed, 1);
+      const globalEntries = getMemories(dbManager, { target: 'memory', project: null });
+      assert.strictEqual(globalEntries.length, 0, 'global entry must be removed');
+      const projectAEntries = getMemories(dbManager, { target: 'memory', project: 'project-a' });
+      assert.strictEqual(projectAEntries.length, 1, 'project-a entry must be preserved');
+      const projectBEntries = getMemories(dbManager, { target: 'memory', project: 'project-b' });
+      assert.strictEqual(projectBEntries.length, 1, 'project-b entry must be preserved');
+    });
+
+    it('removes project memory without touching identical global or sibling project memory', () => {
+      addMemory(dbManager, 'shared build step', 'memory', null);
+      addMemory(dbManager, 'shared build step', 'memory', 'project-a');
+      addMemory(dbManager, 'shared build step', 'memory', 'project-b');
+
+      const result = removeSyncedMemories(dbManager, 'shared build step', {
+        target: 'memory',
+        project: 'project-a',
+      });
+
+      assert.strictEqual(result.matched, 1);
+      assert.strictEqual(result.removed, 1);
+      const globalEntries = getMemories(dbManager, { target: 'memory', project: null });
+      assert.strictEqual(globalEntries.length, 1, 'global entry must be preserved');
+      const projectAEntries = getMemories(dbManager, { target: 'memory', project: 'project-a' });
+      assert.strictEqual(projectAEntries.length, 0, 'project-a entry must be removed');
+      const projectBEntries = getMemories(dbManager, { target: 'memory', project: 'project-b' });
+      assert.strictEqual(projectBEntries.length, 1, 'project-b entry must be preserved');
+    });
+
+    it('replaces global memory without touching identical project-scoped memory', () => {
+      addMemory(dbManager, 'deploy via docker', 'memory', null);
+      addMemory(dbManager, 'deploy via docker', 'memory', 'project-a');
+
+      const result = replaceSyncedMemories(dbManager, 'deploy via docker', {
+        content: 'deploy via kubernetes',
+        target: 'memory',
+        project: null,
+      });
+
+      assert.strictEqual(result.matched, 1);
+      assert.strictEqual(result.updated, 1);
+      const globalEntries = getMemories(dbManager, { target: 'memory', project: null });
+      assert.strictEqual(globalEntries.length, 1);
+      assert.strictEqual(globalEntries[0].content, 'deploy via kubernetes');
+
+      const projectAEntries = getMemories(dbManager, { target: 'memory', project: 'project-a' });
+      assert.strictEqual(projectAEntries.length, 1);
+      assert.strictEqual(projectAEntries[0].content, 'deploy via docker', 'project-a copy must remain unchanged');
+    });
+
+    it('replaces project memory without touching identical global memory', () => {
+      addMemory(dbManager, 'test runner jest', 'memory', null);
+      addMemory(dbManager, 'test runner jest', 'memory', 'project-a');
+
+      const result = replaceSyncedMemories(dbManager, 'test runner jest', {
+        content: 'test runner vitest',
+        target: 'memory',
+        project: 'project-a',
+      });
+
+      assert.strictEqual(result.matched, 1);
+      assert.strictEqual(result.updated, 1);
+      const globalEntries = getMemories(dbManager, { target: 'memory', project: null });
+      assert.strictEqual(globalEntries.length, 1);
+      assert.strictEqual(globalEntries[0].content, 'test runner jest', 'global copy must remain unchanged');
+
+      const projectAEntries = getMemories(dbManager, { target: 'memory', project: 'project-a' });
+      assert.strictEqual(projectAEntries.length, 1);
+      assert.strictEqual(projectAEntries[0].content, 'test runner vitest');
+    });
   });
 
   describe('searchMemories', () => {
