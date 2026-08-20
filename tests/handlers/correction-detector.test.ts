@@ -668,4 +668,83 @@ describe("setupCorrectionDetector handler", () => {
 
     assert.strictEqual(Object.keys(handlers).length, 0, "no handlers should be registered when disabled");
   });
+
+  describe("correction validation gating", () => {
+    it("does not call addFailure or notify when subprocess LLM reports nothing to save", async () => {
+      const pi = createMockPi({ code: 0, stdout: "Nothing to save.", stderr: "" });
+      const { store } = storeWithFailureTracking();
+      setupCorrectionDetector(pi, store as unknown as MemoryStore, null, config);
+
+      fireMessageEnd("user", "don't do that");
+      await fireTurnEnd(correctionBranch());
+
+      assert.strictEqual(execCalls.length, 1, "subprocess review should execute");
+      assert.strictEqual(store.getFailureCount(), 0, "addFailure must not be called on false positive review");
+      assert.strictEqual(notifyCalls.length, 0, "notify must not be called when nothing saved");
+    });
+
+    it("does not call addFailure or notify when subprocess LLM output is empty or non-zero", async () => {
+      const pi = createMockPi({ code: 1, stdout: "", stderr: "error" });
+      const { store } = storeWithFailureTracking();
+      setupCorrectionDetector(pi, store as unknown as MemoryStore, null, config);
+
+      fireMessageEnd("user", "don't do that");
+      await fireTurnEnd(correctionBranch());
+
+      assert.strictEqual(execCalls.length, 1);
+      assert.strictEqual(store.getFailureCount(), 0, "addFailure must not be called on failed subprocess execution");
+      assert.strictEqual(notifyCalls.length, 0);
+    });
+
+    it("does not call addFailure when direct completion applies 0 memories", async () => {
+      const pi = createMockPi();
+      const { store } = storeWithFailureTracking();
+      setupCorrectionDetector(
+        pi,
+        store as unknown as MemoryStore,
+        null,
+        directTransportConfig,
+        null,
+        null,
+        makeDirectDeps({ ok: true, appliedCount: 0 }),
+      );
+
+      fireMessageEnd("user", "don't do that");
+      await fireTurnEnd(correctionBranch());
+
+      assert.strictEqual(directCalls.length, 1);
+      assert.strictEqual(store.getFailureCount(), 0, "addFailure must not be called when appliedCount is 0");
+      assert.strictEqual(notifyCalls.length, 0);
+    });
+
+    it("calls addFailure and notifies when subprocess LLM confirms correction", async () => {
+      const pi = createMockPi({ code: 0, stdout: "Saved correction to MEMORY.md", stderr: "" });
+      const { store } = storeWithFailureTracking();
+      setupCorrectionDetector(pi, store as unknown as MemoryStore, null, config);
+
+      fireMessageEnd("user", "don't do that");
+      await fireTurnEnd(correctionBranch());
+
+      assert.strictEqual(execCalls.length, 1);
+      assert.strictEqual(store.getFailureCount(), 1, "addFailure must be called on confirmed correction");
+      assert.strictEqual(notifyCalls.length, 1);
+    });
+
+    it("filters false-positive heuristic triggers from failures.md disk storage", async () => {
+      const pi = createMockPi({ code: 0, stdout: "Nothing to save", stderr: "" });
+      const correctionStore = new MemoryStore({ ...config, memoryDir: tmpDir } as any);
+      await correctionStore.loadFromDisk();
+      setupCorrectionDetector(pi, correctionStore, null, config);
+
+      // Trigger heuristic with a phrase that matches isCorrection
+      fireMessageEnd("user", "actually, don't use that option");
+      await fireTurnEnd([
+        { type: "message", message: { role: "user", content: [{ type: "text", text: "actually, don't use that option" }] } },
+        { type: "message", message: { role: "assistant", content: [{ type: "text", text: "I didn't use that option." }] } },
+      ]);
+
+      const failures = correctionStore.getFailureEntries();
+      assert.strictEqual(failures.length, 0, "failures.md must remain clean when LLM rejects heuristic match");
+    });
+  });
 });

@@ -266,30 +266,30 @@ export function setupCorrectionDetector(
 
       if (savedViaLlm) {
         ctx.ui.notify("🔧 Correction detected — memory updated", "info");
-      }
 
-      // Also save as a failure memory for learning
-      try {
-        let lastUserMsg: string | undefined;
-        for (let i = recentParts.length - 1; i >= 0; i--) {
-          if (recentParts[i].startsWith("[USER]")) {
-            lastUserMsg = recentParts[i];
-            break;
+        // Also save as a failure memory for learning (only when validated by LLM review)
+        try {
+          let lastUserMsg: string | undefined;
+          for (let i = recentParts.length - 1; i >= 0; i--) {
+            if (recentParts[i].startsWith("[USER]")) {
+              lastUserMsg = recentParts[i];
+              break;
+            }
           }
+          const correctionText = lastUserMsg ? lastUserMsg.replace(/^\[USER\]:\s*/, "") : "";
+          if (correctionText) {
+            const directive = extractCorrectionDirective(correctionText);
+            const failureReason = "User corrected the agent";
+            const scopedProjectName = activeProjectStore ? activeProjectName : null;
+            await store.addFailure(directive, {
+              category: "correction",
+              failureReason,
+              project: scopedProjectName ?? undefined,
+            });
+          }
+        } catch {
+          // Best-effort — don't block the session
         }
-        const correctionText = lastUserMsg ? lastUserMsg.replace(/^\[USER\]:\s*/, "") : "";
-        if (correctionText) {
-          const directive = extractCorrectionDirective(correctionText);
-          const failureReason = "User corrected the agent";
-          const scopedProjectName = activeProjectStore ? activeProjectName : null;
-          await store.addFailure(directive, {
-            category: "correction",
-            failureReason,
-            project: scopedProjectName ?? undefined,
-          });
-        }
-      } catch {
-        // Best-effort — don't block the session
       }
     } catch {
       // Best-effort — don't block the session

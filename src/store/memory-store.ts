@@ -898,6 +898,7 @@ export class MemoryStore {
     // Use the memory directory for temp files so rename stays on the same device
     const tmpDir = await fs.mkdtemp(path.join(path.dirname(filePath), ".tmp-"));
     const tmpPath = path.join(tmpDir, "write.tmp");
+    let recoveryPath: string | null = null;
 
     try {
       await fs.writeFile(tmpPath, content, "utf-8");
@@ -917,7 +918,7 @@ export class MemoryStore {
           throw error;
         }
       } else {
-        const recoveryPath = this.recoveryPathFor(filePath);
+        recoveryPath = this.recoveryPathFor(filePath);
         const publishedIdentity = await this.fileIdentity(tmpPath);
         try {
           await fs.rename(filePath, recoveryPath);
@@ -982,6 +983,11 @@ export class MemoryStore {
         this.fileFingerprints[filePath] = publishedState.fingerprint;
         throw new ExternalMemoryWriteConflict();
       }
+
+      if (recoveryPath) {
+        try { await fs.unlink(recoveryPath); } catch { /* ignore */ }
+      }
+
       // Enforce the cap again after publishing the displaced snapshot. An
       // individual source file can be larger than the entire recovery budget.
       await this.pruneRecoveryFiles(filePath);

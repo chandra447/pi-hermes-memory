@@ -112,11 +112,27 @@ describe("MemoryStore", { concurrency: 1 }, () => {
     await removeFile(memoryPath);
     await removeFile(userPath);
     await removeFile(failurePath);
+    try {
+      const files = await fs.readdir(MEMORY_DIR);
+      for (const f of files) {
+        if (f.startsWith(".")) {
+          await removeFile(path.join(MEMORY_DIR, f));
+        }
+      }
+    } catch {}
     await new Promise((r) => setTimeout(r, 250));
     // Remove again in case a pending write sneaked in during the wait
     await removeFile(memoryPath);
     await removeFile(userPath);
     await removeFile(failurePath);
+    try {
+      const files = await fs.readdir(MEMORY_DIR);
+      for (const f of files) {
+        if (f.startsWith(".")) {
+          await removeFile(path.join(MEMORY_DIR, f));
+        }
+      }
+    } catch {}
     await new Promise((r) => setTimeout(r, 50));
   }
 
@@ -1562,7 +1578,6 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const originalRead = (store as any).readFileState.bind(store);
       let displacedReads = 0;
       (store as any).readFileState = async (filePath: string) => {
-        const state = await originalRead(filePath);
         if (path.basename(filePath).startsWith(`.${MEMORY_FILE}.recovery-`)) {
           displacedReads++;
           if (displacedReads === 2) {
@@ -1571,7 +1586,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
             await handle.sync();
           }
         }
-        return state;
+        return originalRead(filePath);
       };
 
       try {
@@ -1581,13 +1596,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
         await handle.close();
       }
 
-      const siblings = await fs.readdir(MEMORY_DIR);
-      const recoveryFiles = siblings.filter((name) => name.startsWith(`.${MEMORY_FILE}.recovery-`));
-      assert.ok(recoveryFiles.length > 0);
-      const recovered = await Promise.all(
-        recoveryFiles.map((name) => fs.readFile(path.join(MEMORY_DIR, name), "utf-8")),
-      );
-      assert.ok(recovered.some((content) => content.includes("late descriptor editor")));
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /late descriptor editor/);
+      assert.match(raw, /local add/);
     });
 
     it("keeps the displaced original when either verification stage fails", async () => {
@@ -2234,6 +2245,74 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const diskEntries = (await originalRead(canonicalMemoryPath)).entries;
       assert.deepEqual(observed[observed.length - 1], diskEntries);
       assert.deepEqual((store as any).memoryEntries, diskEntries);
+    });
+
+    it("unlinks displaced recovery snapshot immediately upon successful save", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} initial entry`);
+
+      // Second add will displace the existing file into a recovery snapshot before publishing
+      const result = await store.add("memory", `${TEST_MARKER} second entry`);
+      assert.equal(result.success, true);
+
+      const siblings = await fs.readdir(MEMORY_DIR);
+      const recoveryFiles = siblings.filter((name) => name.startsWith(`.${MEMORY_FILE}.recovery-`));
+      assert.equal(recoveryFiles.length, 0, "displaced recovery snapshot should be unlinked on success");
+
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /initial entry/);
+      assert.match(raw, /second entry/);
+
+      // Verify replace also unlinks recovery snapshot
+      const replaceResult = await store.replace("memory", `${TEST_MARKER} initial entry`, `${TEST_MARKER} updated initial entry`);
+      assert.equal(replaceResult.success, true);
+      const siblingsAfterReplace = await fs.readdir(MEMORY_DIR);
+      const recoveryAfterReplace = siblingsAfterReplace.filter((name) => name.startsWith(`.${MEMORY_FILE}.recovery-`));
+      assert.equal(recoveryAfterReplace.length, 0, "recovery snapshot should be unlinked on successful replace");
+
+      // Verify remove also unlinks recovery snapshot
+      const removeResult = await store.remove("memory", `${TEST_MARKER} updated initial entry`);
+      assert.equal(removeResult.success, true);
+      const siblingsAfterRemove = await fs.readdir(MEMORY_DIR);
+      const recoveryAfterRemove = siblingsAfterRemove.filter((name) => name.startsWith(`.${MEMORY_FILE}.recovery-`));
+      assert.equal(recoveryAfterRemove.length, 0, "recovery snapshot should be unlinked on successful remove");
+    });
+
+    it("preserves displaced recovery and conflict files on genuine write failure", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} existing content for failure test`);
+
+      const originalRead = (store as any).readFileState.bind(store);
+      let displacedReads = 0;
+      (store as any).readFileState = async (filePath: string) => {
+        if (path.basename(filePath).startsWith(`.${MEMORY_FILE}.recovery-`)) {
+          displacedReads++;
+          if (displacedReads === 2) {
+            // Simulate post-publish verification conflict
+            throw new Error("injected post-publish conflict verification error");
+          }
+        }
+        return originalRead(filePath);
+      };
+
+      await assert.rejects(
+        store.add("memory", `${TEST_MARKER} will fail and rollback`),
+        /injected post-publish conflict verification error/,
+      );
+
+      const siblings = await fs.readdir(MEMORY_DIR);
+      const recoveryFiles = siblings.filter((name) => name.startsWith(`.${MEMORY_FILE}.recovery-`));
+      assert.ok(recoveryFiles.length > 0, "recovery file must be preserved on genuine conflict");
+
+      const conflictFiles = siblings.filter((name) => name.includes(".conflict-"));
+      assert.ok(conflictFiles.length > 0, "conflict artifact must be preserved on genuine conflict");
+
+      // Authoritative content should still be intact
+      const raw = await readRaw(memoryPath);
+      assert.match(raw, /existing content for failure test/);
+      assert.doesNotMatch(raw, /will fail and rollback/);
     });
 
   });
