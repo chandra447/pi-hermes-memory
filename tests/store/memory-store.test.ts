@@ -869,7 +869,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
   // ─── formatForSystemPrompt() tests ───
 
   describe("formatForSystemPrompt()", () => {
-    it("returns frozen snapshot — add after load does not change it", async () => {
+    it("updates in-memory snapshot immediately after add()", async () => {
       await writeRaw(memoryPath, `${TEST_MARKER} original note`);
 
       const store = new MemoryStore(makeConfig());
@@ -877,13 +877,103 @@ describe("MemoryStore", { concurrency: 1 }, () => {
 
       const before = store.formatForSystemPrompt();
       assert.ok(before.includes(`${TEST_MARKER} original note`));
+      assert.ok(!before.includes(`${TEST_MARKER} new note after load`));
 
-      // Add a new entry — this should NOT affect the snapshot
+      // Add a new entry — snapshot updates immediately for live inspection
       await store.add("memory", `${TEST_MARKER} new note after load`);
 
       const after = store.formatForSystemPrompt();
-      assert.equal(before, after, "Snapshot should not change after add");
-      assert.ok(!after.includes(`${TEST_MARKER} new note after load`));
+      assert.ok(after.includes(`${TEST_MARKER} original note`));
+      assert.ok(after.includes(`${TEST_MARKER} new note after load`));
+      assert.ok(store.getSnapshot().memory.includes(`${TEST_MARKER} new note after load`));
+    });
+
+    it("updates in-memory snapshot immediately after replace()", async () => {
+      await writeRaw(memoryPath, `${TEST_MARKER} config: debug=false`);
+
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+
+      const before = store.formatForSystemPrompt();
+      assert.ok(before.includes(`${TEST_MARKER} config: debug=false`));
+
+      await store.replace("memory", `${TEST_MARKER} config: debug=false`, `${TEST_MARKER} config: debug=true`);
+
+      const after = store.formatForSystemPrompt();
+      assert.ok(!after.includes("debug=false"));
+      assert.ok(after.includes(`${TEST_MARKER} config: debug=true`));
+      assert.ok(store.getSnapshot().memory.includes("debug=true"));
+      assert.ok(!store.getSnapshot().memory.includes("debug=false"));
+    });
+
+    it("updates in-memory snapshot immediately after remove()", async () => {
+      await writeRaw(memoryPath, `${TEST_MARKER} keep this${ENTRY_DELIMITER}${TEST_MARKER} delete this`);
+
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+
+      const before = store.formatForSystemPrompt();
+      assert.ok(before.includes(`${TEST_MARKER} keep this`));
+      assert.ok(before.includes(`${TEST_MARKER} delete this`));
+
+      await store.remove("memory", `${TEST_MARKER} delete this`);
+
+      const after = store.formatForSystemPrompt();
+      assert.ok(after.includes(`${TEST_MARKER} keep this`));
+      assert.ok(!after.includes(`${TEST_MARKER} delete this`));
+      assert.ok(!store.getSnapshot().memory.includes(`${TEST_MARKER} delete this`));
+    });
+
+    it("updates in-memory snapshot for user profile mutations", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+
+      assert.equal(store.getSnapshot().user, "");
+
+      await store.add("user", `${TEST_MARKER} prefers dark mode`);
+      assert.ok(store.formatForSystemPrompt().includes("prefers dark mode"));
+      assert.ok(store.getSnapshot().user.includes("prefers dark mode"));
+
+      await store.replace("user", `${TEST_MARKER} prefers dark mode`, `${TEST_MARKER} prefers light mode`);
+      assert.ok(store.formatForSystemPrompt().includes("prefers light mode"));
+      assert.ok(!store.formatForSystemPrompt().includes("prefers dark mode"));
+      assert.ok(store.getSnapshot().user.includes("prefers light mode"));
+
+      await store.remove("user", `${TEST_MARKER} prefers light mode`);
+      assert.equal(store.getSnapshot().user, "");
+    });
+
+    it("updates in-memory snapshot after applyMutationPlan()", async () => {
+      await writeRaw(memoryPath, `${TEST_MARKER} step 1`);
+
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+
+      await store.applyMutationPlan("memory", [
+        { action: "replace", oldText: `${TEST_MARKER} step 1`, content: `${TEST_MARKER} step 1 done` },
+        { action: "add", content: `${TEST_MARKER} step 2 planned` },
+      ]);
+
+      const prompt = store.formatForSystemPrompt();
+      assert.ok(prompt.includes(`${TEST_MARKER} step 1 done`));
+      assert.ok(prompt.includes(`${TEST_MARKER} step 2 planned`));
+    });
+
+    it("updates in-memory snapshot after fifoEvictAndAdd()", async () => {
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 200,
+        memoryOverflowStrategy: "fifo-evict",
+      }));
+      await store.loadFromDisk();
+
+      await store.add("memory", `${TEST_MARKER} oldest`);
+      await store.add("memory", `${TEST_MARKER} middle`);
+      await store.add("memory", `${TEST_MARKER} newest item`);
+
+      const prompt = store.formatForSystemPrompt();
+      assert.ok(!prompt.includes(`${TEST_MARKER} oldest`));
+      assert.ok(prompt.includes(`${TEST_MARKER} middle`));
+      assert.ok(prompt.includes(`${TEST_MARKER} newest item`));
     });
 
     it("returns empty string when no entries", async () => {

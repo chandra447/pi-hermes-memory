@@ -97,7 +97,7 @@ describe("system prompt injection", () => {
     await clearFiles();
   });
 
-  it("frozen snapshot isolation — entries added after load are NOT in system prompt", async () => {
+  it("updates in-memory snapshot on mutation — entries added after load are reflected in formatForSystemPrompt()", async () => {
     await writeMemory("Original entry");
     await writeUser("");
 
@@ -108,13 +108,12 @@ describe("system prompt injection", () => {
     assert.ok(prompt1.includes("Original entry"), "snapshot should contain original entry");
 
     // Add a new entry in-memory (simulating a tool call that adds memory mid-session)
-    store.add("memory", "New entry after load");
-    // Wait for async write
-    await new Promise((r) => setTimeout(r, 250));
+    await store.add("memory", "New entry after load");
 
-    // formatForSystemPrompt should still return the snapshot from load time
+    // formatForSystemPrompt reflects updated in-memory snapshot for live preview and subagents
     const prompt2 = store.formatForSystemPrompt();
-    assert.ok(!prompt2.includes("New entry after load"), "snapshot should NOT contain entry added after load");
+    assert.ok(prompt2.includes("Original entry"), "snapshot should retain original entry");
+    assert.ok(prompt2.includes("New entry after load"), "snapshot should contain new entry added after load");
 
     // Create a SECOND store that loads the updated file
     const store2 = new MemoryStore(testConfig());
