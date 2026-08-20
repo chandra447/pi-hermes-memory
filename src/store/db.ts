@@ -662,12 +662,12 @@ export class DatabaseManager {
 
   private copySessions(source: DatabaseLike, target: DatabaseLike): number {
     const insert = target.prepare(`
-      INSERT OR IGNORE INTO sessions (id, project, cwd, started_at, ended_at, message_count)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT OR IGNORE INTO sessions (id, project, cwd, started_at, ended_at, message_count, is_subagent)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     let copied = 0;
 
-    for (const row of this.readTableRows(source, 'sessions', ['id', 'project', 'cwd', 'started_at', 'ended_at', 'message_count'])) {
+    for (const row of this.readTableRows(source, 'sessions', ['id', 'project', 'cwd', 'started_at', 'ended_at', 'message_count', 'is_subagent'])) {
       if (typeof row.id !== 'string' || typeof row.cwd !== 'string' || typeof row.started_at !== 'string') continue;
       const project = typeof row.project === 'string' && row.project ? row.project : (path.basename(row.cwd) || 'unknown');
       insert.run(
@@ -677,6 +677,7 @@ export class DatabaseManager {
         row.started_at,
         this.nullableString(row.ended_at),
         this.integerOr(row.message_count, 0),
+        this.integerOr(row.is_subagent, 0),
       );
       copied++;
     }
@@ -896,6 +897,8 @@ export class DatabaseManager {
       || msg.includes('memories(category)')
       || msg.includes('no such column: project')
       || msg.includes('sessions(project)')
+      || msg.includes('no such column: is_subagent')
+      || msg.includes('sessions(is_subagent)')
       || msg.includes('memories(project)');
   }
 
@@ -934,6 +937,9 @@ export class DatabaseManager {
     const names = this.getColumnNames(db, 'sessions');
     if (!names.has('project')) {
       db.exec('ALTER TABLE sessions ADD COLUMN project TEXT');
+    }
+    if (!names.has('is_subagent')) {
+      db.exec('ALTER TABLE sessions ADD COLUMN is_subagent INTEGER DEFAULT 0');
     }
 
     this.backfillSessionsProject(db);

@@ -98,6 +98,69 @@ export type MemoryCategory =
   | "convention"
   | "tool-quirk";
 
+export interface SqliteMemoryRemoveOptions {
+  target: "memory" | "user" | "failure" | "project";
+  project?: string | null;
+}
+
+export interface SqliteMemoryReplaceOptions {
+  target: "memory" | "user" | "failure" | "project";
+  project?: string | null;
+  category?: MemoryCategory | null;
+  failureReason?: string | null;
+  toolState?: string | null;
+  correctedTo?: string | null;
+  lastReferenced?: string | null;
+}
+
+export interface ValidatedCorrectionResult {
+  hasActionableCorrection: boolean;
+  directive: string;
+  category: MemoryCategory;
+  failureReason: string;
+}
+
+export interface CorrectionCandidate {
+  rawText: string;
+  matchedPattern: string;
+  extractedDirective: string;
+  timestamp: number;
+  validated: boolean;
+  validationReason?: string;
+}
+
+export interface CorrectionDetectionResult {
+  isCandidate: boolean;
+  matchedPattern?: string;
+  directiveText?: string;
+}
+
+export interface SessionContextMetadata {
+  sessionId: string;
+  cwd: string;
+  /** True if the session was spawned as an ephemeral sub-agent or worker */
+  isSubagent: boolean;
+  /** Parent session ID if this session was launched by another agent */
+  parentSessionId?: string | null;
+  /** Execution purpose or subagent type */
+  subagentType?: string | null;
+}
+
+export interface SubagentSessionDetector {
+  /**
+   * Determine if the current execution context represents an ephemeral subagent.
+   * Checks sessionManager entries, process environment flags, and caller metadata.
+   */
+  isSubagentSession(ctx: unknown): boolean;
+}
+
+export interface IndexedSessionRecord {
+  id: string;
+  project: string | null;
+  path: string;
+  isSubagent: boolean;
+}
+
 export interface MemoryResult {
   success: boolean;
   error?: string;

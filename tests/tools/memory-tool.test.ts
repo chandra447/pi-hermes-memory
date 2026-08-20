@@ -664,4 +664,105 @@ describe("registerMemoryTool", () => {
     assert.deepStrictEqual(replaceArgs, ["memory", "old", "new"], "should pass target, old_text, content to store.replace");
   });
 
+  it("memory_remove performs exact match deletion and preserves sibling records in SQLite", async () => {
+    let removeTool: any;
+    const mockPi = {
+      registerTool: (def: any) => {
+        if (def.name === "memory_remove") removeTool = def;
+      },
+    } as unknown as ExtensionAPI;
+
+    const store = new MemoryStore({
+      memoryMode: "policy-only",
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      projectCharLimit: 5000,
+      nudgeInterval: 10,
+      reviewEnabled: false,
+      flushOnCompact: false,
+      flushOnShutdown: false,
+      flushMinTurns: 6,
+      autoConsolidate: false,
+      correctionDetection: false,
+      failureInjectionEnabled: true,
+      failureInjectionMaxAgeDays: 7,
+      failureInjectionMaxEntries: 5,
+      nudgeToolCalls: 15,
+      consolidationTimeoutMs: 60000,
+      memoryDir: tmpDir,
+    });
+    await store.loadFromDisk();
+
+    await store.add("memory", "user prefers dark mode in editor");
+    await store.add("memory", "user prefers dark mode in terminal");
+    syncMemoryEntry(dbManager, { content: "user prefers dark mode in editor", target: "memory", project: null });
+    syncMemoryEntry(dbManager, { content: "user prefers dark mode in terminal", target: "memory", project: null });
+
+    registerMemoryTool(mockPi, store, null, dbManager);
+
+    const result = await removeTool.execute(
+      "tc-1",
+      { target: "memory", old_text: "user prefers dark mode in editor" },
+      undefined,
+      undefined,
+      undefined,
+    );
+
+    assert.strictEqual(result.details.success, true);
+    const rows = getMemories(dbManager, { target: "memory", project: null });
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].content, "user prefers dark mode in terminal");
+  });
+
+  it("memory_replace performs exact match replacement and preserves sibling records in SQLite", async () => {
+    let replaceTool: any;
+    const mockPi = {
+      registerTool: (def: any) => {
+        if (def.name === "memory_replace") replaceTool = def;
+      },
+    } as unknown as ExtensionAPI;
+
+    const store = new MemoryStore({
+      memoryMode: "policy-only",
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      projectCharLimit: 5000,
+      nudgeInterval: 10,
+      reviewEnabled: false,
+      flushOnCompact: false,
+      flushOnShutdown: false,
+      flushMinTurns: 6,
+      autoConsolidate: false,
+      correctionDetection: false,
+      failureInjectionEnabled: true,
+      failureInjectionMaxAgeDays: 7,
+      failureInjectionMaxEntries: 5,
+      nudgeToolCalls: 15,
+      consolidationTimeoutMs: 60000,
+      memoryDir: tmpDir,
+    });
+    await store.loadFromDisk();
+
+    await store.add("memory", "uses node 20 for web service");
+    await store.add("memory", "uses node 20 for backend services");
+    syncMemoryEntry(dbManager, { content: "uses node 20 for web service", target: "memory", project: null });
+    syncMemoryEntry(dbManager, { content: "uses node 20 for backend services", target: "memory", project: null });
+
+    registerMemoryTool(mockPi, store, null, dbManager);
+
+    const result = await replaceTool.execute(
+      "tc-1",
+      { target: "memory", old_text: "uses node 20 for web service", content: "uses node 22 for web service" },
+      undefined,
+      undefined,
+      undefined,
+    );
+
+    assert.strictEqual(result.details.success, true);
+    const rows = getMemories(dbManager, { target: "memory", project: null });
+    assert.strictEqual(rows.length, 2);
+    assert.ok(rows.some((r) => r.content === "uses node 22 for web service"));
+    assert.ok(rows.some((r) => r.content === "uses node 20 for backend services"));
+  });
+
 });

@@ -24,7 +24,8 @@ export const SCHEMA_SQL = `
     cwd TEXT NOT NULL,
     started_at TEXT NOT NULL,
     ended_at TEXT,
-    message_count INTEGER DEFAULT 0
+    message_count INTEGER DEFAULT 0,
+    is_subagent INTEGER DEFAULT 0
   );
 
   -- Indexed session file metadata for cheap incremental backfill
@@ -114,5 +115,6 @@ export const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
   CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
   CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
+  CREATE INDEX IF NOT EXISTS idx_sessions_is_subagent ON sessions(is_subagent);
   CREATE INDEX IF NOT EXISTS idx_session_files_session_id ON session_files(session_id);
 `;
