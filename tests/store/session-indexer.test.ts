@@ -138,6 +138,21 @@ describe('session-indexer', () => {
       assert.strictEqual(result.messagesIndexed, 0);
       assert.strictEqual(result.skipped, false);
     });
+
+    it('should tag subagent sessions with is_subagent = 1', () => {
+      const subagentSession = createTestSession({ id: 'subagent-1', isSubagent: true });
+      indexSession(dbManager, subagentSession);
+
+      const db = dbManager.getDb();
+      const row = db.prepare('SELECT is_subagent FROM sessions WHERE id = ?').get('subagent-1') as { is_subagent: number };
+      assert.strictEqual(row.is_subagent, 1);
+
+      const regularSession = createTestSession({ id: 'regular-1', isSubagent: false });
+      indexSession(dbManager, regularSession);
+
+      const regRow = db.prepare('SELECT is_subagent FROM sessions WHERE id = ?').get('regular-1') as { is_subagent: number };
+      assert.strictEqual(regRow.is_subagent, 0);
+    });
   });
 
   describe('indexAllSessions', () => {
@@ -392,6 +407,24 @@ describe('session-indexer', () => {
 
       assert.ok(parsed);
       assert.strictEqual(parsed.messages[0].content, 'Summary of the result.');
+    });
+
+    it('parseSessionManagerSnapshot identifies subagent metadata', () => {
+      const subagentSnapshot = {
+        getHeader: () => ({ id: 'sub-live-1', timestamp: '2026-05-03T00:00:00Z', cwd: '/work/live', isSubagent: true }),
+        getEntries: () => [
+          {
+            type: 'message',
+            id: 'entry-1',
+            timestamp: '2026-05-03T00:01:00Z',
+            message: { role: 'user', content: 'Subagent task' },
+          },
+        ],
+      };
+
+      const parsed = parseSessionManagerSnapshot(subagentSnapshot);
+      assert.ok(parsed);
+      assert.strictEqual(parsed.isSubagent, true);
     });
 
     it('indexLiveSession prefers the persisted JSONL file when available', () => {

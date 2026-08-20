@@ -32,6 +32,10 @@ export interface SessionSearchOptions {
   role?: string;
   /** Only return messages after this date (ISO string) */
   since?: string;
+  /** Include subagent sessions in search results. Default: false */
+  includeSubagents?: boolean;
+  /** Filter specifically by subagent status (true for subagents only, false for primary only) */
+  isSubagent?: boolean;
 }
 
 type SearchMatch =
@@ -137,6 +141,14 @@ export function searchSessions(
     if (since) {
       conditions.push('m.timestamp >= ?');
       params.push(since);
+    }
+
+    // Subagent filter: default to excluding subagents unless includeSubagents is true
+    if (options.isSubagent !== undefined) {
+      conditions.push('COALESCE(s.is_subagent, 0) = ?');
+      params.push(options.isSubagent ? 1 : 0);
+    } else if (!options.includeSubagents) {
+      conditions.push('COALESCE(s.is_subagent, 0) = 0');
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';

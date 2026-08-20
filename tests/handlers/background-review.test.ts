@@ -6,6 +6,7 @@ import {
   buildDirectReviewUserPrompt,
   buildSubprocessReviewPrompt,
   setupBackgroundReview,
+  isSubagentSession,
   type BackgroundReviewDeps,
 } from "../../src/handlers/background-review.js";
 import { resolveWatchedChildPiInvocation } from "../../src/handlers/pi-child-process.js";
@@ -946,5 +947,67 @@ describe("setupBackgroundReview", () => {
 
     // Should not throw — we got here = test passed
     assert.ok(true, "no crash when getBranch throws");
+  });
+
+  // ─── Subagent isolation tests (US4 / T022) ───
+
+  describe("subagent session detection and bypass", () => {
+    it("isSubagentSession identifies subagent flags across contexts", () => {
+      assert.strictEqual(isSubagentSession(null), false);
+      assert.strictEqual(isSubagentSession({}), false);
+      assert.strictEqual(isSubagentSession({ isSubagent: true }), true);
+      assert.strictEqual(isSubagentSession({ is_subagent: true }), true);
+      assert.strictEqual(isSubagentSession({ subagentType: "general-purpose" }), true);
+      assert.strictEqual(isSubagentSession({ sessionMetadata: { isSubagent: true } }), true);
+      assert.strictEqual(isSubagentSession({ sessionMetadata: { parentSessionId: "p123" } }), true);
+      assert.strictEqual(isSubagentSession({ sessionManager: { isSubagent: true } }), true);
+      assert.strictEqual(
+        isSubagentSession({
+          sessionManager: { getHeader: () => ({ id: "s1", cwd: "/tmp", timestamp: "now", isSubagent: true }) },
+        }),
+        true,
+      );
+      assert.strictEqual(
+        isSubagentSession({
+          sessionManager: { getHeader: () => ({ id: "s1", cwd: "/tmp", timestamp: "now", parentSessionId: "p1" }) },
+        }),
+        true,
+      );
+    });
+
+    it("isSubagentSession detects process environment flag", () => {
+      const orig = process.env.PI_SUBAGENT;
+      try {
+        process.env.PI_SUBAGENT = "1";
+        assert.strictEqual(isSubagentSession({}), true);
+      } finally {
+        if (orig === undefined) {
+          delete process.env.PI_SUBAGENT;
+        } else {
+          process.env.PI_SUBAGENT = orig;
+        }
+      }
+    });
+
+    it("bypasses background review entirely during subagent sessions", async () => {
+      const pi = createMockPi();
+      setup(pi, defaultConfig);
+
+      // Fire 10 user turns and 10 turn_end with subagent context
+      const subagentCtx = { isSubagent: true };
+      for (let i = 0; i < 10; i++) {
+        const mh = handlers["message_end"] || [];
+        for (const fn of mh) {
+          await fn({ message: { role: "user", content: [{ type: "text", text: "task" }] } }, subagentCtx);
+        }
+      }
+
+      for (let i = 0; i < 10; i++) {
+        fireTurnEnd(makeBranch(10), subagentCtx);
+      }
+      await settle(20);
+
+      assert.strictEqual(execCalls.length, 0, "subagent session must not trigger background review");
+    });
   });
 });
