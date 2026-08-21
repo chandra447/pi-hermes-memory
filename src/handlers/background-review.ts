@@ -118,12 +118,15 @@ async function runSubprocessReview(
   prompt: string,
   config: MemoryConfig,
   execChild: typeof execChildPrompt,
-  ctx: Pick<ExtensionContext, "cwd" | "model" | "signal">,
+  ctx: Pick<ExtensionContext, "cwd" | "model">,
 ): Promise<{ code: number; stdout?: string; stderr?: string }> {
   return execChild(pi, prompt, config, {
     cwd: ctx.cwd,
     model: resolveChildPiModel(ctx.model),
-    signal: ctx.signal,
+    // Background review is deliberately fire-and-forget. The turn's signal
+    // belongs to the interactive agent run, so forwarding it lets a later
+    // user abort cancel unrelated review work and report watchdog exit 143.
+    signal: undefined,
     timeoutMs: 120000,
   });
 }

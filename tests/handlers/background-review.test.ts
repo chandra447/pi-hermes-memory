@@ -771,7 +771,7 @@ describe("setupBackgroundReview", () => {
     assert.strictEqual(directCalls.length, 1, "direct review should be attempted first");
     assert.strictEqual(execCalls.length, 1, "subprocess should run as fallback");
   });
-  it("inherits the active session model and execution context for subprocess fallback", async () => {
+  it("inherits the active session model and cwd without coupling fallback to the agent run signal", async () => {
     const pi = createMockPi();
     setupWithDirectDeps(pi, { ok: false, appliedCount: 0, fallbackReason: "no_auth" }, {
       ...defaultConfig,
@@ -781,14 +781,15 @@ describe("setupBackgroundReview", () => {
     fireMessageEnd("user");
     fireMessageEnd("user");
     fireMessageEnd("user");
-    const signal = new AbortController().signal;
+    const controller = new AbortController();
     for (let i = 0; i < 10; i++) {
       fireTurnEnd(makeBranch(10), {
         cwd: "/tmp/local-session",
         model: { provider: "local-llama", id: "local-9b" },
-        signal,
+        signal: controller.signal,
       });
     }
+    controller.abort();
     await reviewSettledSignal.promise;
 
     assert.deepStrictEqual(logicalChildArgs(0).slice(0, 5), [
