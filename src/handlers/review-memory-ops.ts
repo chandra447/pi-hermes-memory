@@ -92,7 +92,7 @@ type ReviewModelRegistry = ExtensionContext["modelRegistry"];
 export function buildDirectReviewCompletionOptions(
   model: Model<Api>,
   auth: {
-    apiKey: string;
+    apiKey?: string;
     headers?: Record<string, string>;
     env?: Record<string, string>;
   },
@@ -151,6 +151,31 @@ export function isAuthRejection(message: string): boolean {
 export type ResolvedRequestAuth =
   | { ok: true; apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }
   | { ok: false; error: string };
+
+type SuccessfulRequestAuth = Omit<Extract<ResolvedRequestAuth, { ok: true }>, "ok">;
+
+function hasRequestAuth(auth: SuccessfulRequestAuth): boolean {
+  return !!auth.apiKey || Object.values(auth.headers ?? {}).some((value) => value.trim().length > 0);
+}
+
+function sameStringRecord(
+  left: Record<string, string> | undefined,
+  right: Record<string, string> | undefined,
+): boolean {
+  const leftEntries = Object.entries(left ?? {});
+  const rightKeys = Object.keys(right ?? {});
+  return leftEntries.length === rightKeys.length
+    && leftEntries.every(([key, value]) => right?.[key] === value);
+}
+
+function sameRequestAuth(
+  left: SuccessfulRequestAuth,
+  right: SuccessfulRequestAuth,
+): boolean {
+  return left.apiKey === right.apiKey
+    && sameStringRecord(left.headers, right.headers)
+    && sameStringRecord(left.env, right.env);
+}
 
 /**
  * Resolve request auth through the public ModelRegistry API. Resolve it again
@@ -413,12 +438,12 @@ export async function runDirectMemoryCompletion(
   }
 
   const auth = await resolveRequestAuth(ctx.modelRegistry, model);
-  if (!auth.ok || !auth.apiKey) {
+  if (!auth.ok || !hasRequestAuth(auth)) {
     return {
       ok: false,
       appliedCount: 0,
       fallbackReason: "no_auth",
-      error: auth.ok ? `No API key for ${model.provider}` : auth.error,
+      error: auth.ok ? `No request authentication for ${model.provider}` : auth.error,
     };
   }
   let requestAuth = { apiKey: auth.apiKey, headers: auth.headers, env: auth.env };
@@ -451,12 +476,13 @@ export async function runDirectMemoryCompletion(
       const message = err instanceof Error ? err.message : String(err);
       if (controller.signal.aborted || !isAuthRejection(message)) throw err;
 
-      // The provider rejected the key mid-flight. A rotation tool may have
-      // re-resolve through Pi and retry once only if it returns a different
-      // key; otherwise this is a real auth problem and the subprocess
-      // fallback should handle it (#139).
+      // The provider rejected request auth mid-flight. API keys and OAuth
+      // headers can both rotate, so re-resolve through Pi and retry once only
+      // when the effective request auth actually changed; otherwise this is a
+      // real auth problem and the subprocess fallback should handle it (#139).
       const rotated = await resolveRequestAuth(ctx.modelRegistry, model);
-      if (!rotated.ok || !rotated.apiKey || rotated.apiKey === requestAuth.apiKey) throw err;
+      if (!rotated.ok || !hasRequestAuth(rotated)) throw err;
+      if (sameRequestAuth(rotated, requestAuth)) throw err;
 
       requestAuth = { apiKey: rotated.apiKey, headers: rotated.headers, env: rotated.env };
       response = await complete(
