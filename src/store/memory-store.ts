@@ -190,10 +190,11 @@ export class MemoryStore {
     toolState?: string;
     correctedTo?: string;
     project?: string;
+    signal?: AbortSignal;
   }): Promise<MemoryResult> {
     const failureText = this.buildFailureMemoryText(content, options);
     return this.addWithConsolidation(
-      "failure", failureText, undefined, 1, "Failure memory saved: " + options.category, options.project,
+      "failure", failureText, options.signal, 1, "Failure memory saved: " + options.category, options.project,
     );
   }
 
@@ -276,6 +277,7 @@ export class MemoryStore {
     const result = await this.runTargetMutation(
       target,
       (markMutation) => this._add(target, content, signal, addedMessage, project, markMutation),
+      signal,
     );
     if (
       result.success
@@ -374,7 +376,7 @@ export class MemoryStore {
   async applyMutationPlan(
     target: "memory" | "user" | "failure",
     operations: MemoryMutationOperation[],
-    options: { requireShrink?: boolean } = {},
+    options: { requireShrink?: boolean; signal?: AbortSignal } = {},
   ): Promise<MemoryResult> {
     return this.runTargetMutation(target, async (markMutation) => {
       await this.syncTargetFromDiskIfChanged(target);
@@ -457,13 +459,14 @@ export class MemoryStore {
       await this.saveToDisk(target);
       markMutation();
       return this.successResponse(target, `Applied ${operations.length} memory operations atomically.`);
-    });
+    }, options.signal);
   }
 
-  async replace(target: "memory" | "user" | "failure", oldText: string, newContent: string): Promise<MemoryResult> {
+  async replace(target: "memory" | "user" | "failure", oldText: string, newContent: string, signal?: AbortSignal): Promise<MemoryResult> {
     return this.runTargetMutation(
       target,
       (markMutation) => this.replaceUnlocked(target, oldText, newContent, markMutation),
+      signal,
     );
   }
 
@@ -520,10 +523,11 @@ export class MemoryStore {
     return this.successResponse(target, "Entry replaced.");
   }
 
-  async remove(target: "memory" | "user" | "failure", oldText: string): Promise<MemoryResult> {
+  async remove(target: "memory" | "user" | "failure", oldText: string, signal?: AbortSignal): Promise<MemoryResult> {
     return this.runTargetMutation(
       target,
       (markMutation) => this.removeUnlocked(target, oldText, markMutation),
+      signal,
     );
   }
 
@@ -839,10 +843,14 @@ export class MemoryStore {
   private async runTargetMutation(
     target: "memory" | "user" | "failure",
     mutation: (markMutation: () => void) => Promise<MemoryResult>,
+    signal?: AbortSignal,
   ): Promise<MemoryResult> {
     const storagePath = await this.resolveStoragePath(target);
     return withMarkdownMutationLock(storagePath, async () => {
       for (let attempt = 0; ; attempt++) {
+        if (signal?.aborted) {
+          return { success: false, error: "Memory mutation cancelled." };
+        }
         let mutated = false;
         try {
           const result = await mutation(() => {

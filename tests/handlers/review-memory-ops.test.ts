@@ -14,6 +14,8 @@ import {
 } from "../../src/handlers/review-memory-ops.js";
 import { DatabaseManager } from "../../src/store/db.js";
 import { getMemories, reconcileMarkdownMemoryScope } from "../../src/store/sqlite-memory-store.js";
+import { acquireMarkdownMutationLock } from "../../src/store/markdown-mutation-lock.js";
+import { MEMORY_FILE } from "../../src/constants.js";
 
 function mockModel(reasoning: boolean): Model<Api> {
   return {
@@ -573,6 +575,160 @@ describe("applyReviewOperations", () => {
     assert.strictEqual(result.appliedCount, 0);
     assert.match(result.error ?? "", /No entry matched 'missing later entry'/);
     assert.deepStrictEqual(store.getMemoryEntries(), beforeEntries);
+  });
+
+  it("skips auth, provider, and store work when the external signal is already aborted", async () => {
+    let authCalls = 0;
+    let completeCalls = 0;
+    let mutated = false;
+    const controller = new AbortController();
+    controller.abort();
+    const store = {
+      add: async () => {
+        mutated = true;
+        return { success: true };
+      },
+    };
+    const modelRegistry = {
+      getApiKeyAndHeaders: async () => {
+        authCalls++;
+        return { ok: true as const, apiKey: "test-key" };
+      },
+      getAll: () => [mockModel(false)],
+      getAvailable: () => [mockModel(false)],
+    };
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry } as never,
+      store as never,
+      null,
+      {
+        userPrompt: "u",
+        systemPrompt: "s",
+        config: {},
+        signal: controller.signal,
+      },
+      null,
+      null,
+      {
+        completeSimple: (async () => {
+          completeCalls++;
+          return {
+            stopReason: "stop",
+            content: [{ type: "text", text: JSON.stringify({ operations: [{ action: "add", target: "memory", content: "late" }] }) }],
+          };
+        }) as never,
+      },
+    );
+
+    assert.deepStrictEqual(result, { ok: false, appliedCount: 0, fallbackReason: "aborted" });
+    assert.equal(authCalls, 0);
+    assert.equal(completeCalls, 0);
+    assert.equal(mutated, false);
+  });
+
+  it("does not apply operations when the provider ignores abort and returns success", async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+    const controller = new AbortController();
+    const modelRegistry = {
+      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test-key" }),
+      getAll: () => [mockModel(false)],
+      getAvailable: () => [mockModel(false)],
+    };
+    const complete = async () => {
+      controller.abort();
+      return {
+        stopReason: "stop",
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            operations: [{ action: "add", target: "memory", content: "should not persist after cancel" }],
+          }),
+        }],
+      };
+    };
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry } as never,
+      store,
+      null,
+      {
+        userPrompt: "u",
+        systemPrompt: "s",
+        config: {},
+        signal: controller.signal,
+      },
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    assert.deepStrictEqual(result, { ok: false, appliedCount: 0, fallbackReason: "aborted" });
+    assert.equal(store.getMemoryEntries().some((entry) => entry.includes("should not persist after cancel")), false);
+  });
+
+  it("does not write after abort while waiting for the markdown mutation lock", async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+    const controller = new AbortController();
+    const modelRegistry = {
+      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test-key" }),
+      getAll: () => [mockModel(false)],
+      getAvailable: () => [mockModel(false)],
+    };
+    const completeEntered = Promise.withResolvers<void>();
+    const continueComplete = Promise.withResolvers<void>();
+    const complete = async () => {
+      completeEntered.resolve();
+      await continueComplete.promise;
+      return {
+        stopReason: "stop",
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            operations: [{ action: "add", target: "memory", content: "late-after-shutdown" }],
+          }),
+        }],
+      };
+    };
+    const lease = await acquireMarkdownMutationLock(path.join(tmpDir, MEMORY_FILE));
+    try {
+      const completion = runDirectMemoryCompletion(
+        { model: mockModel(false), modelRegistry } as never,
+        store,
+        null,
+        {
+          userPrompt: "u",
+          systemPrompt: "s",
+          config: {},
+          signal: controller.signal,
+        },
+        null,
+        null,
+        { completeSimple: complete as never },
+      );
+      await completeEntered.promise;
+      continueComplete.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      controller.abort();
+      lease.release();
+      const result = await completion;
+      assert.deepStrictEqual(result, { ok: false, appliedCount: 0, fallbackReason: "aborted" });
+      assert.equal(store.getMemoryEntries().some((entry) => entry.includes("late-after-shutdown")), false);
+    } finally {
+      lease.release();
+    }
   });
 
   it("uses the in-lock mutation observer as the sole SQLite reconciliation path", async () => {
