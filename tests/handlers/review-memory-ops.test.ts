@@ -45,6 +45,19 @@ describe("buildDirectReviewCompletionOptions", () => {
     assert.strictEqual(options.signal, signal);
   });
 
+  it("supports OAuth providers whose request auth is carried only by headers", () => {
+    const signal = new AbortController().signal;
+    const options = buildDirectReviewCompletionOptions(
+      mockModel(false),
+      { headers: { Authorization: "Bearer kimi-oauth-token" } },
+      undefined,
+      signal,
+    );
+
+    assert.strictEqual(options.apiKey, undefined);
+    assert.deepStrictEqual(options.headers, { Authorization: "Bearer kimi-oauth-token" });
+  });
+
   it("omits reasoning when thinking is off or model does not support it", () => {
     const signal = new AbortController().signal;
     const off = buildDirectReviewCompletionOptions(
@@ -90,6 +103,18 @@ describe("provider auth resolution", () => {
     return { usedKeys, complete };
   }
 
+  function registryWithHeaderAuth(...headers: Array<Record<string, string>>) {
+    let authCalls = 0;
+    return {
+      getApiKeyAndHeaders: async () => ({
+        ok: true as const,
+        headers: headers[Math.min(authCalls++, headers.length - 1)],
+      }),
+      getAll: () => [mockModel(false)],
+      getAvailable: () => [mockModel(false)],
+    };
+  }
+
   const emptyOperations = {
     stopReason: "stop",
     content: [{ type: "text", text: JSON.stringify({ operations: [] }) }],
@@ -118,6 +143,50 @@ describe("provider auth resolution", () => {
     assert.deepStrictEqual(usedKeys, ["current-key"]);
   });
 
+  it("runs direct review with header-only OAuth request auth", async () => {
+    const headers = { Authorization: "Bearer kimi-oauth-token" };
+    const usedHeaders: Array<Record<string, string> | undefined> = [];
+    const complete = async (_model: unknown, _request: unknown, options: { headers?: Record<string, string> }) => {
+      usedHeaders.push(options.headers);
+      return emptyOperations;
+    };
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry: registryWithHeaderAuth(headers) } as never,
+      null as never,
+      null,
+      directOptions(),
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(usedHeaders, [headers]);
+  });
+
+  it("rejects empty auth headers as missing request authentication", async () => {
+    let completionCalls = 0;
+    const complete = async () => {
+      completionCalls++;
+      return emptyOperations;
+    };
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry: registryWithHeaderAuth({}) } as never,
+      null as never,
+      null,
+      directOptions(),
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.fallbackReason, "no_auth");
+    assert.strictEqual(completionCalls, 0);
+  });
+
   it("re-resolves credentials after a provider auth rejection", async () => {
     const { modelRegistry } = registryWithAuthResponses("revoked-key", "rotated-key");
     const { usedKeys, complete } = completionStub((_key, attempt) => {
@@ -139,6 +208,35 @@ describe("provider auth resolution", () => {
     assert.deepStrictEqual(usedKeys, ["revoked-key", "rotated-key"]);
   });
 
+  it("re-resolves rotated header-only OAuth credentials after rejection", async () => {
+    const usedHeaders: Array<Record<string, string> | undefined> = [];
+    const complete = async (_model: unknown, _request: unknown, options: { headers?: Record<string, string> }) => {
+      usedHeaders.push(options.headers);
+      if (usedHeaders.length === 1) throw new Error("HTTP 401 Unauthorized: token expired");
+      return emptyOperations;
+    };
+    const modelRegistry = registryWithHeaderAuth(
+      { Authorization: "Bearer stale-token" },
+      { Authorization: "Bearer fresh-token" },
+    );
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry } as never,
+      null as never,
+      null,
+      directOptions(),
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(usedHeaders, [
+      { Authorization: "Bearer stale-token" },
+      { Authorization: "Bearer fresh-token" },
+    ]);
+  });
+
   it("does not retry when the refreshed key is the same one the provider rejected", async () => {
     const { modelRegistry } = registryWithAuthResponses("only-key");
     const { usedKeys, complete } = completionStub(() => new Error("HTTP 401 Unauthorized"));
@@ -156,6 +254,29 @@ describe("provider auth resolution", () => {
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.fallbackReason, "provider_error");
     assert.strictEqual(usedKeys.length, 1, "an unchanged key means a real auth problem, not a rotation race");
+  });
+
+  it("does not retry an unchanged header-only OAuth credential", async () => {
+    let completionCalls = 0;
+    const complete = async () => {
+      completionCalls++;
+      throw new Error("HTTP 401 Unauthorized");
+    };
+    const modelRegistry = registryWithHeaderAuth({ Authorization: "Bearer unchanged-token" });
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry } as never,
+      null as never,
+      null,
+      directOptions(),
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.fallbackReason, "provider_error");
+    assert.strictEqual(completionCalls, 1);
   });
 
   it("classifies provider auth rejections without swallowing other failures", () => {
