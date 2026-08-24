@@ -83,7 +83,7 @@ async function emitShutdownAndAwaitFlush(
       resolve();
     }
   };
-  await emit(handlers, "session_shutdown", {}, ctx);
+  await emit(handlers, "session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx);
   await promise;
 }
 
@@ -521,6 +521,30 @@ describe("direct transport", () => {
   beforeEach(() => {
     mockPi = createMockPi();
     directCalls = [];
+  });
+
+  it("session_shutdown skips direct and subprocess flush on reload", async () => {
+    const config = defaultConfig({ reviewTransport: "direct" });
+    setupSessionFlush(
+      mockPi.pi,
+      mockStore,
+      null,
+      config,
+      null,
+      null,
+      makeDirectDeps({ ok: true, appliedCount: 1 }),
+    );
+
+    await primeFlushReady(mockPi.handlers);
+    await emit(
+      mockPi.handlers,
+      "session_shutdown",
+      { type: "session_shutdown", reason: "reload" },
+      defaultFlushCtx(),
+    );
+
+    assert.equal(directCalls.length, 0, "reload must not use direct completion");
+    assert.equal(mockPi.execCalls.length, 0, "reload must not spawn a subprocess");
   });
 
   it("session_before_compact uses direct transport without subprocess when direct returns ok", async () => {

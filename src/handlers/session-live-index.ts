@@ -1,3 +1,4 @@
+import { measureLifecycleSync } from '../lifecycle-timing.js';
 import type { DatabaseManager } from '../store/db.js';
 import { indexLiveSession } from '../store/session-indexer.js';
 
@@ -51,17 +52,19 @@ export function scheduleLiveSessionIndex(
   state.inProgress = true;
   state.promise = new Promise<void>((resolve) => {
     setTimeoutFn(() => {
-      try {
-        dbManager.withCorruptionRecovery(() => {
-          indexLiveSessionFn(dbManager, sessionManager);
-        });
-      } catch (err) {
-        try { options.onError?.(err); } catch { /* best effort */ }
-      } finally {
-        state.inProgress = false;
-        state.promise = null;
-        resolve();
-      }
+      measureLifecycleSync('live-index.callback', () => {
+        try {
+          dbManager.withCorruptionRecovery(() => {
+            indexLiveSessionFn(dbManager, sessionManager);
+          });
+        } catch (err) {
+          try { options.onError?.(err); } catch { /* best effort */ }
+        } finally {
+          state.inProgress = false;
+          state.promise = null;
+          resolve();
+        }
+      });
     }, delayMs);
   });
 

@@ -1,3 +1,4 @@
+import { measureLifecycleSync } from '../lifecycle-timing.js';
 import type { DatabaseManager } from '../store/db.js';
 import {
   indexChangedSessions,
@@ -74,7 +75,10 @@ export function scheduleSessionBackfill(
   }
 
   try {
-    if (!needsBackfillFn(dbManager, sessionsDir)) {
+    if (!measureLifecycleSync(
+      'session-backfill.check',
+      () => needsBackfillFn(dbManager, sessionsDir),
+    )) {
       return false;
     }
   } catch (err) {
@@ -89,21 +93,23 @@ export function scheduleSessionBackfill(
   state.inProgress = true;
   state.promise = new Promise<void>((resolve) => {
     setTimeoutFn(() => {
-      try {
-        const result = indexSessionsFn(dbManager, sessionsDir, { maxFilesToIndex });
-        if (!result.reachedLimit) touchBackfillTimestampFn(dbManager);
-        notifyBestEffort(options.notify, formatBackfillResult(result), result.errors.length > 0 || result.reachedLimit ? 'warning' : 'info');
-      } catch (err) {
-        notifyBestEffort(
-          options.notify,
-          `⚠️ Session backfill failed: ${err instanceof Error ? err.message : String(err)}`,
-          'warning',
-        );
-      } finally {
-        state.inProgress = false;
-        state.promise = null;
-        resolve();
-      }
+      measureLifecycleSync('session-backfill.callback', () => {
+        try {
+          const result = indexSessionsFn(dbManager, sessionsDir, { maxFilesToIndex });
+          if (!result.reachedLimit) touchBackfillTimestampFn(dbManager);
+          notifyBestEffort(options.notify, formatBackfillResult(result), result.errors.length > 0 || result.reachedLimit ? 'warning' : 'info');
+        } catch (err) {
+          notifyBestEffort(
+            options.notify,
+            `⚠️ Session backfill failed: ${err instanceof Error ? err.message : String(err)}`,
+            'warning',
+          );
+        } finally {
+          state.inProgress = false;
+          state.promise = null;
+          resolve();
+        }
+      });
     }, 0);
   });
 

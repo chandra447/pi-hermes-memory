@@ -58,6 +58,7 @@ import { buildPromptContext } from "./prompt-context.js";
 import { migrateLegacyProjectMemoryDirs } from "./project-memory-migration.js";
 import { AGENT_ROOT } from "./paths.js";
 import { isDatabaseMigrationPending } from "./extension-root-migration.js";
+import { measureLifecycle, measureLifecycleSync } from "./lifecycle-timing.js";
 
 export function resolveProjectSkillDiscovery(
   skillStore: SkillStore,
@@ -167,41 +168,45 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     if (!persistenceInitialized) {
       try {
-        await migrateThenSyncMarkdownMemories(
-          dbManager,
-          shouldMigrateExtensionRoot ? legacyGlobalDir : null,
-          globalDir,
-          config.projectsMemoryDir,
-          agentRoot,
-          {
-            onMigrationSucceeded: () => {
-              databaseMigrationPending = false;
-              dbManager.setOpenGuard(null);
+        await measureLifecycle("session-start.persistence-sync", async () => {
+          await migrateThenSyncMarkdownMemories(
+            dbManager,
+            shouldMigrateExtensionRoot ? legacyGlobalDir : null,
+            globalDir,
+            config.projectsMemoryDir,
+            agentRoot,
+            {
+              onMigrationSucceeded: () => {
+                databaseMigrationPending = false;
+                dbManager.setOpenGuard(null);
+              },
             },
-          },
-        );
+          );
+        });
         persistenceInitialized = true;
       } catch {
         // Best-effort only: migration or SQLite backfill must not block startup.
       }
     }
 
-    const nextProject = detectProject(config.projectsMemoryDir, ctx.cwd);
-    const nextProjectMemoryDir = nextProject.memoryDir ?? null;
-    if (nextProjectMemoryDir !== projectMemoryDir) {
-      projectMemoryDir = nextProjectMemoryDir;
-      projectStore = createProjectStore(nextProject);
-      configureProjectStore(projectStore);
-      configureMemoryToolProjectStore(projectStore);
-    }
-    project = nextProject;
-    projectName = nextProject.name ?? "";
-    refreshSkillProjectContext(ctx.cwd);
-    await skillStore.migrateLegacySkills();
-    await skillStore.ensureDiscoveredRoots();
-    await store.loadFromDisk();
-    if (projectStore) await projectStore.loadFromDisk();
-    if (standingStore) await standingStore.load();
+    await measureLifecycle("session-start.load", async () => {
+      const nextProject = detectProject(config.projectsMemoryDir, ctx.cwd);
+      const nextProjectMemoryDir = nextProject.memoryDir ?? null;
+      if (nextProjectMemoryDir !== projectMemoryDir) {
+        projectMemoryDir = nextProjectMemoryDir;
+        projectStore = createProjectStore(nextProject);
+        configureProjectStore(projectStore);
+        configureMemoryToolProjectStore(projectStore);
+      }
+      project = nextProject;
+      projectName = nextProject.name ?? "";
+      refreshSkillProjectContext(ctx.cwd);
+      await skillStore.migrateLegacySkills();
+      await skillStore.ensureDiscoveredRoots();
+      await store.loadFromDisk();
+      if (projectStore) await projectStore.loadFromDisk();
+      if (standingStore) await standingStore.load();
+    });
 
     if (persistenceInitialized) scheduleSessionBackfill(dbManager, sessionsDir, {
       notify: (message, level) => {
@@ -319,32 +324,36 @@ export default function (pi: ExtensionAPI) {
   // close() and silently no-op.
   pi.on("session_shutdown", async (_event, ctx) => {
     try {
-      const sessionFile = ctx.sessionManager.getSessionFile();
-      if (sessionFile && require("node:fs").existsSync(sessionFile)) {
-        const sessionData = parseSessionFile(sessionFile);
-        if (sessionData) {
-          dbManager.withCorruptionRecovery(() => {
-            indexSession(dbManager, sessionData);
-            // Keep session_files metadata in sync with the final on-disk state.
-            // Pi appends the closing session entry on shutdown after the last
-            // message_end, so without this upsert the stored size/mtime would be
-            // stale and the next startup would re-parse this file unnecessarily.
-            upsertSessionFileMetadata(dbManager, sessionFile, sessionData.id);
-          });
+      measureLifecycleSync("shutdown.active-index", () => {
+        const sessionFile = ctx.sessionManager.getSessionFile();
+        if (sessionFile && require("node:fs").existsSync(sessionFile)) {
+          const sessionData = parseSessionFile(sessionFile);
+          if (sessionData) {
+            dbManager.withCorruptionRecovery(() => {
+              indexSession(dbManager, sessionData);
+              // Keep session_files metadata in sync with the final on-disk state.
+              // Pi appends the closing session entry on shutdown after the last
+              // message_end, so without this upsert the stored size/mtime would be
+              // stale and the next startup would re-parse this file unnecessarily.
+              upsertSessionFileMetadata(dbManager, sessionFile, sessionData.id);
+            });
+          }
         }
-      }
+      });
     } catch {
       // Silent fail — don't block shutdown
     } finally {
       try {
-        await Promise.all([
+        await measureLifecycle("shutdown.index-waits", () => Promise.all([
           waitForSessionBackfill(SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS),
           waitForLiveSessionIndex(SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS),
-        ]);
+        ]));
       } catch {
         // Best effort only — shutdown should not be held up by indexing errors.
       }
-      try { dbManager.close(); } catch { /* best effort — never block shutdown */ }
+      try {
+        measureLifecycleSync("shutdown.database-close", () => dbManager.close());
+      } catch { /* best effort — never block shutdown */ }
     }
   });
 }

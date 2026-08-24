@@ -18,6 +18,7 @@ import {
   FLUSH_PROMPT,
 } from "../constants.js";
 import type { MemoryConfig } from "../types.js";
+import { measureLifecycle } from "../lifecycle-timing.js";
 import { collectMessageParts } from "./message-parts.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
 import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
@@ -143,8 +144,8 @@ export function setupSessionFlush(
 
   // Flush before session shutdown. Pi awaits async session_shutdown handlers
   // before invalidating the session, so await the bounded flush here.
-  pi.on("session_shutdown", async (_event, ctx) => {
-    if (!config.flushOnShutdown) return;
-    await flush(ctx, undefined, 10000);
+  pi.on("session_shutdown", async (event, ctx) => {
+    if (!config.flushOnShutdown || event.reason === "reload") return;
+    await measureLifecycle("shutdown.flush", () => flush(ctx, undefined, 10000));
   });
 }

@@ -5,6 +5,7 @@ import { SCHEMA_SQL } from './schema.js';
 import { AtomicLockCoordinator } from './atomic-lock-coordinator.js';
 import { canonicalStoragePathSync } from './canonical-storage-path.js';
 import { isBunRuntime, loadBetterSqlite3 } from './sqlite-native.js';
+import { measureLifecycleSync } from '../lifecycle-timing.js';
 
 type StatementLike = {
   run: (...args: any[]) => any;
@@ -263,36 +264,38 @@ export class DatabaseManager {
    * Open the database and initialize schema.
    */
   private open(): DatabaseLike {
-    const dir = path.dirname(this.dbPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    let opened: DatabaseLike;
-    try {
-      opened = this.openUnchecked();
-    } catch (err) {
-      if (!DatabaseManager.isCorruptionError(err)) {
-        throw err;
+    return measureLifecycleSync('database.open', () => {
+      const dir = path.dirname(this.dbPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
       }
 
-      let recoveredDb: DatabaseLike | null = null;
-      let recovery: DatabaseRecoveryResult;
+      let opened: DatabaseLike;
       try {
-        recovery = this.recoverDatabaseFile(err, () => {
-          recoveredDb = this.openUnchecked();
-        });
-      } catch (error) {
-        if (recoveredDb) this.safeClose(recoveredDb);
-        throw error;
-      }
-      this.lastRecovery = recovery;
-      if (!recoveredDb) throw new Error(`SQLite recovery verification did not open ${this.displayDbPath}`);
-      return recoveredDb;
-    }
+        opened = this.openUnchecked();
+      } catch (err) {
+        if (!DatabaseManager.isCorruptionError(err)) {
+          throw err;
+        }
 
-    this.scheduleOpenIntegrityScan(opened);
-    return opened;
+        let recoveredDb: DatabaseLike | null = null;
+        let recovery: DatabaseRecoveryResult;
+        try {
+          recovery = this.recoverDatabaseFile(err, () => {
+            recoveredDb = this.openUnchecked();
+          });
+        } catch (error) {
+          if (recoveredDb) this.safeClose(recoveredDb);
+          throw error;
+        }
+        this.lastRecovery = recovery;
+        if (!recoveredDb) throw new Error(`SQLite recovery verification did not open ${this.displayDbPath}`);
+        return recoveredDb;
+      }
+
+      this.scheduleOpenIntegrityScan(opened);
+      return opened;
+    });
   }
 
   /**
@@ -310,14 +313,18 @@ export class DatabaseManager {
             // scan, so skip to avoid a stale-handle recovery.
             return;
           }
-          this.assertIntegrityOk(db, 'quick_check', 'after open');
-        } catch (err) {
-          try {
-            this.recoverFromCorruption(err);
-          } catch {
-            // Best-effort here; at-operation withCorruptionRecovery still
-            // quarantines and rebuilds if a later statement hits the corruption.
-          }
+          measureLifecycleSync('database.quick-check', () => {
+            try {
+              this.assertIntegrityOk(db, 'quick_check', 'after open');
+            } catch (err) {
+              try {
+                this.recoverFromCorruption(err);
+              } catch {
+                // Best-effort here; at-operation withCorruptionRecovery still
+                // quarantines and rebuilds if a later statement hits the corruption.
+              }
+            }
+          });
         } finally {
           if (this.pendingOpenIntegrityScan === scan) {
             this.pendingOpenIntegrityScan = null;
@@ -1131,9 +1138,12 @@ export class DatabaseManager {
    * Close the database connection.
    */
   close(): void {
-    if (this.db) {
-      try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* best effort */ }
-      try { this.db.close(); } catch { /* best effort — close may throw on a corrupt handle */ }
+    const db = this.db;
+    if (db) {
+      try {
+        measureLifecycleSync('database.checkpoint', () => db.exec('PRAGMA wal_checkpoint(TRUNCATE)'));
+      } catch { /* best effort */ }
+      try { db.close(); } catch { /* best effort — close may throw on a corrupt handle */ }
       this.db = null;
     }
     this.pendingOpenIntegrityScan = null;

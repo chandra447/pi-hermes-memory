@@ -558,6 +558,24 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `flushMinTurns` | `6` | Minimum turns before flush triggers |
 | `flushRecentMessages` | `0` | Recent messages included in session flush (`0` = all) |
 
+## Diagnosing lifecycle latency
+
+Run Pi with timing enabled to see which memory lifecycle step is slow:
+
+```bash
+PI_TIMING=1 pi
+```
+
+`pi-hermes-memory` writes these spans to stderr only when timing is enabled:
+
+- `session-start.persistence-sync` and `session-start.load`
+- `session-backfill.check` and `session-backfill.callback`
+- `live-index.callback`
+- `shutdown.flush`, `shutdown.active-index`, `shutdown.index-waits`, and `shutdown.database-close`
+- `database.open`, `database.quick-check`, and `database.checkpoint`
+
+The deferred backfill, live-index, and integrity-check spans may appear after startup spans because they run on later timer turns. `/reload` does not run `shutdown.flush`; other shutdown reasons keep the configured direct completion and subprocess fallback. Use the measured spans before changing indexing, checkpoint, or synchronization policy.
+
 ## Where Data Lives
 
 ```
