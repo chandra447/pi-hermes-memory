@@ -13,8 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Snapshot retention converges for dormant memory stores** ([#202](https://github.com/chandra447/pi-hermes-memory/issues/202)): retention caps for `.recovery-*` / `.retired-*` sidecar files only ran inside `saveToDisk()`, so a project store that stopped being written kept its snapshots past the count, age, and byte limits forever (one reported store held 171 recovery snapshots against a cap of 32). Each `session_start` now sweeps the global store and every discovered project store with the identical per-file policy under the same mutation lock; enumeration skips symlinks, hidden directories, and nested paths.
+
 - **Reload no longer waits for an unnecessary LLM memory flush**: Pi preserves the current session during `/reload`, but the shutdown handler ignored `event.reason` and awaited direct completion plus possible subprocess fallback after six user turns. Reload now skips both transports; quit and session-replacement reasons keep the existing flush policy.
-- **Portable child extension sources were discarded before Pi could resolve them**: `childExtensionPaths` ran every configured value through Node's cwd-relative `path.resolve()` and required that resulting local path to already exist. This silently dropped Pi-native `~/...`, `git:...`, and `npm:...` extension sources, forcing machine-specific absolute paths for custom providers in isolated subprocesses. Configured sources are now passed unchanged to Pi's standard `-e` resolver, while Hermes-discovered auth adapter paths retain their local existence checks.
 
 ## [0.9.4] - 2026-08-08
 

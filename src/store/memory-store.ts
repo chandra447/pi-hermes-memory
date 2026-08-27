@@ -166,6 +166,18 @@ export class MemoryStore {
     };
   }
 
+  /**
+   * Enforce snapshot retention for every target of this store without a
+   * write (#202). A store that stops being written never reaches saveToDisk,
+   * so its .recovery-* and .retired-* artifacts only converge here.
+   */
+  async maintainRecoveryFiles(): Promise<void> {
+    for (const target of ["memory", "user", "failure"] as const) {
+      const filePath = await this.resolveStoragePath(target);
+      await withMarkdownMutationLock(filePath, () => this.pruneRecoveryFiles(filePath));
+    }
+  }
+
   // ─── CRUD ───
 
   async add(target: "memory" | "user" | "failure", content: string, signal?: AbortSignal): Promise<MemoryResult> {

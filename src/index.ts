@@ -29,6 +29,7 @@ import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
 import { DatabaseManager } from "./store/db.js";
 import { indexSession, upsertSessionFileMetadata, pruneEphemeralReviewSessions } from "./store/session-indexer.js";
+import { runRecoveryMaintenance } from "./store/recovery-maintenance.js";
 import { scheduleSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-backfill.js";
 import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-live-index.js";
 import { parseSessionFile } from "./store/session-parser.js";
@@ -213,6 +214,11 @@ export default function (pi: ExtensionAPI) {
         pruneEphemeralReviewSessions(dbManager);
       } catch (err) {
         console.warn(`⚠️ Ephemeral session cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        await runRecoveryMaintenance({ config, globalDir });
+      } catch (err) {
+        console.warn(`⚠️ Snapshot retention sweep failed: ${err instanceof Error ? err.message : String(err)}`);
       }
       scheduleSessionBackfill(dbManager, sessionsDir, {
         notify: (message, level) => {
