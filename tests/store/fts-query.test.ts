@@ -83,11 +83,18 @@ describe('fts-query', () => {
   });
 
   describe('isFts5QueryError', () => {
-    it('detects FTS5 and related SQLite failure messages', () => {
+    it('detects genuine FTS5 query/index failure messages', () => {
       assert.ok(isFts5QueryError(new Error('fts5: syntax error near "AND"')), 'fts5');
       assert.ok(isFts5QueryError(new Error('fts5: unterminated string')), 'unterminated string');
-      assert.ok(isFts5QueryError(new Error('database disk image is malformed')), 'malformed');
-      assert.ok(isFts5QueryError(new Error('SQL logic error')), 'sql logic error');
+      assert.ok(isFts5QueryError(new Error('unterminated string constant in FTS5 query')), 'unterminated string constant');
+    });
+
+    it('rejects corruption signals so DatabaseManager recovery still runs (#186)', () => {
+      // These are corruption/recovery signals, NOT recoverable FTS query errors.
+      // Swallowing them would suppress quarantine/rebuild of a corrupt database.
+      assert.ok(!isFts5QueryError(new Error('database disk image is malformed')), 'malformed is corruption, not FTS');
+      assert.ok(!isFts5QueryError(new Error('SQL logic error')), 'sql logic error is too broad to swallow');
+      assert.ok(!isFts5QueryError(new Error('file is not a database')), 'notadb is corruption, not FTS');
     });
 
     it('rejects unrelated errors', () => {

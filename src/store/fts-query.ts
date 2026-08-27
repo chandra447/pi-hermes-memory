@@ -122,8 +122,10 @@ export function buildNaturalLanguageFallbackQuery(query: string): string | null 
 export function isFts5QueryError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
+  // NOTE: "malformed" and "sql logic error" are intentionally NOT matched here.
+  // They are corruption/recovery signals used by DatabaseManager (#186); swallowing
+  // them would suppress database quarantine/rebuild. Only genuine FTS5 query/index
+  // errors are considered recoverable search-path failures.
   return msg.includes('fts5') ||
-    msg.includes('unterminated string') ||
-    msg.includes('malformed') ||
-    msg.includes('sql logic error');
+    msg.includes('unterminated string');
 }

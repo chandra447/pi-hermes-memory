@@ -481,27 +481,38 @@ export function needsBackfill(
   if (files.length > indexed.count) {
     // Only files still inside the retention window can demand a backfill;
     // expired (pruned) files must not.
-    const retainedFiles = files.filter((file) => {
+    let retainedCount = 0;
+    for (const file of files) {
       try {
-        return isWithinRetention(getSessionFileMetadata(file).mtimeMs, retentionCutoffMs);
+        if (isWithinRetention(getSessionFileMetadata(file).mtimeMs, retentionCutoffMs)) retainedCount++;
       } catch {
-        return false;
+        // Unreadable files cannot demand a backfill.
       }
-    });
-    if (retainedFiles.length > indexed.count) {
+    }
+    if (retainedCount > indexed.count) {
       return true;
     }
   }
 
+  let hasRetainedFile = false;
   for (const file of files) {
     try {
       const metadata = getSessionFileMetadata(file);
       if (!isWithinRetention(metadata.mtimeMs, retentionCutoffMs)) continue;
+      hasRetainedFile = true;
       if (storedSessionFileMatches(dbManager, metadata)) continue;
       return true;
     } catch {
       return true;
     }
+  }
+
+  // Retention is enabled and every file is outside the window: there is no
+  // work for a backfill to do. Returning here (instead of falling through to
+  // the periodic timestamp check) keeps an all-expired store from scheduling
+  // an empty backfill on every startup before any timestamp is written.
+  if (retentionCutoffMs > 0 && !hasRetainedFile) {
+    return false;
   }
 
   return !isRecentBackfillTimestamp(getLastBackfillTimestamp(dbManager), now.getTime());

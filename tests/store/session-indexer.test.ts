@@ -566,6 +566,54 @@ describe('session-indexer', () => {
       assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), true);
     });
 
+    it('needsBackfill returns no work when retention is enabled and every file is expired, even without a backfill timestamp', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'project-a', 's1');
+      const filePath = path.join(sessionsDir, 'project-a', 's1.jsonl');
+
+      // Age the file beyond the retention window.
+      const old = new Date('2026-01-01T00:00:00Z');
+      fs.utimesSync(filePath, old, old);
+
+      const now = new Date('2026-05-03T01:00:00Z');
+      const cutoff = Date.parse('2026-03-01T00:00:00Z');
+      assert.ok(old.getTime() < cutoff, 'sanity: the file must be outside the window');
+
+      // Fresh DB: no indexed rows and no backfill timestamp, so the periodic
+      // timestamp check alone would demand a backfill. With retention enabled
+      // and no retained files, there is no work to do — this must return
+      // false instead of scheduling an empty backfill on every startup.
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, now, cutoff), false);
+    });
+
+    it('needsBackfill still schedules when a retained file exists without a backfill timestamp', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'project-a', 's1');
+      const filePath = path.join(sessionsDir, 'project-a', 's1.jsonl');
+
+      // File stays inside the retention window.
+      const recent = new Date('2026-04-15T00:00:00Z');
+      fs.utimesSync(filePath, recent, recent);
+
+      const now = new Date('2026-05-03T01:00:00Z');
+      const cutoff = Date.parse('2026-03-01T00:00:00Z');
+      assert.ok(recent.getTime() >= cutoff, 'sanity: the file must be inside the window');
+
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, now, cutoff), true);
+    });
+
+    it('needsBackfill keeps the periodic check active when retention is disabled', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'project-a', 's1');
+      const filePath = path.join(sessionsDir, 'project-a', 's1.jsonl');
+
+      // An old file is still eligible when retention is disabled (cutoff 0).
+      const old = new Date('2026-01-01T00:00:00Z');
+      fs.utimesSync(filePath, old, old);
+
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), true);
+    });
+
     it('touchBackfillTimestamp upserts the metadata row', () => {
       touchBackfillTimestamp(dbManager, new Date('2026-05-03T00:00:00Z'));
       touchBackfillTimestamp(dbManager, new Date('2026-05-03T01:00:00Z'));

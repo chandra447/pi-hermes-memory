@@ -17,6 +17,7 @@ import {
   removeSyncedMemories,
   replaceSyncedMemories,
   syncMemoryEntry,
+  isFts5QueryError,
 } from "../store/sqlite-memory-store.js";
 import { MEMORY_TOOL_DESCRIPTION } from "../constants.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
@@ -251,9 +252,8 @@ async function reconcileStoreScope(
     return null;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    const msg = detail.toLowerCase();
-    if (msg.includes('fts5') || msg.includes('malformed') || msg.includes('sql logic error') || msg.includes('unterminated')) {
-      return `Saved to Markdown. Search may be temporarily unavailable (FTS5 error); try /memory-sync-markdown to re-index.`;
+    if (isFts5QueryError(err)) {
+      return `Saved to Markdown. Search may be temporarily unavailable (FTS5 index error: ${detail}). Run /memory-sync-markdown to rebuild the search index.`;
     }
     return `Saved to Markdown, but SQLite search reconciliation failed: ${detail}`;
   }

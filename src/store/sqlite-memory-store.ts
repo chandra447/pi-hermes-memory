@@ -9,6 +9,8 @@ import {
 import { normalizeMemoryLookupText } from './memory-lookup.js';
 import type { MemoryCategory } from '../types.js';
 
+export { isFts5QueryError };
+
 const MEMORY_SELECT_COLUMNS = `
   id,
   project,
@@ -438,12 +440,17 @@ export function reconcileMarkdownMemoryScope(
   target: 'memory' | 'user' | 'failure',
   project: string | null = null,
 ): MarkdownMemoryReconcileResult {
-  const db = dbManager.getDb();
   const normalizedProject = normalizeNullable(project);
 
+  // The full reconcile runs against the CURRENT database handle. It must fetch
+  // it via dbManager.getDb() rather than a pre-fetched handle: after corruption
+  // recovery quarantines the old file and rebuilds a fresh one, the retry has
+  // to run on the new handle.
   const reconcile = (): MarkdownMemoryReconcileResult => {
+    const db = dbManager.getDb();
     let inserted = 0;
     let existing = 0;
+    let removed = 0;
     const desiredIdentities = new Set<string>();
 
     for (const rawEntry of rawEntries) {
@@ -476,7 +483,6 @@ export function reconcileMarkdownMemoryScope(
       }
     }
 
-    let removed = 0;
     if (orphanIds.length > 0) {
       const placeholders = orphanIds.map(() => '?').join(', ');
       removed = db.prepare(`DELETE FROM memories WHERE id IN (${placeholders})`).run(...orphanIds).changes;
@@ -485,15 +491,26 @@ export function reconcileMarkdownMemoryScope(
     return { inserted, existing, removed };
   };
 
-  const transactional = db.transaction?.(reconcile);
-  try {
+  const run = (): MarkdownMemoryReconcileResult => {
+    const db = dbManager.getDb();
+    const transactional = db.transaction?.(reconcile);
     return transactional ? transactional() : reconcile();
+  };
+
+  try {
+    // Corruption errors (e.g. "database disk image is malformed") are NOT
+    // search-index problems: they must stay on the recovery path so
+    // DatabaseManager quarantines the corrupt file, rebuilds a fresh one, and
+    // retries this sync (#186). Swallowing them would hide corruption and
+    // leave a corrupt database in place.
+    return dbManager.withCorruptionRecovery(run);
   } catch (err) {
     if (isFts5QueryError(err)) {
-      // A broken FTS5 index must not fail the memory write itself. Persist the
-      // markdown entry and report a graceful no-op for the search sync so the
-      // user is not blocked or alarmed; a later /memory-sync-markdown can
-      // rebuild the search index.
+      // A genuine FTS5 query/index error means the search index is stale or
+      // broken, not that the database is corrupt. Markdown is the source of
+      // truth, so the write must not fail: warn the user and report a no-op
+      // sync. /memory-sync-markdown can rebuild the index afterwards.
+      console.warn(`[pi-hermes-memory] FTS5 search index error during markdown sync (search may be stale; run /memory-sync-markdown): ${err instanceof Error ? err.message : String(err)}`);
       return { inserted: 0, existing: 0, removed: 0 };
     }
     throw err;
