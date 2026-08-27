@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Clean process exit on Node 24+** ([#193](https://github.com/chandra447/pi-hermes-memory/issues/193), reported by [@vanneswong](https://github.com/vanneswong)): `better-sqlite3` 12.x inherits Node's raw `node::ObjectWrap`, whose destructor calls `RemoveEnvironmentCleanupHook` after Node has torn down its Environment — so on Node 24 (observed on Linux aarch64) Pi could abort with SIGABRT and a non-zero exit code at every shutdown, after all work completed. The dependency moves to `better-sqlite3@^13.0.3`, the first N-API/node-addon-api release, which removes that crash path. The public API this extension uses is unchanged; the declared engines (`>=22`) cover every Pi-supported runtime.
+
 - **Snapshot retention converges for dormant memory stores** ([#202](https://github.com/chandra447/pi-hermes-memory/issues/202)): retention caps for `.recovery-*` / `.retired-*` sidecar files only ran inside `saveToDisk()`, so a project store that stopped being written kept its snapshots past the count, age, and byte limits forever (one reported store held 171 recovery snapshots against a cap of 32). Each `session_start` now sweeps the global store and every discovered project store with the identical per-file policy under the same mutation lock; enumeration skips symlinks, hidden directories, and nested paths.
 
 - **Reload no longer waits for an unnecessary LLM memory flush**: Pi preserves the current session during `/reload`, but the shutdown handler ignored `event.reason` and awaited direct completion plus possible subprocess fallback after six user turns. Reload now skips both transports; quit and session-replacement reasons keep the existing flush policy.
