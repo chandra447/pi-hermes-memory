@@ -28,7 +28,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
 import { DatabaseManager } from "./store/db.js";
-import { indexSession, upsertSessionFileMetadata } from "./store/session-indexer.js";
+import { indexSession, upsertSessionFileMetadata, pruneEphemeralReviewSessions } from "./store/session-indexer.js";
 import { scheduleSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-backfill.js";
 import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-live-index.js";
 import { parseSessionFile } from "./store/session-parser.js";
@@ -208,18 +208,25 @@ export default function (pi: ExtensionAPI) {
       if (standingStore) await standingStore.load();
     });
 
-    if (persistenceInitialized) scheduleSessionBackfill(dbManager, sessionsDir, {
-      notify: (message, level) => {
-        const ui = (ctx as { ui?: { notify?: (message: string, level?: string) => void } }).ui;
-        if (ui?.notify) {
-          ui.notify(message, level);
-        } else if (level === "error" || level === "warning") {
-          console.warn(message);
-        } else {
-          console.info(message);
-        }
-      },
-    });
+    if (persistenceInitialized) {
+      try {
+        pruneEphemeralReviewSessions(dbManager);
+      } catch (err) {
+        console.warn(`⚠️ Ephemeral session cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      scheduleSessionBackfill(dbManager, sessionsDir, {
+        notify: (message, level) => {
+          const ui = (ctx as { ui?: { notify?: (message: string, level?: string) => void } }).ui;
+          if (ui?.notify) {
+            ui.notify(message, level);
+          } else if (level === "error" || level === "warning") {
+            console.warn(message);
+          } else {
+            console.info(message);
+          }
+        },
+      });
+    }
   });
 
   registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir);

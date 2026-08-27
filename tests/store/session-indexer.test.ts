@@ -18,6 +18,7 @@ import {
   parseSessionManagerSnapshot,
   truncateMessageContent,
   upsertSessionFileMetadata,
+  pruneEphemeralReviewSessions,
 } from '../../src/store/session-indexer.js';
 import { DEFAULT_MAX_MESSAGE_CONTENT_LENGTH } from '../../src/constants.js';
 import { parseSessionFile, type ParsedSession } from '../../src/store/session-parser.js';
@@ -410,6 +411,43 @@ describe('session-indexer', () => {
       assert.strictEqual(result.messagesIndexed, 1);
       const indexed = dbManager.getDb().prepare('SELECT id, cwd FROM sessions WHERE id = ?').get('file-session-1') as { id: string; cwd: string };
       assert.strictEqual(indexed.cwd, '/work/file-project');
+    });
+
+    it('does not index a session without persisted file provenance', () => {
+      const result = indexLiveSession(dbManager, {
+        getHeader: () => ({ id: 'ephemeral-review', timestamp: '2026-05-03T00:00:00Z', cwd: '/tmp/review' }),
+        getEntries: () => [{
+          type: 'message',
+          id: 'review-message',
+          timestamp: '2026-05-03T00:01:00Z',
+          message: { role: 'user', content: [{ type: 'text', text: 'review prompt' }] },
+        }],
+        getSessionFile: () => undefined,
+      });
+
+      assert.strictEqual(result, null);
+      assert.strictEqual(dbManager.getStats().sessions, 0);
+      assert.strictEqual(dbManager.getStats().messages, 0);
+    });
+
+    it('removes existing file-less background review sessions', () => {
+      indexSession(dbManager, {
+        id: 'old-background-review',
+        project: 'review',
+        cwd: '/tmp/review',
+        startedAt: '2026-05-03T00:00:00Z',
+        endedAt: null,
+        messages: [{
+          id: 'review-message',
+          role: 'user',
+          content: '<file name="/tmp/pi-hermes-prompt-abc123/prompt.md">\nReview the conversation above.',
+          timestamp: '2026-05-03T00:01:00Z',
+        }],
+      });
+
+      assert.strictEqual(pruneEphemeralReviewSessions(dbManager), 1);
+      assert.strictEqual(dbManager.getStats().sessions, 0);
+      assert.strictEqual(dbManager.getStats().messages, 0);
     });
 
     it('indexCurrentSession indexes missing live messages idempotently', () => {

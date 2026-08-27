@@ -227,6 +227,7 @@ export function indexLiveSession(dbManager: DatabaseManager, sessionManager: Ses
 
 function indexLiveSessionOnce(dbManager: DatabaseManager, sessionManager: SessionManagerSnapshot): IndexResult | null {
   const sessionFile = sessionManager.getSessionFile?.();
+  if (sessionManager.getSessionFile && !sessionFile) return null;
   if (sessionFile && fs.existsSync(sessionFile)) {
     const session = parseSessionFile(sessionFile);
     if (session) {
@@ -237,6 +238,41 @@ function indexLiveSessionOnce(dbManager: DatabaseManager, sessionManager: Sessio
   }
 
   return indexCurrentSession(dbManager, sessionManager);
+}
+
+/**
+ * Remove rows created by background review subprocesses that ran with
+ * `--no-session` before live indexing rejected ephemeral sessions.
+ */
+export function pruneEphemeralReviewSessions(dbManager: DatabaseManager): number {
+  return dbManager.withCorruptionRecovery(() => {
+    const db = dbManager.getDb();
+    const candidates = db.prepare(`
+      SELECT s.id
+      FROM sessions s
+      WHERE NOT EXISTS (
+        SELECT 1 FROM session_files sf WHERE sf.session_id = s.id
+      )
+        AND (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) = 1
+        AND EXISTS (
+          SELECT 1
+          FROM messages m
+          WHERE m.session_id = s.id
+            AND m.content LIKE ?
+        )
+    `).all('<file name="/tmp/pi-hermes-prompt-%') as Array<{ id: string }>;
+
+    if (candidates.length === 0) return 0;
+
+    const placeholders = candidates.map(() => '?').join(', ');
+    const ids = candidates.map(({ id }) => id);
+    const remove = () => {
+      db.prepare(`DELETE FROM messages WHERE session_id IN (${placeholders})`).run(...ids);
+      return db.prepare(`DELETE FROM sessions WHERE id IN (${placeholders})`).run(...ids).changes;
+    };
+
+    return db.transaction ? db.transaction(remove)() : remove();
+  });
 }
 
 function getSessionFileMetadata(filePath: string): SessionFileMetadata {
