@@ -31,9 +31,20 @@ export interface DirectReviewResult {
   error?: string;
 }
 
+export interface DirectReviewContext {
+  /** The exact system prompt used by the active parent turn. */
+  systemPrompt: string;
+  /** The active parent messages, already converted to LLM messages. */
+  messages: Message[];
+  /** The active parent thinking level, including "off". */
+  thinkingLevel?: ThinkingLevel;
+}
+
 export interface RunDirectMemoryCompletionOptions {
   userPrompt: string;
   systemPrompt: string;
+  /** Optional parent context. The review instruction is appended after it. */
+  context?: DirectReviewContext;
   config: Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride">;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -83,8 +94,11 @@ function normalizedModelOverride(config: ReviewLlmConfig): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function effectiveThinkingOverride(config: ReviewLlmConfig): ThinkingLevel | undefined {
-  return config.llmThinkingOverride ?? (normalizedModelOverride(config) ? "off" : undefined);
+function effectiveThinkingOverride(
+  config: ReviewLlmConfig,
+  context?: DirectReviewContext,
+): ThinkingLevel | undefined {
+  return config.llmThinkingOverride ?? context?.thinkingLevel;
 }
 
 type ReviewModelRegistry = ExtensionContext["modelRegistry"];
@@ -389,11 +403,20 @@ export async function applyReviewOperations(
 
 function responseText(content: unknown): string {
   if (!Array.isArray(content)) return "";
-  return content
+
+  const text = content
     .filter((block): block is { type: "text"; text: string } => (
       !!block && typeof block === "object" && (block as { type?: string }).type === "text"
     ))
     .map((block) => block.text)
+    .join("\n");
+  if (text.trim()) return text;
+
+  return content
+    .filter((block): block is { type: "thinking"; thinking: string } => (
+      !!block && typeof block === "object" && (block as { type?: string }).type === "thinking"
+    ))
+    .map((block) => block.thinking)
     .join("\n");
 }
 
@@ -430,14 +453,17 @@ export async function runDirectMemoryCompletion(
     options.signal.addEventListener("abort", () => controller.abort(), { once: true });
   }
 
-  const thinking = effectiveThinkingOverride(options.config);
+  const thinking = effectiveThinkingOverride(options.config, options.context);
   const userMessage: Message = {
     role: "user",
     content: [{ type: "text", text: options.userPrompt }],
     timestamp: Date.now(),
   };
 
-  const request = { systemPrompt: options.systemPrompt, messages: [userMessage] };
+  const request = {
+    systemPrompt: options.context?.systemPrompt ?? options.systemPrompt,
+    messages: [...(options.context?.messages ?? []), userMessage],
+  };
 
   try {
     let response;
@@ -471,6 +497,9 @@ export async function runDirectMemoryCompletion(
     }
 
     const text = responseText(response.content);
+    if (!text.trim()) {
+      return { ok: true, appliedCount: 0, fallbackReason: "empty" };
+    }
     const operations = parseReviewOperations(text);
     if (operations === null) {
       return { ok: false, appliedCount: 0, fallbackReason: "parse_error" };

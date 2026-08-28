@@ -273,12 +273,19 @@ describe("buildChildPiPromptArgs", () => {
     );
   });
 
-  it("adds a model override and defaults thinking to off", () => {
+  it("adds a model override without changing thinking by default", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", { llmModelOverride: "openrouter/deepseek/deepseek-v4-flash" }, []),
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", ...EXT_ARGS, "hello"],
     );
   });
+  it("inherits the active thinking level when supplied", () => {
+    assert.deepStrictEqual(
+      buildChildPiPromptArgs("hello", {}, [], { provider: "local-llama", id: "local-9b" }, "high"),
+      ["-p", "--no-session", "--model", "local-llama/local-9b", "--thinking", "high", ...EXT_ARGS, "hello"],
+    );
+  });
+
   it("inherits the active provider/model when no override is configured", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", {}, [], { provider: "local-llama", id: "local-9b" }),
@@ -294,7 +301,7 @@ describe("buildChildPiPromptArgs", () => {
         [],
         { provider: "local-llama", id: "local-9b" },
       ),
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", ...EXT_ARGS, "hello"],
     );
   });
 
@@ -778,7 +785,7 @@ describe("execChildPrompt", () => {
     const promptReference = logicalCalls[0].at(-1)!;
     assert.match(promptReference, /^@/);
     assert.deepStrictEqual(logicalCalls, [
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, promptReference],
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", ...EXT_ARGS, promptReference],
       // Retry drops configured overrides but preserves the active session model.
       ["-p", "--no-session", "--model", "local-llama/local-9b", ...EXT_ARGS, promptReference],
     ]);
@@ -830,7 +837,7 @@ describe("execChildPrompt", () => {
       const promptReference = calls[0].args.at(-1)!;
       assert.match(promptReference, /^@/);
       assert.deepStrictEqual(calls.map(logicalChildArgs), [
-        ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, promptReference],
+        ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", ...EXT_ARGS, promptReference],
         ["-p", "--no-session", ...EXT_ARGS, promptReference],
       ]);
     } finally {

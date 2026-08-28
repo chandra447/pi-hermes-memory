@@ -399,9 +399,9 @@ Both counters reset after each review.
 
 ### Direct-Transport LLM Calls (Review, Flush, Correction, Consolidation)
 
-By default, background review, session flush, correction save, and the manual `/memory-consolidate` command use an in-process `completeSimple()` side-channel: a small JSON-only prompt, no child `pi` process, and memory writes applied directly by the extension. This keeps the main session's system prompt, tools, and LLM prefix cache intact, and avoids the subprocess path's argv/`--no-extensions` concerns entirely on the common path.
+By default, background review, session flush, correction save, and the manual `/memory-consolidate` command use an in-process `completeSimple()` side-channel: no child `pi` process, memory writes applied directly by the extension, and a JSON-only review request. Eligible full-history background reviews (`reviewRecentMessages: 0` with no model or thinking override) reuse the active session's system prompt, branch/compaction context, and thinking level, so providers can reuse the parent prefix cache. A recent-message window or explicit override uses the compact legacy prompt instead.
 
-If direct mode fails (no model, no auth, provider error, unparseable response, or — for consolidation only — a result that didn't actually free any space), it automatically falls back to the legacy `pi -p --no-session` subprocess path. The automatic over-capacity consolidator triggered from `MemoryStore` itself always uses the subprocess path, since it runs without extension-runtime access.
+If direct mode fails (no model, no auth, provider error, unparseable response, or — for consolidation only — a result that didn't actually free any space), it automatically falls back to the legacy `pi -p --no-session` subprocess path. Background-review fallback still formats the SDK-built active branch, including compaction and branch summaries. The automatic over-capacity consolidator triggered from `MemoryStore` itself always uses the subprocess path, since it runs without extension-runtime access.
 
 Set `reviewTransport` in config only when you need to override this:
 
@@ -503,6 +503,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "reviewRecentMessages": 0,
   "reviewEnabled": true,
   "reviewTransport": "direct",
+  "quickCheckOnOpen": true,
   "memoryOverflowStrategy": "auto-consolidate",
   "autoConsolidate": true,
   "correctionDetection": true,
@@ -533,13 +534,14 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `projectsMemoryDir` | `projects-memory` | Subdirectory under `~/.pi/agent/` for project-scoped memory |
 | `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.pi/agent/sessions/` |
 | `llmModelOverride` | unset | Optional model override for background review (direct and subprocess), correction save, session flush, and consolidation |
-| `llmThinkingOverride` | unset | Optional thinking override for those LLM calls; valid values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. If `llmModelOverride` is set and this is omitted, review/child calls default to `off` |
+| `llmThinkingOverride` | unset | Optional thinking override for those LLM calls; valid values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. If unset, eligible full-history direct reviews inherit the active session thinking level; forced subprocess reviews use the provider default, while a subprocess fallback can inherit that level from the failed direct review |
 | `childExtensionPaths` | unset | Trusted provider/auth extension sources explicitly allowed in isolated child Pi processes. Values are passed to Pi's standard `-e` resolver, so absolute paths, `~/...`, paths relative to the child working directory, and `git:`/`npm:` package sources are supported. Sibling packages matching the `*-oauth-adapter`/`*-auth-adapter` naming convention (including scoped packages, via their `package.json` `pi.extensions` manifest) are detected automatically. This setting is only needed for custom providers or adapters that are not detected. In-process direct transport (the default for review/flush/correction/consolidation) doesn't need it, since it reads whatever provider auth is already registered. |
 | `nudgeInterval` | `10` | Turns between auto-reviews |
 | `nudgeToolCalls` | `15` | Tool calls between auto-reviews (OR with turns) |
 | `reviewRecentMessages` | `0` | Recent messages included in background review (`0` = all) |
 | `reviewEnabled` | `true` | Enable/disable background learning loop |
 | `reviewTransport` | `direct` | LLM transport for background review, session flush, correction save, and manual consolidation: `direct` uses in-process `completeSimple()` with subprocess fallback; `subprocess` forces legacy `pi -p` only |
+| `quickCheckOnOpen` | `true` | Run the synchronous full-database SQLite `quick_check` after opening. Set to `false` for large databases to avoid startup/event-loop stalls; operation-time corruption recovery remains enabled |
 | `memoryOverflowStrategy` | `auto-consolidate` | Behavior when MEMORY.md, USER.md, failures.md, or project-scoped memory reaches its character limit: `auto-consolidate` runs the existing consolidation flow; `reject` returns an error; `fifo-evict` rotates older entries in file order until the new entry fits |
 | `autoConsolidate` | `true` | Legacy alias for `memoryOverflowStrategy` when `memoryOverflowStrategy` is not set (`true` = `auto-consolidate`, `false` = `reject`) |
 | `consolidationTimeoutMs` | `180000` | Maximum time in milliseconds for a consolidation run (auto and `/memory-consolidate` alike). Configured values are used verbatim; a consolidation pays child-process boot plus a full LLM turn, so values below the default are frequently killed mid-run and log a warning at startup |

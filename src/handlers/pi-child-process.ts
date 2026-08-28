@@ -33,6 +33,7 @@ interface ExecChildPromptOptions {
   signal?: AbortSignal;
   cwd?: string;
   model?: ChildPiModel;
+  thinking?: ThinkingLevel;
   timeoutMs: number;
   retryWithoutOverrides?: boolean;
 }
@@ -83,7 +84,7 @@ function normalizedModelOverride(config: ChildLlmConfig): string | undefined {
 }
 
 function effectiveThinkingOverride(config: ChildLlmConfig): ThinkingLevel | undefined {
-  return config.llmThinkingOverride ?? (normalizedModelOverride(config) ? "off" : undefined);
+  return config.llmThinkingOverride;
 }
 
 export function hasChildLlmOverrides(config: ChildLlmConfig): boolean {
@@ -263,11 +264,12 @@ export function buildChildPiPromptArgs(
   config: ChildLlmConfig,
   _argv: string[] = process.argv.slice(2),
   activeModel?: ChildPiModel,
+  activeThinking?: ThinkingLevel,
 ): string[] {
   const args = ["-p", "--no-session"];
   const model = normalizedModelOverride(config)
     ?? (activeModel?.provider && activeModel.id ? `${activeModel.provider}/${activeModel.id}` : undefined);
-  const thinking = effectiveThinkingOverride(config);
+  const thinking = effectiveThinkingOverride(config) ?? activeThinking;
 
   if (model) args.push("--model", model);
   if (thinking) args.push("--thinking", thinking);
@@ -277,13 +279,19 @@ export function buildChildPiPromptArgs(
   return args;
 }
 
-function basePromptArgs(prompt: string, config: ChildLlmConfig, activeModel?: ChildPiModel): string[] {
+function basePromptArgs(
+  prompt: string,
+  config: ChildLlmConfig,
+  activeModel?: ChildPiModel,
+  activeThinking?: ThinkingLevel,
+): string[] {
   // Always use --no-extensions + own path so the retry also avoids loading
   // all settings.json packages — matching the primary code path.
   const args = ["-p", "--no-session"];
   if (activeModel?.provider && activeModel.id) {
     args.push("--model", `${activeModel.provider}/${activeModel.id}`);
   }
+  if (activeThinking) args.push("--thinking", activeThinking);
   appendOwnExtensionArgs(args, config);
   args.push(prompt);
   return args;
@@ -445,7 +453,15 @@ export async function execChildPrompt(
   try {
     try {
       const invocation = resolveWatchedChildPiInvocation(
-        resolveChildPiInvocation(buildChildPiPromptArgs(promptReference, config, process.argv.slice(2), options.model)),
+        resolveChildPiInvocation(
+          buildChildPiPromptArgs(
+            promptReference,
+            config,
+            process.argv.slice(2),
+            options.model,
+            options.thinking,
+          ),
+        ),
         options.timeoutMs,
         cancellationPath,
       );
@@ -469,7 +485,9 @@ export async function execChildPrompt(
     }
 
     const retryInvocation = resolveWatchedChildPiInvocation(
-      resolveChildPiInvocation(basePromptArgs(promptReference, config, options.model)),
+      resolveChildPiInvocation(
+        basePromptArgs(promptReference, config, options.model, options.thinking),
+      ),
       options.timeoutMs,
       cancellationPath,
     );

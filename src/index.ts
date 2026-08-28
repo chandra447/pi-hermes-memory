@@ -118,7 +118,9 @@ export default function (pi: ExtensionAPI) {
     legacySkillsDir: path.join(legacyGlobalDir, "skills"),
     migrationSentinelPath: path.join(globalDir, ".skills-migrated-to-extension-storage"),
   });
-  const dbManager = new DatabaseManager(globalDir);
+  const dbManager = new DatabaseManager(globalDir, {
+    quickCheckOnOpen: config.quickCheckOnOpen,
+  });
   let databaseMigrationPending = shouldMigrateExtensionRoot
     && isDatabaseMigrationPending(legacyGlobalDir, globalDir);
   if (databaseMigrationPending) {

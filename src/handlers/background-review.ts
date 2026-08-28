@@ -7,6 +7,7 @@
  * Fallback: pi.exec("pi", ["-p", ...]) subprocess when direct path is unavailable.
  */
 
+import { buildSessionContext, convertToLlm } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   buildMemoryTargetRoutingGuidance,
@@ -16,9 +17,14 @@ import {
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import type { MemoryConfig } from "../types.js";
-import { applyRecentMessageLimit, collectMessageParts } from "./message-parts.js";
+import { applyRecentMessageLimit, collectLlmMessageParts, collectMessageParts } from "./message-parts.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
-import { runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult } from "./review-memory-ops.js";
+import {
+  runDirectMemoryCompletion,
+  usesDirectTransport,
+  type DirectReviewContext,
+  type DirectReviewResult,
+} from "./review-memory-ops.js";
 
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 export interface BackgroundReviewOptions {
@@ -99,6 +105,97 @@ export function buildDirectReviewUserPrompt(input: ReviewPromptInput): string {
   return sections.join("\n");
 }
 
+/**
+ * Build the short suffix used when the parent conversation is passed as the
+ * actual message history. Keeping the review request after that history lets
+ * providers reuse the parent's system/message prefix cache.
+ */
+export function buildDirectReviewContextUserPrompt(input: ReviewPromptInput): string {
+  const sections = [
+    DIRECT_REVIEW_SYSTEM_PROMPT,
+    "",
+    buildMemoryTargetRoutingGuidance(input.currentProject !== null),
+    "",
+    "--- Current Memory ---",
+    input.currentMemory || "(empty)",
+    "",
+    "--- Current User Profile ---",
+    input.currentUser || "(empty)",
+  ];
+
+  if (input.currentProject !== null) {
+    sections.push(
+      "",
+      "--- Current Project Memory ---",
+      input.currentProject || "(empty)",
+    );
+  }
+
+  sections.push(
+    "",
+    "Review the preceding conversation messages and return the JSON operations object only.",
+  );
+
+  return sections.join("\n");
+}
+
+function buildParentSessionContext(
+  ctx: Pick<ExtensionContext, "sessionManager">,
+): ReturnType<typeof buildSessionContext> | undefined {
+  try {
+    const entries = ctx.sessionManager.getBranch();
+    if (entries.some((entry) => (
+      typeof entry === "object"
+      && entry !== null
+      && (entry as { type?: unknown }).type !== "session"
+      && typeof (entry as { id?: unknown }).id !== "string"
+    ))) {
+      return undefined;
+    }
+    const leafId = typeof ctx.sessionManager.getLeafId === "function"
+      ? ctx.sessionManager.getLeafId()
+      : entries.at(-1)?.id;
+    return buildSessionContext(entries, leafId);
+  } catch {
+    return undefined;
+  }
+}
+
+export function buildDirectReviewSessionContext(
+  ctx: Pick<ExtensionContext, "sessionManager"> & { getSystemPrompt?: () => string },
+): DirectReviewContext | undefined {
+  try {
+    const systemPrompt = ctx.getSystemPrompt?.();
+    if (typeof systemPrompt !== "string") return undefined;
+
+    const sessionContext = buildParentSessionContext(ctx);
+    if (!sessionContext) return undefined;
+
+    return {
+      systemPrompt,
+      messages: convertToLlm(sessionContext.messages),
+      thinkingLevel: sessionContext.thinkingLevel as DirectReviewContext["thinkingLevel"],
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Format the SDK-built parent context for the legacy subprocess prompt. This
+ * keeps compaction summaries, branch summaries, custom messages, and the
+ * active branch aligned with the direct transport instead of walking raw
+ * session entries.
+ */
+export function buildDirectReviewContextParts(
+  ctx: Pick<ExtensionContext, "sessionManager">,
+): string[] | undefined {
+  const sessionContext = buildParentSessionContext(ctx);
+  return sessionContext
+    ? collectLlmMessageParts(convertToLlm(sessionContext.messages))
+    : undefined;
+}
+
 function shouldNotifyDirect(result: DirectReviewResult): boolean {
   return result.ok && result.appliedCount > 0;
 }
@@ -119,10 +216,12 @@ async function runSubprocessReview(
   config: MemoryConfig,
   execChild: typeof execChildPrompt,
   ctx: Pick<ExtensionContext, "cwd" | "model" | "signal">,
+  thinking?: DirectReviewContext["thinkingLevel"],
 ): Promise<{ code: number; stdout?: string; stderr?: string }> {
   return execChild(pi, prompt, config, {
     cwd: ctx.cwd,
     model: resolveChildPiModel(ctx.model),
+    thinking,
     signal: ctx.signal,
     timeoutMs: 120000,
   });
@@ -200,15 +299,33 @@ export function setupBackgroundReview(
     const parts = applyRecentMessageLimit(allParts, config.reviewRecentMessages);
     const activeProjectStore = resolveProjectStore(projectStore);
     const activeProjectName = resolveProjectName(projectName);
+    const canReuseParentContext = config.reviewRecentMessages === 0
+      && !config.llmModelOverride?.trim()
+      && config.llmThinkingOverride === undefined;
+    const directSessionContext = usesDirectTransport(config) && canReuseParentContext
+      ? buildDirectReviewSessionContext(ctx)
+      : undefined;
+    const contextParts = config.reviewRecentMessages === 0
+      ? (directSessionContext
+        ? collectLlmMessageParts(directSessionContext.messages)
+        : buildDirectReviewContextParts(ctx))
+      : undefined;
     const promptInput: ReviewPromptInput = {
-      parts,
+      parts: contextParts ?? parts,
       currentMemory: store.getMemoryEntries().join("\n§\n"),
       currentUser: store.getUserEntries().join("\n§\n"),
       currentProject: activeProjectStore ? activeProjectStore.getMemoryEntries().join("\n§\n") : null,
     };
 
     const subprocessPrompt = buildSubprocessReviewPrompt(promptInput);
-    const directPrompt = buildDirectReviewUserPrompt(promptInput);
+    const directPrompt = directSessionContext
+      ? buildDirectReviewContextUserPrompt(promptInput)
+      : buildDirectReviewUserPrompt(promptInput);
+    const directSystemPrompt = directSessionContext?.systemPrompt ?? [
+      DIRECT_REVIEW_SYSTEM_PROMPT,
+      "",
+      buildMemoryTargetRoutingGuidance(activeProjectStore !== null),
+    ].join("\n");
 
     const finishReview = () => {
       reviewInProgress = false;
@@ -232,11 +349,8 @@ export function setupBackgroundReview(
             activeProjectStore,
             {
               userPrompt: directPrompt,
-              systemPrompt: [
-                DIRECT_REVIEW_SYSTEM_PROMPT,
-                "",
-                buildMemoryTargetRoutingGuidance(activeProjectStore !== null),
-              ].join("\n"),
+              systemPrompt: directSystemPrompt,
+              context: directSessionContext,
               config,
               timeoutMs: 120000,
             },
@@ -263,7 +377,14 @@ export function setupBackgroundReview(
 
       let subprocessResult: { code: number; stdout?: string; stderr?: string };
       try {
-        subprocessResult = await runSubprocessReview(pi, subprocessPrompt, config, execChild, ctx);
+        subprocessResult = await runSubprocessReview(
+          pi,
+          subprocessPrompt,
+          config,
+          execChild,
+          ctx,
+          directSessionContext?.thinkingLevel,
+        );
       } catch (error) {
         if (directFailure) {
           ctx.ui.notify(

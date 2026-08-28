@@ -842,6 +842,34 @@ describe('DatabaseManager', () => {
       assert.doesNotThrow(() => dbManager.getDb());
     });
 
+    it('skips the open-time integrity scan when quickCheckOnOpen is false', async () => {
+      const db = dbManager.getDb();
+      db.prepare(`
+        INSERT INTO sessions (id, project, cwd, started_at)
+        VALUES (?, ?, ?, ?)
+      `).run('skip-check-session', 'skip-check-project', '/work/skip-check', '2026-05-03T00:00:00Z');
+      db.prepare(`
+        INSERT INTO messages (id, session_id, role, content, timestamp)
+        VALUES (?, ?, ?, ?, ?)
+      `).run('skip-check-message', 'skip-check-session', 'user', 'message', '2026-05-03T00:01:00Z');
+      dbManager.close();
+
+      corruptRecoverableIndexPage(path.join(tmpDir, 'sessions.db'), 'idx_messages_timestamp');
+
+      dbManager = new DatabaseManager(tmpDir, { quickCheckOnOpen: false });
+      assert.doesNotThrow(() => dbManager.getDb());
+      await dbManager.waitForStartupIntegrityScan();
+
+      assert.strictEqual(dbManager.getLastRecovery(), null);
+      const checkDb = new Database(path.join(tmpDir, 'sessions.db'));
+      try {
+        const rows = checkDb.prepare('PRAGMA quick_check').all() as Array<Record<string, unknown>>;
+        assert.notDeepStrictEqual(rows.map((row) => Object.values(row)[0]), ['ok']);
+      } finally {
+        checkDb.close();
+      }
+    });
+
     it('repairs recoverable corruption on open and preserves readable rows', async () => {
       const db = dbManager.getDb();
       db.prepare(`

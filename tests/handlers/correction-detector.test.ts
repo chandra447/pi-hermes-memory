@@ -377,7 +377,7 @@ describe("setupCorrectionDetector handler", () => {
     ]);
   });
 
-  it("passes child LLM override args and defaults thinking to off when only a model override is set", async () => {
+  it("passes child LLM override args without forcing a thinking level", async () => {
     const pi = createMockPi();
     setupCorrectionDetector(pi, mockStore, null, {
       ...config,
@@ -395,8 +395,10 @@ describe("setupCorrectionDetector handler", () => {
     const cmdArgs = logicalChildArgs(execCalls[0]);
     assert.deepStrictEqual(
       cmdArgs.slice(0, 6),
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off"],
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--no-extensions", "-e"],
     );
+    assert.ok(cmdArgs[6]?.endsWith("/src/index.ts"), "child should load Hermes explicitly");
+    assert.ok(!cmdArgs.includes("--thinking"), "child should inherit thinking when none is configured");
   });
 
   it("does NOT trigger on normal messages", async () => {

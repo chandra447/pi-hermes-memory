@@ -38,6 +38,8 @@ export interface MemoryConfig {
   reviewEnabled: boolean;
   /** How background review invokes the LLM. Default: direct */
   reviewTransport?: ReviewTransport;
+  /** Run the full synchronous SQLite quick_check after opening. Default: true */
+  quickCheckOnOpen?: boolean;
   /** Flush memories before compaction. Default: true */
   flushOnCompact: boolean;
   /** Flush memories on session shutdown. Default: true */

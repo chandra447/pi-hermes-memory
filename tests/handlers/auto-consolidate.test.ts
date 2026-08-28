@@ -445,14 +445,17 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
 
     assert.strictEqual(result.consolidated, true);
     assert.strictEqual(execCalls.length, 2, "should retry once without overrides");
-    assert.deepStrictEqual(logicalChildArgs(execCalls[0]).slice(0, 6), [
+    const overrideArgs = logicalChildArgs(execCalls[0]);
+    assert.deepStrictEqual(overrideArgs.slice(0, 6), [
       "-p",
       "--no-session",
       "--model",
       "openrouter/deepseek/deepseek-v4-flash",
-      "--thinking",
-      "off",
+      "--no-extensions",
+      "-e",
     ]);
+    assert.ok(overrideArgs[6]?.endsWith("/src/index.ts"), "override retry should load Hermes explicitly");
+    assert.ok(!overrideArgs.includes("--thinking"), "override retry should inherit thinking when none is configured");
     const retryArgs = logicalChildArgs(execCalls[1]);
     assert.deepStrictEqual(retryArgs.slice(0, 2), ["-p", "--no-session"]);
     assert.ok(!retryArgs.includes("--model"), "fallback retry should drop model override");

@@ -3,6 +3,8 @@ import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  buildDirectReviewContextParts,
+  buildDirectReviewSessionContext,
   buildDirectReviewUserPrompt,
   buildSubprocessReviewPrompt,
   setupBackgroundReview,
@@ -174,6 +176,218 @@ function reviewPrompt(index = execCalls.length - 1): string {
 }
 
 // ─── Tests ───
+
+describe("buildDirectReviewSessionContext", () => {
+  it("keeps only the active branch and preserves custom/tool messages", () => {
+    const entries = [
+      {
+        type: "message",
+        id: "root",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "root" }], timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "sibling",
+        parentId: "root",
+        message: { role: "user", content: [{ type: "text", text: "sibling" }], timestamp: 2 },
+      },
+      {
+        type: "message",
+        id: "assistant",
+        parentId: "root",
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "memory_search", arguments: "{}" }],
+          api: "openai-completions",
+          provider: "test",
+          model: "test-model",
+          usage: {},
+          stopReason: "toolUse",
+          timestamp: 3,
+        },
+      },
+      {
+        type: "message",
+        id: "tool-result",
+        parentId: "assistant",
+        message: {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "memory_search",
+          content: [{ type: "text", text: "result" }],
+          isError: false,
+          timestamp: 4,
+        },
+      },
+      {
+        type: "custom_message",
+        id: "custom",
+        parentId: "tool-result",
+        customType: "extension-note",
+        content: "custom context",
+        display: true,
+        details: { source: "test" },
+        timestamp: "2026-01-01T00:00:05.000Z",
+      },
+      {
+        type: "message",
+        id: "leaf",
+        parentId: "custom",
+        message: { role: "user", content: [{ type: "text", text: "leaf" }], timestamp: 6 },
+      },
+    ];
+
+    const context = buildDirectReviewSessionContext({
+      getSystemPrompt: () => "parent system",
+      sessionManager: {
+        getBranch: () => entries,
+        getLeafId: () => "leaf",
+      },
+    } as any);
+
+    assert.strictEqual(context?.systemPrompt, "parent system");
+    assert.deepStrictEqual(context?.messages.map((message) => message.role), [
+      "user", "assistant", "toolResult", "user", "user",
+    ]);
+    assert.strictEqual(context?.messages.some((message) => (
+      message.content?.some((block: any) => block.type === "text" && block.text === "sibling")
+    )), false);
+    assert.strictEqual((context?.messages[1].content[0] as any).name, "memory_search");
+    assert.strictEqual((context?.messages[2].content[0] as any).text, "result");
+    assert.strictEqual((context?.messages[3].content[0] as any).text, "custom context");
+  });
+
+  it("preserves an explicit empty leaf instead of falling back to the last entry", () => {
+    const context = buildDirectReviewSessionContext({
+      getSystemPrompt: () => "parent system",
+      sessionManager: {
+        getBranch: () => [{
+          type: "message",
+          id: "stale",
+          parentId: null,
+          message: { role: "user", content: [{ type: "text", text: "stale" }], timestamp: 1 },
+        }],
+        getLeafId: () => null,
+      },
+    } as any);
+
+    assert.deepStrictEqual(context?.messages, []);
+  });
+
+  it("formats the SDK context for subprocess prompts", () => {
+    const entries = [
+      {
+        type: "message",
+        id: "before",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "before compaction" }], timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "kept",
+        parentId: "before",
+        message: { role: "assistant", content: [{ type: "text", text: "kept message" }], timestamp: 2 },
+      },
+      {
+        type: "compaction",
+        id: "compact",
+        parentId: "kept",
+        summary: "compacted history",
+        firstKeptEntryId: "kept",
+        tokensBefore: 100,
+        timestamp: "2026-01-01T00:00:03.000Z",
+      },
+      {
+        type: "branch_summary",
+        id: "branch",
+        parentId: "compact",
+        summary: "returned branch summary",
+        fromId: "other-leaf",
+        timestamp: "2026-01-01T00:00:04.000Z",
+      },
+      {
+        type: "custom_message",
+        id: "custom",
+        parentId: "branch",
+        customType: "extension-note",
+        content: "custom context",
+        display: true,
+        details: { source: "test" },
+        timestamp: "2026-01-01T00:00:05.000Z",
+      },
+      {
+        type: "message",
+        id: "after",
+        parentId: "custom",
+        message: { role: "user", content: [{ type: "text", text: "after compaction" }], timestamp: 6 },
+      },
+    ];
+
+    const parts = buildDirectReviewContextParts({
+      sessionManager: {
+        getBranch: () => entries,
+        getLeafId: () => "after",
+      },
+    } as any);
+
+    assert.ok(parts);
+    assert.ok(parts.some((part) => part.includes("compacted history")));
+    assert.ok(parts.some((part) => part.includes("returned branch summary")));
+    assert.ok(parts.some((part) => part.includes("custom context")));
+    assert.ok(parts.some((part) => part.includes("after compaction")));
+    assert.ok(!parts.some((part) => part.includes("before compaction")));
+  });
+
+  it("represents the active compaction summary and kept message window", () => {
+    const entries = [
+      {
+        type: "message",
+        id: "before",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "before" }], timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "kept",
+        parentId: "before",
+        message: { role: "assistant", content: [{ type: "text", text: "kept" }], timestamp: 2 },
+      },
+      {
+        type: "compaction",
+        id: "compact",
+        parentId: "kept",
+        summary: "older context summary",
+        firstKeptEntryId: "kept",
+        tokensBefore: 100,
+        timestamp: "2026-01-01T00:00:03.000Z",
+      },
+      {
+        type: "message",
+        id: "after",
+        parentId: "compact",
+        message: { role: "user", content: [{ type: "text", text: "after" }], timestamp: 4 },
+      },
+    ];
+
+    const context = buildDirectReviewSessionContext({
+      getSystemPrompt: () => "parent system",
+      sessionManager: {
+        getBranch: () => entries,
+        getLeafId: () => "after",
+      },
+    } as any);
+
+    assert.deepStrictEqual(
+      context?.messages.map((message) => message.content?.[0]?.text),
+      [
+        "The conversation history before this point was compacted into the following summary:\n\n<summary>\nolder context summary\n</summary>",
+        "kept",
+        "after",
+      ],
+    );
+  });
+});
 
 describe("setupBackgroundReview", () => {
   beforeEach(() => {
@@ -385,6 +599,86 @@ describe("setupBackgroundReview", () => {
     const prompt = reviewPrompt();
     assert.ok(prompt.includes("Message number 0"), "default should include older messages");
     assert.ok(prompt.includes("Message number 9"), "default should include latest messages");
+  });
+
+  it("uses compaction and branch-aware context in subprocess prompts", async () => {
+    const pi = createMockPi();
+    setup(pi, defaultConfig);
+
+    const branch = [
+      {
+        type: "message",
+        id: "before",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "before compaction" }] },
+      },
+      {
+        type: "message",
+        id: "kept",
+        parentId: "before",
+        message: { role: "assistant", content: [{ type: "text", text: "kept message" }] },
+      },
+      {
+        type: "compaction",
+        id: "compact",
+        parentId: "kept",
+        summary: "compacted history",
+        firstKeptEntryId: "kept",
+        tokensBefore: 100,
+        timestamp: "2026-01-01T00:00:03.000Z",
+      },
+      {
+        type: "branch_summary",
+        id: "branch",
+        parentId: "compact",
+        summary: "returned branch summary",
+        fromId: "other-leaf",
+        timestamp: "2026-01-01T00:00:04.000Z",
+      },
+      {
+        type: "custom_message",
+        id: "custom",
+        parentId: "branch",
+        customType: "extension-note",
+        content: "custom context",
+        display: true,
+        details: { source: "test" },
+        timestamp: "2026-01-01T00:00:05.000Z",
+      },
+      {
+        type: "message",
+        id: "after",
+        parentId: "custom",
+        message: { role: "user", content: [{ type: "text", text: "after compaction" }] },
+      },
+      {
+        type: "message",
+        id: "final",
+        parentId: "after",
+        message: { role: "assistant", content: [{ type: "text", text: "final message" }] },
+      },
+    ];
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(branch, {
+        sessionManager: {
+          getBranch: () => branch,
+          getLeafId: () => "final",
+        },
+      });
+    }
+    await reviewSettledSignal.promise;
+
+    const prompt = reviewPrompt();
+    assert.match(prompt, /compacted history/);
+    assert.match(prompt, /returned branch summary/);
+    assert.match(prompt, /custom context/);
+    assert.match(prompt, /after compaction/);
+    assert.match(prompt, /final message/);
+    assert.doesNotMatch(prompt, /before compaction/);
   });
 
   it("limits background review to recent messages when configured", async () => {
@@ -752,6 +1046,99 @@ describe("setupBackgroundReview", () => {
     assert.ok(reviewNotify, "should notify when direct review applies memory");
   });
 
+  it("passes the active session context and thinking level to direct review", async () => {
+    const pi = createMockPi();
+    setupWithDirectDeps(pi, { ok: true, appliedCount: 0 }, {
+      ...defaultConfig,
+      reviewTransport: "direct",
+    });
+
+    const branch = [
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Message number 0" }],
+          timestamp: 1,
+        },
+      },
+      {
+        type: "message",
+        id: "assistant-1",
+        parentId: "user-1",
+        timestamp: "2026-01-01T00:00:01.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Message number 1" }],
+          timestamp: 2,
+        },
+      },
+      {
+        type: "thinking_level_change",
+        id: "thinking-1",
+        parentId: "assistant-1",
+        timestamp: "2026-01-01T00:00:02.000Z",
+        thinkingLevel: "high",
+      },
+      {
+        type: "message",
+        id: "user-2",
+        parentId: "thinking-1",
+        timestamp: "2026-01-01T00:00:03.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Message number 2" }],
+          timestamp: 3,
+        },
+      },
+      {
+        type: "message",
+        id: "assistant-2",
+        parentId: "user-2",
+        timestamp: "2026-01-01T00:00:04.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Message number 3" }],
+          timestamp: 4,
+        },
+      },
+    ];
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(branch, {
+        sessionManager: {
+          getBranch: () => branch,
+          getEntries: () => branch,
+          getLeafId: () => "assistant-2",
+        },
+        getSystemPrompt: () => "main-system-prompt",
+        model: { provider: "local", id: "qwen" },
+      });
+    }
+    await reviewSettledSignal.promise;
+
+    assert.strictEqual(directCalls.length, 1);
+    const options = directCalls[0][3] as {
+      systemPrompt: string;
+      userPrompt: string;
+      context?: { systemPrompt: string; thinkingLevel: string; messages: any[] };
+    };
+    assert.strictEqual(options.context?.systemPrompt, "main-system-prompt");
+    assert.strictEqual(options.context?.thinkingLevel, "high");
+    assert.deepStrictEqual(
+      options.context?.messages.map((message) => message.content?.[0]?.text),
+      ["Message number 0", "Message number 1", "Message number 2", "Message number 3"],
+    );
+    assert.ok(!options.userPrompt.includes("Message number 0"));
+    assert.strictEqual(options.systemPrompt, "main-system-prompt");
+  });
+
   it("falls back to subprocess when direct review cannot run", async () => {
     const pi = createMockPi();
     setupWithDirectDeps(pi, { ok: false, appliedCount: 0, fallbackReason: "no_model" }, {
@@ -771,6 +1158,107 @@ describe("setupBackgroundReview", () => {
     assert.strictEqual(directCalls.length, 1, "direct review should be attempted first");
     assert.strictEqual(execCalls.length, 1, "subprocess should run as fallback");
   });
+  it("does not inherit active thinking when subprocess transport is forced", async () => {
+    const pi = createMockPi();
+    setup(pi, {
+      ...defaultConfig,
+      reviewTransport: "subprocess",
+    } as MemoryConfig);
+
+    const branch = [
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "first" }] },
+      },
+      {
+        type: "message",
+        id: "assistant-1",
+        parentId: "user-1",
+        message: { role: "assistant", content: [{ type: "text", text: "second" }] },
+      },
+      {
+        type: "thinking_level_change",
+        id: "thinking-1",
+        parentId: "assistant-1",
+        thinkingLevel: "high",
+      },
+      {
+        type: "message",
+        id: "user-2",
+        parentId: "thinking-1",
+        message: { role: "user", content: [{ type: "text", text: "third" }] },
+      },
+      {
+        type: "message",
+        id: "assistant-2",
+        parentId: "user-2",
+        message: { role: "assistant", content: [{ type: "text", text: "fourth" }] },
+      },
+    ];
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(branch, {
+        sessionManager: {
+          getBranch: () => branch,
+          getLeafId: () => "assistant-2",
+        },
+        model: { provider: "local-llama", id: "local-9b" },
+      });
+    }
+    await reviewSettledSignal.promise;
+
+    assert.deepStrictEqual(logicalChildArgs(0).slice(0, 5), [
+      "-p", "--no-session", "--model", "local-llama/local-9b", "--no-extensions",
+    ]);
+  });
+
+  it("inherits the active thinking level for subprocess fallback", async () => {
+    const pi = createMockPi();
+    setupWithDirectDeps(pi, { ok: false, appliedCount: 0, fallbackReason: "no_auth" }, {
+      ...defaultConfig,
+      reviewTransport: "direct",
+    });
+
+    const messageBranch = makeBranch(4).map((entry, index) => ({
+      ...entry,
+      id: `message-${index}`,
+      parentId: index === 0 ? null : `message-${index - 1}`,
+    }));
+    const branch = [
+      ...messageBranch,
+      {
+        type: "thinking_level_change",
+        id: "thinking-1",
+        parentId: "message-3",
+        timestamp: "2026-01-01T00:00:04.000Z",
+        thinkingLevel: "high",
+      },
+    ];
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(branch, {
+        sessionManager: {
+          getBranch: () => branch,
+          getLeafId: () => "thinking-1",
+        },
+        getSystemPrompt: () => "main-system-prompt",
+        model: { provider: "local-llama", id: "local-9b" },
+      });
+    }
+    await reviewSettledSignal.promise;
+
+    assert.deepStrictEqual(logicalChildArgs(0).slice(0, 7), [
+      "-p", "--no-session", "--model", "local-llama/local-9b", "--thinking", "high", "--no-extensions",
+    ]);
+  });
+
   it("inherits the active session model and execution context for subprocess fallback", async () => {
     const pi = createMockPi();
     setupWithDirectDeps(pi, { ok: false, appliedCount: 0, fallbackReason: "no_auth" }, {

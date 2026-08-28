@@ -24,6 +24,7 @@ describe("loadConfig", () => {
     assert.strictEqual(config.reviewRecentMessages, 0);
     assert.strictEqual(config.reviewEnabled, true);
     assert.strictEqual(config.reviewTransport, "direct");
+    assert.strictEqual(config.quickCheckOnOpen, true);
     assert.strictEqual(config.flushOnCompact, true);
     assert.strictEqual(config.flushOnShutdown, true);
     assert.strictEqual(config.flushMinTurns, 6);
@@ -77,6 +78,7 @@ describe("loadConfig", () => {
       memoryPolicyCustomText: "<memory-policy>Custom</memory-policy>",
       nudgeInterval: 15,
       reviewRecentMessages: 25,
+      quickCheckOnOpen: false,
       flushRecentMessages: 40,
       failureInjectionEnabled: false,
       failureInjectionMaxAgeDays: 30,
@@ -93,6 +95,7 @@ describe("loadConfig", () => {
     assert.strictEqual(config.memoryCharLimit, 3000);
     assert.strictEqual(config.nudgeInterval, 15);
     assert.strictEqual(config.reviewRecentMessages, 25);
+    assert.strictEqual(config.quickCheckOnOpen, false);
     assert.strictEqual(config.flushRecentMessages, 40);
     assert.strictEqual(config.failureInjectionEnabled, false);
     assert.strictEqual(config.autoConsolidationWarnOnFailure, false);

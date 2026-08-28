@@ -25,3 +25,18 @@ export function collectMessageParts(entries: unknown[], recentMessages = 0): str
 
   return applyRecentMessageLimit(parts, recentMessages);
 }
+
+export function collectLlmMessageParts(messages: unknown[], recentMessages = 0): string[] {
+  const parts: string[] = [];
+
+  for (const message of messages) {
+    const text = getMessageText(message);
+    if (!text) continue;
+
+    const role = (message as { role?: unknown } | null)?.role;
+    const prefix = role === "user" ? "[USER]" : role === "toolResult" ? "[TOOL]" : "[ASSISTANT]";
+    parts.push(`${prefix}: ${text}`);
+  }
+
+  return applyRecentMessageLimit(parts, recentMessages);
+}

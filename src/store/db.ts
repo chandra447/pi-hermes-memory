@@ -53,6 +53,11 @@ export interface DatabaseRecoveryOptions {
   recoveryBackupRetention?: number;
 }
 
+export interface DatabaseManagerOptions extends DatabaseRecoveryOptions {
+  /** Run the full synchronous quick_check after opening an existing database. */
+  quickCheckOnOpen?: boolean;
+}
+
 interface ResolvedDatabaseRecoveryOptions {
   recoveryLockWaitMs: number;
   recoveryLockPollMs: number;
@@ -161,14 +166,16 @@ export class DatabaseManager {
   private readonly displayDbPath: string;
   private canonicalDbPath: string | null = null;
   private readonly recoveryOptions: ResolvedDatabaseRecoveryOptions;
+  private readonly quickCheckOnOpen: boolean;
   private lastRecovery: DatabaseRecoveryResult | null = null;
   private openGuard: (() => void) | null = null;
   private pendingOpenIntegrityScan: Promise<void> | null = null;
   private activeRecoveryLease: { coordinator: AtomicLockCoordinator; key: string; token: string } | null = null;
 
-  constructor(memoryDir: string, recoveryOptions: DatabaseRecoveryOptions = {}) {
+  constructor(memoryDir: string, options: DatabaseManagerOptions = {}) {
     this.displayDbPath = path.join(memoryDir, 'sessions.db');
-    this.recoveryOptions = { ...DEFAULT_RECOVERY_OPTIONS, ...recoveryOptions };
+    this.quickCheckOnOpen = options.quickCheckOnOpen ?? true;
+    this.recoveryOptions = { ...DEFAULT_RECOVERY_OPTIONS, ...options };
   }
 
   private get dbPath(): string {
@@ -304,7 +311,7 @@ export class DatabaseManager {
    * at operation time.
    */
   private scheduleOpenIntegrityScan(db: DatabaseLike): void {
-    if (this.pendingOpenIntegrityScan) return;
+    if (!this.quickCheckOnOpen || this.pendingOpenIntegrityScan) return;
     const scan = new Promise<void>((resolve) => {
       setTimeout(() => {
         try {

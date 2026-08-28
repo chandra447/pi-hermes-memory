@@ -182,6 +182,165 @@ describe("provider auth resolution", () => {
   });
 });
 
+describe("direct completion output", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "review-output-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeStore(): MemoryStore {
+    return new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+  }
+
+  function makeContext() {
+    return {
+      model: mockModel(true),
+      modelRegistry: {
+        getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test-key" }),
+        getAll: () => [mockModel(true)],
+        getAvailable: () => [mockModel(true)],
+      },
+    } as never;
+  }
+
+  it("falls back to thinking blocks when content text is empty", async () => {
+    const store = makeStore();
+    await store.loadFromDisk();
+
+    const result = await runDirectMemoryCompletion(
+      makeContext(),
+      store,
+      null,
+      { userPrompt: "review", systemPrompt: "return JSON", config: { llmThinkingOverride: "low" } },
+      null,
+      null,
+      {
+        completeSimple: (async () => ({
+          stopReason: "stop",
+          content: [
+            { type: "text", text: "" },
+            { type: "thinking", thinking: JSON.stringify({
+              operations: [{ action: "add", target: "memory", content: "thinking output" }],
+            }) },
+          ],
+        })) as never,
+      },
+    );
+
+    assert.deepStrictEqual(result, { ok: true, appliedCount: 1 });
+    assert.ok(store.getMemoryEntries().some((entry) => entry.includes("thinking output")));
+  });
+
+  it("does not force thinking off for a model override", async () => {
+    const store = makeStore();
+    await store.loadFromDisk();
+    let completionOptions: any;
+
+    const result = await runDirectMemoryCompletion(
+      makeContext(),
+      store,
+      null,
+      {
+        userPrompt: "review",
+        systemPrompt: "system",
+        config: { llmModelOverride: "test/test-model" },
+      },
+      null,
+      null,
+      {
+        completeSimple: (async (_model: unknown, _request: unknown, options: unknown) => {
+          completionOptions = options;
+          return { stopReason: "stop", content: [{ type: "text", text: '{"operations":[]}' }] };
+        }) as never,
+      },
+    );
+
+    assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty" });
+    assert.strictEqual(completionOptions.reasoning, undefined);
+  });
+
+  it("appends the review instruction after the parent context and inherits thinking", async () => {
+    const store = makeStore();
+    await store.loadFromDisk();
+    let request: any;
+    let completionOptions: any;
+
+    const result = await runDirectMemoryCompletion(
+      makeContext(),
+      store,
+      null,
+      {
+        userPrompt: "review suffix",
+        systemPrompt: "unused fallback system",
+        context: {
+          systemPrompt: "parent system",
+          messages: [
+            { role: "user", content: [{ type: "text", text: "parent user" }], timestamp: 1 },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "parent assistant" }],
+              api: "openai-completions",
+              provider: "test",
+              model: "test-model",
+              usage: {},
+              stopReason: "stop",
+              timestamp: 2,
+            },
+          ],
+          thinkingLevel: "high",
+        },
+        config: {},
+      },
+      null,
+      null,
+      {
+        completeSimple: (async (_model: unknown, receivedRequest: unknown, options: unknown) => {
+          request = receivedRequest;
+          completionOptions = options;
+          return { stopReason: "stop", content: [{ type: "text", text: '{"operations":[]}' }] };
+        }) as never,
+      },
+    );
+
+    assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty" });
+    assert.strictEqual(request.systemPrompt, "parent system");
+    assert.deepStrictEqual(
+      request.messages.map((message: any) => message.content?.[0]?.text),
+      ["parent user", "parent assistant", "review suffix"],
+    );
+    assert.strictEqual(completionOptions.reasoning, "high");
+  });
+
+  it("classifies a response with no text or thinking as empty", async () => {
+    const store = makeStore();
+    await store.loadFromDisk();
+
+    const result = await runDirectMemoryCompletion(
+      makeContext(),
+      store,
+      null,
+      { userPrompt: "review", systemPrompt: "return JSON", config: {} },
+      null,
+      null,
+      {
+        completeSimple: (async () => ({ stopReason: "stop", content: [] })) as never,
+      },
+    );
+
+    assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty" });
+  });
+});
+
 describe("parseReviewOperations", () => {
   it("parses valid JSON operations", () => {
     const parsed = parseReviewOperations(JSON.stringify({

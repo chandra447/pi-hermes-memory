@@ -49,6 +49,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   reviewRecentMessages: DEFAULT_REVIEW_RECENT_MESSAGES,
   reviewEnabled: true,
   reviewTransport: "direct",
+  quickCheckOnOpen: true,
   flushOnCompact: true,
   flushOnShutdown: true,
   flushMinTurns: DEFAULT_FLUSH_MIN_TURNS,
@@ -102,6 +103,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (isNonNegativeNumber(parsed.reviewRecentMessages)) config.reviewRecentMessages = parsed.reviewRecentMessages;
       if (typeof parsed.reviewEnabled === "boolean") config.reviewEnabled = parsed.reviewEnabled;
       if (isReviewTransport(parsed.reviewTransport)) config.reviewTransport = parsed.reviewTransport;
+      if (typeof parsed.quickCheckOnOpen === "boolean") config.quickCheckOnOpen = parsed.quickCheckOnOpen;
       if (typeof parsed.flushOnCompact === "boolean") config.flushOnCompact = parsed.flushOnCompact;
       if (typeof parsed.flushOnShutdown === "boolean") config.flushOnShutdown = parsed.flushOnShutdown;
       if (typeof parsed.flushMinTurns === "number") config.flushMinTurns = parsed.flushMinTurns;
