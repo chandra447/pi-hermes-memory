@@ -1,1 +1,1 @@
-PLACEHOLDER_REBIND
+see-workspace-pr-files-project-rebinding.test.ts
