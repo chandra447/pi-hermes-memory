@@ -208,6 +208,37 @@ describe('sqlite-memory-store', () => {
       assert.equal(result.inserted, 0);
     });
 
+    it('propagates degraded from failure scopes (first reason wins)', () => {
+      // When multiple failure scopes are degraded, the aggregate result must
+      // be degraded with the first reason (not the last) so the user sees the
+      // original failure, not a later duplicate.
+      let callCount = 0;
+      const failingDb = {
+        prepare: (sql: string) => ({
+          get: () => undefined,
+          all: () => [],
+          run: () => {
+            callCount++;
+            throw new Error(`fts5: error #${callCount}`);
+          },
+        }),
+      } as never;
+      const stubDbManager = {
+        getDb: () => failingDb,
+        withCorruptionRecovery: <T>(operation: () => T): T => operation(),
+      } as unknown as DatabaseManager;
+
+      const result = reconcileMarkdownFailureScopes(
+        stubDbManager,
+        [
+          'failure entry one — Project: project-a <!-- created=2026-01-01 -->',
+          'failure entry two — Project: project-b <!-- created=2026-01-01 -->',
+        ],
+      );
+      assert.equal(result.degraded, true);
+      assert.match(result.degradedReason ?? '', /fts5: error #1/);
+    });
+
     it('still propagates corruption errors instead of degrading (recovery must run)', () => {
       // Corruption signals are NOT FTS5 errors: they must escape so
       // DatabaseManager quarantines + rebuilds, never a degraded zero-result.

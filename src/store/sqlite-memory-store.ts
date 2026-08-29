@@ -567,7 +567,7 @@ export function reconcileMarkdownFailureScopes(
     total.inserted += result.inserted;
     total.existing += result.existing;
     total.removed += result.removed;
-    if (result.degraded) {
+    if (result.degraded && !total.degraded) {
       // Surface the first degraded scope: repair guidance applies to the whole
       // sync run, and the first reason is the one to act on.
       total.degraded = true;
