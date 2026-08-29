@@ -89,13 +89,14 @@ function effectiveThinkingOverride(config: ReviewLlmConfig): ThinkingLevel | und
 
 type ReviewModelRegistry = ExtensionContext["modelRegistry"];
 
+/** Derived from the installed SDK so headers/baseUrl track ProviderHeaders instead of a local mirror. */
+export type ResolvedRequestAuth = Awaited<ReturnType<ReviewModelRegistry["getApiKeyAndHeaders"]>>;
+
+type DirectReviewAuth = Omit<Extract<ResolvedRequestAuth, { ok: true }>, "ok"> & { apiKey: string };
+
 export function buildDirectReviewCompletionOptions(
   model: Model<Api>,
-  auth: {
-    apiKey: string;
-    headers?: Record<string, string>;
-    env?: Record<string, string>;
-  },
+  auth: DirectReviewAuth,
   thinking: ThinkingLevel | undefined,
   signal: AbortSignal,
 ): SimpleStreamOptions {
@@ -141,16 +142,6 @@ const AUTH_REJECTION_PATTERN = new RegExp([
 export function isAuthRejection(message: string): boolean {
   return AUTH_REJECTION_PATTERN.test(message);
 }
-
-/**
- * Mirrors the SDK's ResolvedRequestAuth. pi-coding-agent declares it in
- * core/model-registry but does not re-export it from the package root, and its
- * `exports` map blocks deep imports — so name it here. tsc still checks the
- * shape against the real registry at the call below, so drift is a build error.
- */
-export type ResolvedRequestAuth =
-  | { ok: true; apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }
-  | { ok: false; error: string };
 
 /**
  * Resolve request auth through the public ModelRegistry API. Resolve it again
@@ -421,7 +412,7 @@ export async function runDirectMemoryCompletion(
       error: auth.ok ? `No API key for ${model.provider}` : auth.error,
     };
   }
-  let requestAuth = { apiKey: auth.apiKey, headers: auth.headers, env: auth.env };
+  let requestAuth: DirectReviewAuth = { apiKey: auth.apiKey, headers: auth.headers, env: auth.env };
 
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? 120000;
