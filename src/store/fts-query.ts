@@ -4,11 +4,14 @@ const NATURAL_LANGUAGE_CONNECTORS = new Set(['and', 'or', 'not', 'near']);
 
 // Common English stop words that add noise to FTS5 searches. They are silently
 // dropped from natural-language queries so common filler words cannot dominate
-// the FTS5 ranking or produce misleading "AND"-style misses.
+// the FTS5 ranking or produce misleading "AND"-style misses. The list is
+// deliberately conservative: only high-frequency function words are dropped.
+// Words that frequently carry the actual search intent (can, need, off, like,
+// get) stay, so "can the app start" still searches for "can".
 const STOP_WORDS = new Set([
   'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
   'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
-  'may', 'might', 'shall', 'can', 'need', 'dare', 'ought', 'used',
+  'may', 'might', 'shall', 'dare', 'ought', 'used',
   'i', 'me', 'my', 'mine', 'we', 'our', 'ours', 'you', 'your', 'yours',
   'he', 'him', 'his', 'she', 'her', 'hers', 'it', 'its', 'they', 'them',
   'their', 'theirs', 'that', 'this', 'these', 'those', 'what', 'which',
@@ -17,10 +20,10 @@ const STOP_WORDS = new Set([
   'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 's',
   't', 'just', 'don', 'now', 'about', 'above', 'after', 'again', 'against',
   'am', 'at', 'before', 'behind', 'below', 'between', 'by', 'during',
-  'from', 'further', 'into', 'like', 'off', 'over', 'per', 'through',
+  'from', 'further', 'into', 'over', 'per', 'through',
   'throughout', 'till', 'to', 'under', 'until', 'up', 'upon', 'via', 'with',
   'within', 'without', 'as', 'if', 'or', 'but', 'and', 'out', 'of',
-  'for', 'in', 'on', 'any', 'get', 'got', 'here', 'there',
+  'for', 'in', 'on', 'any', 'got', 'here', 'there',
 ]);
 
 export function hasExplicitFts5Operator(query: string): boolean {
@@ -90,6 +93,30 @@ export function buildFallbackFts5Query(query: string): string | null {
 
 function quoteTerms(terms: string[], separator: string): string {
   return terms.map((term) => `"${term.replace(/"/g, '""')}"`).join(separator);
+}
+
+/**
+ * Collect the raw terms of a query for literal (LIKE) fallback searches.
+ * Unlike normalizeFts5Query this does NOT drop stop words — a literal
+ * substring fallback is the last resort, and the original terms are what the
+ * user typed. Natural-language connectors are skipped because they never
+ * carry search intent.
+ */
+export function collectLikeTerms(query: string): string[] {
+  const terms: string[] = [];
+
+  for (const match of query.matchAll(FTS5_TOKEN_PATTERN)) {
+    const phrase = match[1];
+    const term = match[2];
+    if (phrase === undefined && term && NATURAL_LANGUAGE_CONNECTORS.has(term.toLowerCase())) {
+      continue;
+    }
+
+    const rawValue = phrase ?? term ?? '';
+    if (rawValue.length > 0) terms.push(rawValue);
+  }
+
+  return terms;
 }
 
 /**

@@ -72,8 +72,19 @@ describe('fts-query', () => {
 
   describe('natural language recovery', () => {
     it('normalizes uppercase operator words as natural language', () => {
-      const q = normalizeNaturalLanguageFts5Query('DO NOT USE FIND');
-      assert.ok(q.includes('"DO"') || !q.includes('OR ') || true); // only meaningful terms survive
+      // 'DO' is a stop word and 'NOT' a natural-language connector, so only
+      // the two meaningful terms survive, quoted for implicit AND matching.
+      assert.strictEqual(normalizeNaturalLanguageFts5Query('DO NOT USE FIND'), '"USE" "FIND"');
+    });
+
+    it('keeps intent-bearing words out of the stop list (can/need/off/like/get)', () => {
+      // These words frequently carry the actual search intent ("can the app
+      // start", "need to restart", "like this", "get the build passing"), so
+      // they must survive normalization rather than be silently dropped.
+      assert.strictEqual(
+        normalizeFts5Query('can need off like get'),
+        '"can" "need" "off" "like" "get"',
+      );
     });
 
     it('builds a natural language OR fallback ignoring operator detection', () => {

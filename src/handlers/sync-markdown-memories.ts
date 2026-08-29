@@ -165,6 +165,11 @@ export async function syncMarkdownMemoriesToSqlite(
         counters.imported += result.inserted;
         counters.skipped += result.existing;
         counters.removed += result.removed;
+        if (result.degraded) {
+          counters.warnings.push(
+            `${path.basename(project ?? 'global')}/${target}: FTS5 search index error (${result.degradedReason}); run /memory-sync-markdown to rebuild`,
+          );
+        }
       } catch (err) {
         counters.warnings.push(
           `${path.basename(project ?? 'global')}/${target}: ${err instanceof Error ? err.message : String(err)}`,

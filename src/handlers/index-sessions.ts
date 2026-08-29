@@ -6,12 +6,13 @@ import path from 'node:path';
 import fs from 'node:fs';
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DatabaseManager } from '../store/db.js';
-import { indexAllSessions, getSessionStats } from '../store/session-indexer.js';
+import { indexAllSessions, getSessionStats, retentionCutoffMs } from '../store/session-indexer.js';
+import type { MemoryConfig } from '../types.js';
 import { AGENT_ROOT } from '../paths.js';
 
 const SESSIONS_DIR = process.env.PI_CODING_AGENT_SESSION_DIR || path.join(AGENT_ROOT, 'sessions');
 
-export function registerIndexSessionsCommand(pi: ExtensionAPI): void {
+export function registerIndexSessionsCommand(pi: ExtensionAPI, config: MemoryConfig): void {
   pi.registerCommand("memory-index-sessions", {
     description: "Import past Pi sessions into the search database",
     handler: async (_args, ctx: ExtensionCommandContext) => {
@@ -38,7 +39,9 @@ export function registerIndexSessionsCommand(pi: ExtensionAPI): void {
         const dbManager = new DatabaseManager(memoryDir);
 
         try {
-          const result = indexAllSessions(dbManager, SESSIONS_DIR);
+          // Retention is honored here too: a manual reindex must not re-add the
+          // expired sessions the auto pruning just deleted.
+          const result = indexAllSessions(dbManager, SESSIONS_DIR, undefined, retentionCutoffMs(config.sessionRetentionDays));
           const stats = getSessionStats(dbManager);
 
           let output = `\n✅ Session indexing complete!\n\n`;
@@ -46,6 +49,9 @@ export function registerIndexSessionsCommand(pi: ExtensionAPI): void {
           output += `├─ Sessions processed: ${result.sessionsProcessed}\n`;
           output += `├─ Sessions indexed: ${result.sessionsIndexed}\n`;
           output += `├─ Sessions skipped (already indexed): ${result.sessionsSkipped}\n`;
+          if (result.expiredSkipped) {
+            output += `├─ Sessions skipped (outside retention): ${result.expiredSkipped}\n`;
+          }
           output += `└─ Messages indexed: ${result.messagesIndexed}\n`;
 
           if (stats.projects.length > 0) {

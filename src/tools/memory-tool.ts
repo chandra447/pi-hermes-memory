@@ -239,24 +239,34 @@ async function reconcileStoreScope(
   if (!dbManager) return undefined;
   try {
     if (rawTarget === "failure") {
-      reconcileMarkdownFailureScopes(dbManager, entries);
-      return null;
+      return degradedRepairMessage(reconcileMarkdownFailureScopes(dbManager, entries));
     }
     const target = sqliteTargetFor(rawTarget);
-    reconcileMarkdownMemoryScope(
-      dbManager,
-      entries,
-      target,
-      sqliteProjectFor(rawTarget, projectName) ?? null,
+    return degradedRepairMessage(
+      reconcileMarkdownMemoryScope(
+        dbManager,
+        entries,
+        target,
+        sqliteProjectFor(rawTarget, projectName) ?? null,
+      ),
     );
-    return null;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     if (isFts5QueryError(err)) {
-      return `Saved to Markdown. Search may be temporarily unavailable (FTS5 index error: ${detail}). Run /memory-sync-markdown to rebuild the search index.`;
+      return degradedRepairMessage({ degraded: true, degradedReason: detail });
     }
     return `Saved to Markdown, but SQLite search reconciliation failed: ${detail}`;
   }
+}
+
+// A degraded reconcile result means the Markdown write succeeded but the
+// SQLite search mirror could not be updated (genuine FTS5 index error). The
+// caller must tell the user how to repair the index instead of looking like a
+// plain success.
+function degradedRepairMessage(result: { degraded?: boolean; degradedReason?: string }): string | null {
+  return result.degraded
+    ? `Saved to Markdown. Search may be temporarily unavailable (FTS5 index error: ${result.degradedReason}). Run /memory-sync-markdown to rebuild the search index.`
+    : null;
 }
 
 type MemoryAction = "add" | "replace" | "remove";

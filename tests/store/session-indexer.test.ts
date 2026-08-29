@@ -222,6 +222,44 @@ describe('session-indexer', () => {
       const result = indexAllSessions(dbManager, '/nonexistent/path');
       assert.strictEqual(result.sessionsProcessed, 0);
     });
+
+    it('skips files outside the retention window and reports expiredSkipped', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      const projDir = path.join(sessionsDir, 'test-project');
+      fs.mkdirSync(projDir, { recursive: true });
+
+      const write = (fileName: string, sessionId: string) => {
+        const lines = [
+          JSON.stringify({ type: 'session', id: sessionId, timestamp: '2026-05-03T00:00:00Z', cwd: '/test' }),
+          JSON.stringify({
+            type: 'message',
+            id: `${sessionId}-m1`,
+            parentId: null,
+            timestamp: '2026-05-03T00:01:00Z',
+            message: { role: 'user', content: [{ type: 'text', text: 'Hello' }], timestamp: Date.now() },
+          }),
+        ];
+        fs.writeFileSync(path.join(projDir, fileName), lines.join('\n'));
+      };
+      write('recent.jsonl', 'recent');
+      write('expired.jsonl', 'expired');
+
+      // Age the second file beyond the retention window.
+      const old = new Date('2026-01-01T00:00:00Z');
+      fs.utimesSync(path.join(projDir, 'expired.jsonl'), old, old);
+
+      const cutoff = Date.parse('2026-03-01T00:00:00Z');
+      const result = indexAllSessions(dbManager, sessionsDir, undefined, cutoff);
+      assert.strictEqual(result.sessionsIndexed, 1);
+      assert.strictEqual(result.expiredSkipped, 1);
+      assert.strictEqual(dbManager.getStats().sessions, 1);
+
+      // Without a cutoff the same directory indexes both files.
+      const result2 = indexAllSessions(dbManager, sessionsDir);
+      assert.strictEqual(result2.sessionsIndexed, 1);
+      assert.strictEqual(result2.expiredSkipped, undefined);
+      assert.strictEqual(dbManager.getStats().sessions, 2);
+    });
   });
 
   describe('indexChangedSessions', () => {
@@ -584,6 +622,27 @@ describe('session-indexer', () => {
       // and no retained files, there is no work to do — this must return
       // false instead of scheduling an empty backfill on every startup.
       assert.strictEqual(needsBackfill(dbManager, sessionsDir, now, cutoff), false);
+    });
+
+    it('needsBackfill ignores expired files instead of using a blind file-count shortcut', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      // Two files on disk, zero indexed rows: a file-count-based shortcut
+      // would return true here. With retention enabled and every file
+      // expired, there is nothing to backfill.
+      writeJsonlSession(sessionsDir, 'project-a', 's1');
+      writeJsonlSession(sessionsDir, 'project-b', 's2');
+      const old = new Date('2026-01-01T00:00:00Z');
+      fs.utimesSync(path.join(sessionsDir, 'project-a', 's1.jsonl'), old, old);
+      fs.utimesSync(path.join(sessionsDir, 'project-b', 's2.jsonl'), old, old);
+
+      const cutoff = Date.parse('2026-03-01T00:00:00Z');
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z'), cutoff), false);
+
+      // A retained file with no stored metadata still demands a backfill,
+      // even though the file count alone (2 files, 0 rows) is unchanged.
+      const recent = new Date('2026-04-15T00:00:00Z');
+      fs.utimesSync(path.join(sessionsDir, 'project-b', 's2.jsonl'), recent, recent);
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z'), cutoff), true);
     });
 
     it('needsBackfill still schedules when a retained file exists without a backfill timestamp', () => {

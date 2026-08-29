@@ -2,6 +2,7 @@ import { DatabaseManager } from './db.js';
 import {
   buildFallbackFts5Query,
   buildNaturalLanguageFallbackQuery,
+  collectLikeTerms,
   isFts5QueryError,
   normalizeFts5Query,
   normalizeNaturalLanguageFts5Query,
@@ -86,6 +87,15 @@ export interface MarkdownMemoryReconcileResult {
   inserted: number;
   existing: number;
   removed: number;
+  /**
+   * True when the scope was left un-reconciled because of a genuine FTS5
+   * search-index error. Markdown remains the source of truth and the write
+   * did not fail; search may be stale until /memory-sync-markdown rebuilds
+   * the index. Callers should surface that repair guidance to the user.
+   */
+  degraded?: boolean;
+  /** Human-readable reason for the degraded state, when degraded is true. */
+  degradedReason?: string;
 }
 
 export interface ParsedMarkdownMemoryEntry extends SqliteMemorySyncInput {}
@@ -508,10 +518,12 @@ export function reconcileMarkdownMemoryScope(
     if (isFts5QueryError(err)) {
       // A genuine FTS5 query/index error means the search index is stale or
       // broken, not that the database is corrupt. Markdown is the source of
-      // truth, so the write must not fail: warn the user and report a no-op
-      // sync. /memory-sync-markdown can rebuild the index afterwards.
-      console.warn(`[pi-hermes-memory] FTS5 search index error during markdown sync (search may be stale; run /memory-sync-markdown): ${err instanceof Error ? err.message : String(err)}`);
-      return { inserted: 0, existing: 0, removed: 0 };
+      // truth, so the write must not fail: warn in the log and report a
+      // DEGRADED result so the caller can surface the /memory-sync-markdown
+      // repair guidance to the user.
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(`[pi-hermes-memory] FTS5 search index error during markdown sync (search may be stale; run /memory-sync-markdown): ${detail}`);
+      return { inserted: 0, existing: 0, removed: 0, degraded: true, degradedReason: detail };
     }
     throw err;
   }
@@ -555,6 +567,12 @@ export function reconcileMarkdownFailureScopes(
     total.inserted += result.inserted;
     total.existing += result.existing;
     total.removed += result.removed;
+    if (result.degraded) {
+      // Surface the first degraded scope: repair guidance applies to the whole
+      // sync run, and the first reason is the one to act on.
+      total.degraded = true;
+      total.degradedReason = result.degradedReason;
+    }
   }
 
   return total;
@@ -733,9 +751,6 @@ export function searchMemories(
 
   // FTS5 match via subquery with escaped query
   const normalizedQuery = normalizeFts5Query(query);
-  if (normalizedQuery.length === 0) {
-    return [];
-  }
 
   let ftsParseError = false;
 
@@ -843,6 +858,61 @@ export function searchMemories(
     }>;
     return rows.map(mapRow);
   };
+
+  // Every term a stop word or connector leaves FTS5 nothing to match.
+  // Degrade to a scoped literal substring search (OR over the raw terms) —
+  // the same fallback session search uses for this case — instead of a hard
+  // [].
+  const runLiteralLikeFallback = (): SqliteMemoryEntry[] => {
+    const terms = collectLikeTerms(query);
+    if (terms.length === 0) return [];
+
+    const conditions: string[] = [
+      `(${terms.map(() => "m.content LIKE ? ESCAPE '\\'").join(' OR ')})`,
+    ];
+    const params: unknown[] = terms.map((term) => `%${escapeLikePattern(term.trim())}%`);
+
+    if (project !== undefined) {
+      if (project === null) {
+        conditions.push('m.project IS NULL');
+      } else {
+        conditions.push('m.project = ?');
+        params.push(project);
+      }
+    }
+    if (target) {
+      conditions.push('m.target = ?');
+      params.push(target);
+    }
+    if (category) {
+      conditions.push('m.category = ?');
+      params.push(category);
+    }
+
+    const rows = db.prepare(`
+      SELECT ${MEMORY_SELECT_COLUMNS}
+      FROM memories m
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY m.last_referenced DESC
+      LIMIT ?
+    `).all(...params, limit) as Array<{
+      id: number;
+      project: string | null;
+      target: string;
+      category: string | null;
+      content: string;
+      failure_reason: string | null;
+      tool_state: string | null;
+      corrected_to: string | null;
+      created: string;
+      last_referenced: string;
+    }>;
+    return rows.map(mapRow);
+  };
+
+  if (normalizedQuery.length === 0) {
+    return runLiteralLikeFallback();
+  }
 
   const exactResults = runSearch(normalizedQuery);
   if (exactResults.length > 0) {

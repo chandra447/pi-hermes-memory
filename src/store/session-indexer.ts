@@ -25,6 +25,8 @@ export interface BulkIndexResult {
   messagesIndexed: number;
   errors: string[];
   reachedLimit?: boolean;
+  /** Session files skipped because their mtime is outside the retention window. */
+  expiredSkipped?: number;
 }
 
 interface SessionFileMetadata {
@@ -358,26 +360,48 @@ function indexSessionFile(dbManager: DatabaseManager, file: string, result: Bulk
 
 /**
  * Index all sessions from disk.
+ * With retentionCutoffMs > 0, files whose mtime falls outside the window are
+ * skipped (counted in expiredSkipped) so a manual reindex honors the same
+ * retention policy the auto pruning enforces, instead of re-adding expired
+ * sessions that pruning just deleted.
  *
  * @param dbManager — Database manager instance
  * @param sessionsDir — Path to ~/.pi/agent/sessions/
  * @param projectDir — Optional: specific project directory to index
+ * @param retentionCutoffMs — Optional: epoch ms; files modified before it are skipped
  * @returns Bulk index result
  */
 export function indexAllSessions(
   dbManager: DatabaseManager,
   sessionsDir: string,
-  projectDir?: string
+  projectDir?: string,
+  retentionCutoffMs = 0,
 ): BulkIndexResult {
   const files = getSessionFiles(sessionsDir, projectDir);
   const result = emptyBulkIndexResult();
+  let expiredSkipped = 0;
 
   for (const file of files) {
+    if (retentionCutoffMs > 0) {
+      try {
+        if (!isWithinRetention(getSessionFileMetadata(file).mtimeMs, retentionCutoffMs)) {
+          expiredSkipped++;
+          continue;
+        }
+      } catch {
+        // Unreadable metadata: let indexSessionFile report the real error.
+      }
+    }
+
     try {
       indexSessionFile(dbManager, file, result);
     } catch (err) {
       result.errors.push(`Error indexing ${file}: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  if (expiredSkipped > 0) {
+    result.expiredSkipped = expiredSkipped;
   }
 
   return result;
@@ -478,43 +502,48 @@ export function needsBackfill(
   const files = getSessionFiles(sessionsDir);
   const indexed = db.prepare('SELECT COUNT(*) as count FROM sessions').get() as { count: number };
 
-  if (files.length > indexed.count) {
-    // Only files still inside the retention window can demand a backfill;
-    // expired (pruned) files must not.
-    let retainedCount = 0;
-    for (const file of files) {
-      try {
-        if (isWithinRetention(getSessionFileMetadata(file).mtimeMs, retentionCutoffMs)) retainedCount++;
-      } catch {
-        // Unreadable files cannot demand a backfill.
-      }
-    }
-    if (retainedCount > indexed.count) {
+  if (retentionCutoffMs <= 0) {
+    // Retention disabled: keep the historical cheap path — a plain file-count
+    // vs row-count comparison decides before any per-file stat work, so
+    // large session directories stay fast on startup.
+    if (files.length > indexed.count) {
       return true;
     }
+
+    for (const file of files) {
+      try {
+        const metadata = getSessionFileMetadata(file);
+        if (storedSessionFileMatches(dbManager, metadata)) continue;
+        return true;
+      } catch {
+        // An unreadable or malformed session file still needs indexing.
+        return true;
+      }
+    }
+
+    return !isRecentBackfillTimestamp(getLastBackfillTimestamp(dbManager), now.getTime());
   }
 
+  // Retention enabled: one metadata pass decides everything — a retained file
+  // with stale stored metadata demands a backfill, and when no file is inside
+  // the window there is no work at all. Returning here (instead of falling
+  // through to the periodic timestamp check) keeps an all-expired store from
+  // scheduling an empty backfill on every startup before a timestamp is ever
+  // written.
   let hasRetainedFile = false;
   for (const file of files) {
     try {
       const metadata = getSessionFileMetadata(file);
       if (!isWithinRetention(metadata.mtimeMs, retentionCutoffMs)) continue;
       hasRetainedFile = true;
-      if (storedSessionFileMatches(dbManager, metadata)) continue;
-      return true;
+      if (!storedSessionFileMatches(dbManager, metadata)) return true;
     } catch {
       return true;
     }
   }
-
-  // Retention is enabled and every file is outside the window: there is no
-  // work for a backfill to do. Returning here (instead of falling through to
-  // the periodic timestamp check) keeps an all-expired store from scheduling
-  // an empty backfill on every startup before any timestamp is written.
-  if (retentionCutoffMs > 0 && !hasRetainedFile) {
+  if (!hasRetainedFile) {
     return false;
   }
-
   return !isRecentBackfillTimestamp(getLastBackfillTimestamp(dbManager), now.getTime());
 }
 
