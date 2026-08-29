@@ -8,16 +8,24 @@ import { isFts5QueryError } from '../../src/store/fts-query.js';
 import { reconcileMarkdownMemoryScope } from '../../src/store/sqlite-memory-store.js';
 
 /**
- * Reviewer request for PR #184: prove that restricting isFts5QueryError to
- * genuine FTS query/index errors does NOT break database corruption recovery.
+ * Behavior change under test (PR #184): reconcileMarkdownMemoryScope now
+ * runs its persistence inside DatabaseManager.withCorruptionRecovery().
+ * Before this change, corruption errors ("database disk image is malformed",
+ * SQLITE_CORRUPT, SQLITE_NOTADB) thrown during markdown reconciliation
+ * surfaced as raw failures on every memory write — corruption recovery was
+ * only wired into the session-indexing paths, so a corrupt sessions.db kept
+ * failing markdown syncs until repaired by hand. Now the markdown reconcile
+ * path participates in the same recovery: the corrupt database is
+ * quarantined, rebuilt, and the reconcile is retried on a fresh handle, so
+ * the memory entry is persisted instead of lost.
  *
- * Before the fix, "database disk image is malformed" and "SQL logic error"
- * were classified as FTS errors and swallowed by reconcileMarkdownMemoryScope
- * as a zero-count success after the transaction rolled back — hiding a corrupt
- * database and preventing quarantine/rebuild.
+ * The FTS5 soft fallback stays narrow: only genuine FTS query/index errors
+ * (isFts5QueryError) degrade to a warned, repair-guided result. Corruption
+ * signals never match that classifier, so they can never be swallowed into a
+ * zero-count success here.
  */
 describe('Corruption recovery during markdown sync', () => {
-  it('narrowed classifier does not treat corruption signals as FTS errors', () => {
+  it('keeps corruption signals out of the FTS5 fallback classifier', () => {
     // Corruption/recovery signals must propagate so DatabaseManager can
     // quarantine + rebuild, not be swallowed by the search-index fallback.
     assert.equal(isFts5QueryError(new Error('database disk image is malformed')), false);
@@ -28,7 +36,7 @@ describe('Corruption recovery during markdown sync', () => {
     assert.equal(isFts5QueryError(new Error('fts5: unterminated string')), true);
   });
 
-  it('quarantines a corrupt DB, rebuilds, and persists the entry (no swallowed success)', async () => {
+  it('withCorruptionRecovery quarantines a corrupt DB, rebuilds, and persists the entry', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-corruption-'));
     const dbManager = new DatabaseManager(tmpDir);
     const dbFile = path.join(tmpDir, 'sessions.db');

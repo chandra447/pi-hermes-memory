@@ -294,7 +294,7 @@ Agent has access to tools:
 - [ ] Auto-index session on shutdown
 - [ ] Char limits: MEMORY.md 2,200 → 5,000, USER.md 1,375 → 5,000, project 2,200 → 5,000
 - [ ] Config: `sessionSearchEnabled: boolean` (default: true)
-- [ ] Config: `sessionRetentionDays: number` (default: 90)
+- [x] Config: `sessionRetentionDays: number` (default: `0` = disabled) — shipped via [#184](https://github.com/chandra447/pi-hermes-memory/pull/184)
 
 ### What Does NOT Change
 

@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Opt-in memory lifecycle timings**: `PI_TIMING=1` now reports startup synchronization and loading, backfill and live-index callbacks, shutdown flush/index/wait/close, and database open/integrity-check/checkpoint durations. Normal runs produce no timing output.
 
+- **Opt-in SQLite session retention** ([#183](https://github.com/chandra447/pi-hermes-memory/issues/183)): new `sessionRetentionDays` setting (default `0`, disabled). When set to a positive value, sessions whose JSONL source file has not been updated within the window are pruned from SQLite at startup — rows only, the JSONL files themselves are never deleted — and both the deferred backfill and `/memory-index-sessions` skip files outside the window, so pruned sessions stay pruned instead of being re-indexed on every startup. With the default `0`, pruning is fully disabled and startup keeps the legacy count-only backfill preflight.
+
+### Changed
+
+- **Natural-language search now filters common stop words** ([#184](https://github.com/chandra447/pi-hermes-memory/pull/184)): session and memory searches drop function words (`the`, `is`, `what`, …) before FTS5 matching, improving precision for natural-language queries. Intent-bearing words (`can`, `need`, `off`, `like`, `get`, …) are deliberately kept. A query made up entirely of stop words no longer returns an empty result — it degrades to a scoped literal substring search over the original terms.
+
+### Fixed
+
+- **FTS5 index errors during markdown sync are surfaced instead of hidden** ([#184](https://github.com/chandra447/pi-hermes-memory/pull/184)): when the FTS5 search index is broken, memory writes still succeed in Markdown, but the tool result and `/memory-sync-markdown` now report the degraded search state together with the repair command instead of showing a silent zero-count success. Genuine database corruption is unaffected by the fallback and now recovers through the markdown sync path too: reconciliation runs inside `DatabaseManager.withCorruptionRecovery()`, so a corrupt `sessions.db` is quarantined, rebuilt, and the sync retried instead of failing every memory write.
+
 ### Fixed
 
 - **Clean process exit on Node 24+** ([#193](https://github.com/chandra447/pi-hermes-memory/issues/193), reported by [@vanneswong](https://github.com/vanneswong)): `better-sqlite3` 12.x inherits Node's raw `node::ObjectWrap`, whose destructor calls `RemoveEnvironmentCleanupHook` after Node has torn down its Environment — so on Node 24 (observed on Linux aarch64) Pi could abort with SIGABRT and a non-zero exit code at every shutdown, after all work completed. The dependency moves to `better-sqlite3@^13.0.3`, the first N-API/node-addon-api release, which removes that crash path. The public API this extension uses is unchanged; the declared engines (`>=22`) cover every Pi-supported runtime.
