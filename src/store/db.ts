@@ -1,11 +1,11 @@
-import path from 'node:path';
-import fs from 'node:fs';
-import { createRequire } from 'node:module';
-import { SCHEMA_SQL } from './schema.js';
-import { AtomicLockCoordinator } from './atomic-lock-coordinator.js';
-import { canonicalStoragePathSync } from './canonical-storage-path.js';
-import { isBunRuntime, loadBetterSqlite3 } from './sqlite-native.js';
-import { measureLifecycleSync } from '../lifecycle-timing.js';
+import path from "node:path";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import { SCHEMA_SQL } from "./schema.js";
+import { AtomicLockCoordinator } from "./atomic-lock-coordinator.js";
+import { canonicalStoragePathSync } from "./canonical-storage-path.js";
+import { isBunRuntime, loadBetterSqlite3 } from "./sqlite-native.js";
+import { measureLifecycleSync } from "../lifecycle-timing.js";
 
 type StatementLike = {
   run: (...args: any[]) => any;
@@ -30,7 +30,7 @@ type BunDatabaseInstance = {
   transaction?: (fn: any) => any;
 };
 
-type DatabaseFileSuffix = '' | '-wal' | '-shm';
+type DatabaseFileSuffix = "" | "-wal" | "-shm";
 
 type MovedDatabaseFile = {
   original: string;
@@ -38,7 +38,7 @@ type MovedDatabaseFile = {
 };
 
 export interface DatabaseRecoveryResult {
-  strategy: 'rebuilt' | 'recreated-empty' | 'reused';
+  strategy: "rebuilt" | "recreated-empty" | "reused";
   backupPaths: string[];
   recoveredRows?: Record<string, number>;
   error?: string;
@@ -68,11 +68,11 @@ interface ResolvedDatabaseRecoveryOptions {
 }
 
 class DatabaseCorruptionError extends Error {
-  code = 'SQLITE_CORRUPT';
+  code = "SQLITE_CORRUPT";
 
   constructor(message: string) {
     super(message);
-    this.name = 'DatabaseCorruptionError';
+    this.name = "DatabaseCorruptionError";
   }
 }
 
@@ -80,8 +80,8 @@ export const SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const FTS5_MIGRATION_MAX_LOCK_ATTEMPTS = 3;
 
-const FTS5_TOKENIZER_VERSION_KEY = 'fts5_tokenizer_version';
-const FTS5_TOKENIZER_VERSION = 'trigram-v1';
+const FTS5_TOKENIZER_VERSION_KEY = "fts5_tokenizer_version";
+const FTS5_TOKENIZER_VERSION = "trigram-v1";
 const FTS5_TRIGRAM_TABLES = {
   message: `CREATE VIRTUAL TABLE message_fts USING fts5(
     content,
@@ -97,9 +97,20 @@ const FTS5_TRIGRAM_TABLES = {
   )`,
 } as const;
 
-const DATABASE_FILE_SUFFIXES: readonly DatabaseFileSuffix[] = ['', '-wal', '-shm'];
-const MEMORY_TARGETS = new Set(['memory', 'user', 'failure']);
-const MEMORY_CATEGORIES = new Set(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk']);
+const DATABASE_FILE_SUFFIXES: readonly DatabaseFileSuffix[] = [
+  "",
+  "-wal",
+  "-shm",
+];
+const MEMORY_TARGETS = new Set(["memory", "user", "failure"]);
+const MEMORY_CATEGORIES = new Set([
+  "failure",
+  "correction",
+  "insight",
+  "preference",
+  "convention",
+  "tool-quirk",
+]);
 const DEFAULT_RECOVERY_OPTIONS: ResolvedDatabaseRecoveryOptions = {
   recoveryLockWaitMs: 5000,
   recoveryLockPollMs: 50,
@@ -114,7 +125,9 @@ function quoteIdentifier(identifier: string): string {
 }
 
 function createBunCompatDatabaseCtor(require: NodeRequire): DatabaseCtor {
-  const bunSqlite = require('bun:sqlite') as { Database: new (dbPath: string) => BunDatabaseInstance };
+  const bunSqlite = require("bun:sqlite") as {
+    Database: new (dbPath: string) => BunDatabaseInstance;
+  };
 
   return class BunCompatDatabase implements DatabaseLike {
     private readonly db: BunDatabaseInstance;
@@ -170,10 +183,14 @@ export class DatabaseManager {
   private lastRecovery: DatabaseRecoveryResult | null = null;
   private openGuard: (() => void) | null = null;
   private pendingOpenIntegrityScan: Promise<void> | null = null;
-  private activeRecoveryLease: { coordinator: AtomicLockCoordinator; key: string; token: string } | null = null;
+  private activeRecoveryLease: {
+    coordinator: AtomicLockCoordinator;
+    key: string;
+    token: string;
+  } | null = null;
 
   constructor(memoryDir: string, options: DatabaseManagerOptions = {}) {
-    this.displayDbPath = path.join(memoryDir, 'sessions.db');
+    this.displayDbPath = path.join(memoryDir, "sessions.db");
     this.quickCheckOnOpen = options.quickCheckOnOpen ?? true;
     this.recoveryOptions = { ...DEFAULT_RECOVERY_OPTIONS, ...options };
   }
@@ -196,17 +213,22 @@ export class DatabaseManager {
   static isCorruptionError(err: unknown): boolean {
     if (!err) return false;
 
-    const code = typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : '';
-    if (code === 'SQLITE_CORRUPT' || code === 'SQLITE_NOTADB') return true;
+    const code =
+      typeof err === "object" && "code" in err
+        ? String((err as { code?: unknown }).code)
+        : "";
+    if (code === "SQLITE_CORRUPT" || code === "SQLITE_NOTADB") return true;
 
     const message = DatabaseManager.errorMessage(err).toLowerCase();
-    return message.includes('database disk image is malformed')
-      || message.includes('file is not a database')
-      || message.includes('database schema is corrupt')
-      || message.includes('malformed database schema')
-      || message.includes('btreeinitpage')
-      || message.includes('sqlite_corrupt')
-      || message.includes('sqlite_notadb');
+    return (
+      message.includes("database disk image is malformed") ||
+      message.includes("file is not a database") ||
+      message.includes("database schema is corrupt") ||
+      message.includes("malformed database schema") ||
+      message.includes("btreeinitpage") ||
+      message.includes("sqlite_corrupt") ||
+      message.includes("sqlite_notadb")
+    );
   }
 
   private static errorMessage(err: unknown): string {
@@ -271,7 +293,7 @@ export class DatabaseManager {
    * Open the database and initialize schema.
    */
   private open(): DatabaseLike {
-    return measureLifecycleSync('database.open', () => {
+    return measureLifecycleSync("database.open", () => {
       const dir = path.dirname(this.dbPath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -296,7 +318,10 @@ export class DatabaseManager {
           throw error;
         }
         this.lastRecovery = recovery;
-        if (!recoveredDb) throw new Error(`SQLite recovery verification did not open ${this.displayDbPath}`);
+        if (!recoveredDb)
+          throw new Error(
+            `SQLite recovery verification did not open ${this.displayDbPath}`,
+          );
         return recoveredDb;
       }
 
@@ -320,9 +345,9 @@ export class DatabaseManager {
             // scan, so skip to avoid a stale-handle recovery.
             return;
           }
-          measureLifecycleSync('database.quick-check', () => {
+          measureLifecycleSync("database.quick-check", () => {
             try {
-              this.assertIntegrityOk(db, 'quick_check', 'after open');
+              this.assertIntegrityOk(db, "quick_check", "after open");
             } catch (err) {
               try {
                 this.recoverFromCorruption(err);
@@ -371,10 +396,10 @@ export class DatabaseManager {
     // Enable WAL mode + FK enforcement for each connection. Keep SQLite's
     // default WAL autocheckpoint size; a very aggressive checkpoint cadence
     // increases the chance that abrupt VM/host shutdown catches a checkpoint.
-    db.exec('PRAGMA journal_mode = WAL');
+    db.exec("PRAGMA journal_mode = WAL");
     db.exec(`PRAGMA wal_autocheckpoint = ${SQLITE_WAL_AUTOCHECKPOINT_PAGES}`);
-    db.exec('PRAGMA journal_size_limit = 5242880');
-    db.exec('PRAGMA foreign_keys = ON');
+    db.exec("PRAGMA journal_size_limit = 5242880");
+    db.exec("PRAGMA foreign_keys = ON");
   }
 
   private initializeSchema(db: DatabaseLike): void {
@@ -411,57 +436,90 @@ export class DatabaseManager {
   }
 
   private databaseFileSetExists(): boolean {
-    return DATABASE_FILE_SUFFIXES.some((suffix) => fs.existsSync(`${this.dbPath}${suffix}`));
+    return DATABASE_FILE_SUFFIXES.some((suffix) =>
+      fs.existsSync(`${this.dbPath}${suffix}`),
+    );
   }
 
   private assertIntegrityOk(
     db: DatabaseLike,
-    check: 'quick_check' | 'integrity_check' = 'quick_check',
-    context = '',
+    check: "quick_check" | "integrity_check" = "quick_check",
+    context = "",
   ): void {
-    const rows = db.prepare(`PRAGMA ${check}`).all() as Record<string, unknown>[];
-    const messages = rows.map((row) => String(Object.values(row)[0] ?? ''));
-    const failures = messages.filter((message) => message.toLowerCase() !== 'ok');
+    const rows = db.prepare(`PRAGMA ${check}`).all() as Record<
+      string,
+      unknown
+    >[];
+    const messages = rows.map((row) => String(Object.values(row)[0] ?? ""));
+    const failures = messages.filter(
+      (message) => message.toLowerCase() !== "ok",
+    );
 
     if (rows.length === 0 || failures.length > 0) {
-      const detail = failures.length > 0 ? failures.slice(0, 5).join('\n') : 'no result rows';
-      const suffix = context ? ` ${context}` : '';
-      throw new DatabaseCorruptionError(`SQLite ${check} failed${suffix}: ${detail}`);
+      const detail =
+        failures.length > 0
+          ? failures.slice(0, 5).join("\n")
+          : "no result rows";
+      const suffix = context ? ` ${context}` : "";
+      throw new DatabaseCorruptionError(
+        `SQLite ${check} failed${suffix}: ${detail}`,
+      );
     }
   }
 
   private assertForeignKeysOk(db: DatabaseLike): void {
-    const rows = db.prepare('PRAGMA foreign_key_check').all() as Record<string, unknown>[];
+    const rows = db.prepare("PRAGMA foreign_key_check").all() as Record<
+      string,
+      unknown
+    >[];
     if (rows.length > 0) {
-      throw new Error(`SQLite foreign_key_check failed after rebuild (${rows.length} violation${rows.length === 1 ? '' : 's'})`);
+      throw new Error(
+        `SQLite foreign_key_check failed after rebuild (${rows.length} violation${rows.length === 1 ? "" : "s"})`,
+      );
     }
   }
 
-  private recoverDatabaseFile(cause: unknown, verify: () => void): DatabaseRecoveryResult {
-    const coordinator = AtomicLockCoordinator.shared(path.join(path.dirname(this.dbPath), '.pi-hermes-locks.sqlite'));
+  private recoverDatabaseFile(
+    cause: unknown,
+    verify: () => void,
+  ): DatabaseRecoveryResult {
+    const coordinator = AtomicLockCoordinator.shared(
+      path.join(path.dirname(this.dbPath), ".pi-hermes-locks.sqlite"),
+    );
     const lockKey = `recovery:${this.dbPath}`;
-    const deadline = Date.now() + Math.max(0, this.recoveryOptions.recoveryLockWaitMs);
+    const deadline =
+      Date.now() + Math.max(0, this.recoveryOptions.recoveryLockWaitMs);
 
     while (true) {
-      const lease = coordinator.tryAcquire(lockKey, { staleMs: this.recoveryOptions.recoveryLockStaleMs });
+      const lease = coordinator.tryAcquire(lockKey, {
+        staleMs: this.recoveryOptions.recoveryLockStaleMs,
+      });
       if (!lease) {
         if (Date.now() >= deadline) {
-          throw new Error(`SQLite recovery already in progress for ${this.displayDbPath}; timed out after ${this.recoveryOptions.recoveryLockWaitMs}ms`);
+          throw new Error(
+            `SQLite recovery already in progress for ${this.displayDbPath}; timed out after ${this.recoveryOptions.recoveryLockWaitMs}ms`,
+          );
         }
-        DatabaseManager.sleepSync(Math.min(
-          this.recoveryOptions.recoveryLockPollMs,
-          Math.max(1, deadline - Date.now()),
-        ));
+        DatabaseManager.sleepSync(
+          Math.min(
+            this.recoveryOptions.recoveryLockPollMs,
+            Math.max(1, deadline - Date.now()),
+          ),
+        );
         continue;
       }
 
-      this.activeRecoveryLease = { coordinator, key: lockKey, token: lease.token };
+      this.activeRecoveryLease = {
+        coordinator,
+        key: lockKey,
+        token: lease.token,
+      };
       try {
         if (this.currentDatabaseIsHealthy()) {
           try {
             verify();
             this.clearRecoveryFailuresBestEffort();
-            return { strategy: 'reused', backupPaths: [] };
+            return { strategy: "reused", backupPaths: [] };
           } catch (error) {
             this.recordRecoveryFailure();
             throw error;
@@ -501,9 +559,11 @@ export class DatabaseManager {
 
     const moved = this.moveDatabaseFilesToBackup(backupBase);
     return {
-      strategy: 'recreated-empty',
+      strategy: "recreated-empty",
       backupPaths: moved.map((file) => file.backup),
-      error: DatabaseManager.errorMessage(rebuildError ?? cause ?? 'unknown corruption'),
+      error: DatabaseManager.errorMessage(
+        rebuildError ?? cause ?? "unknown corruption",
+      ),
     };
   }
 
@@ -512,7 +572,11 @@ export class DatabaseManager {
     let db: DatabaseLike | null = null;
     try {
       db = new (getDatabaseCtor())(this.dbPath);
-      this.assertIntegrityOk(db, 'quick_check', 'while joining corruption recovery');
+      this.assertIntegrityOk(
+        db,
+        "quick_check",
+        "while joining corruption recovery",
+      );
       return true;
     } catch {
       return false;
@@ -527,17 +591,26 @@ export class DatabaseManager {
 
   private recentRecoveryFailures(): number[] {
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.recoveryCircuitPath(), 'utf-8')) as { failures?: unknown };
+      const parsed = JSON.parse(
+        fs.readFileSync(this.recoveryCircuitPath(), "utf-8"),
+      ) as { failures?: unknown };
       if (!Array.isArray(parsed.failures)) return [];
-      const cutoff = Date.now() - Math.max(0, this.recoveryOptions.recoveryCircuitWindowMs);
-      return parsed.failures.filter((value): value is number => typeof value === 'number' && value >= cutoff);
+      const cutoff =
+        Date.now() - Math.max(0, this.recoveryOptions.recoveryCircuitWindowMs);
+      return parsed.failures.filter(
+        (value): value is number =>
+          typeof value === "number" && value >= cutoff,
+      );
     } catch {
       return [];
     }
   }
 
   private assertRecoveryCircuitClosed(): void {
-    if (this.recentRecoveryFailures().length >= Math.max(1, this.recoveryOptions.recoveryCircuitLimit)) {
+    if (
+      this.recentRecoveryFailures().length >=
+      Math.max(1, this.recoveryOptions.recoveryCircuitLimit)
+    ) {
       throw new Error(
         `SQLite recovery circuit is open for ${this.displayDbPath}: too many failed recovery attempts within ${this.recoveryOptions.recoveryCircuitWindowMs}ms`,
       );
@@ -549,7 +622,10 @@ export class DatabaseManager {
     const tempPath = `${statePath}.tmp-${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
     const failures = [...this.recentRecoveryFailures(), Date.now()];
     try {
-      fs.writeFileSync(tempPath, JSON.stringify({ failures }), { encoding: 'utf-8', mode: 0o600 });
+      fs.writeFileSync(tempPath, JSON.stringify({ failures }), {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
       fs.renameSync(tempPath, statePath);
     } finally {
       fs.rmSync(tempPath, { force: true });
@@ -561,11 +637,21 @@ export class DatabaseManager {
   }
 
   private clearRecoveryFailuresBestEffort(): void {
-    try { this.clearRecoveryFailures(); } catch {}
+    // Best effort: a missing/corrupt circuit state file must not break recovery.
+    try {
+      this.clearRecoveryFailures();
+    } catch {
+      /* state file absent or locked */
+    }
   }
 
   private cleanupRecoveryArtifactsBestEffort(): void {
-    try { this.cleanupRecoveryArtifacts(); } catch {}
+    // Best effort: leftover quarantine/backup files are cosmetic; skip on FS errors.
+    try {
+      this.cleanupRecoveryArtifacts();
+    } catch {
+      /* leftover files stay until next run */
+    }
   }
 
   private cleanupRecoveryArtifacts(): void {
@@ -587,10 +673,13 @@ export class DatabaseManager {
     const backupGroups = new Map<string, number>();
     for (const name of names) {
       if (!name.startsWith(`${databaseName}.corrupt-`)) continue;
-      const group = name.replace(/-(?:wal|shm)$/, '');
+      const group = name.replace(/-(?:wal|shm)$/, "");
       try {
         const mtimeMs = fs.statSync(path.join(dir, name)).mtimeMs;
-        backupGroups.set(group, Math.max(backupGroups.get(group) ?? 0, mtimeMs));
+        backupGroups.set(
+          group,
+          Math.max(backupGroups.get(group) ?? 0, mtimeMs),
+        );
       } catch {
         // Artifact disappeared while scanning.
       }
@@ -613,7 +702,9 @@ export class DatabaseManager {
     Atomics.wait(signal, 0, 0, milliseconds);
   }
 
-  private rebuildDatabaseFromReadableRows(backupBase: string): DatabaseRecoveryResult {
+  private rebuildDatabaseFromReadableRows(
+    backupBase: string,
+  ): DatabaseRecoveryResult {
     const tempPath = this.rebuildTempPath();
     this.removeDatabaseFileSet(tempPath);
 
@@ -626,14 +717,14 @@ export class DatabaseManager {
       const Database = getDatabaseCtor();
       source = new Database(this.dbPath);
       target = new Database(tempPath);
-      target.exec('PRAGMA journal_mode = DELETE');
-      target.exec('PRAGMA foreign_keys = OFF');
+      target.exec("PRAGMA journal_mode = DELETE");
+      target.exec("PRAGMA foreign_keys = OFF");
       target.exec(SCHEMA_SQL);
 
       recoveredRows = this.copyRecoverableRows(source, target);
       this.rebuildFtsTables(target);
       this.assertForeignKeysOk(target);
-      this.assertIntegrityOk(target, 'quick_check', 'after corruption rebuild');
+      this.assertIntegrityOk(target, "quick_check", "after corruption rebuild");
       rebuildOk = true;
     } finally {
       if (source) this.safeClose(source);
@@ -645,13 +736,16 @@ export class DatabaseManager {
     this.removeDatabaseFileSet(tempPath);
 
     return {
-      strategy: 'rebuilt',
+      strategy: "rebuilt",
       backupPaths: moved.map((file) => file.backup),
       recoveredRows,
     };
   }
 
-  private copyRecoverableRows(source: DatabaseLike, target: DatabaseLike): Record<string, number> {
+  private copyRecoverableRows(
+    source: DatabaseLike,
+    target: DatabaseLike,
+  ): Record<string, number> {
     return {
       extension_metadata: this.copyExtensionMetadata(source, target),
       sessions: this.copySessions(source, target),
@@ -661,12 +755,21 @@ export class DatabaseManager {
     };
   }
 
-  private copyExtensionMetadata(source: DatabaseLike, target: DatabaseLike): number {
-    const insert = target.prepare('INSERT OR REPLACE INTO extension_metadata (key, value) VALUES (?, ?)');
+  private copyExtensionMetadata(
+    source: DatabaseLike,
+    target: DatabaseLike,
+  ): number {
+    const insert = target.prepare(
+      "INSERT OR REPLACE INTO extension_metadata (key, value) VALUES (?, ?)",
+    );
     let copied = 0;
 
-    for (const row of this.readTableRows(source, 'extension_metadata', ['key', 'value'])) {
-      if (typeof row.key !== 'string' || typeof row.value !== 'string') continue;
+    for (const row of this.readTableRows(source, "extension_metadata", [
+      "key",
+      "value",
+    ])) {
+      if (typeof row.key !== "string" || typeof row.value !== "string")
+        continue;
       insert.run(row.key, row.value);
       copied++;
     }
@@ -681,9 +784,24 @@ export class DatabaseManager {
     `);
     let copied = 0;
 
-    for (const row of this.readTableRows(source, 'sessions', ['id', 'project', 'cwd', 'started_at', 'ended_at', 'message_count'])) {
-      if (typeof row.id !== 'string' || typeof row.cwd !== 'string' || typeof row.started_at !== 'string') continue;
-      const project = typeof row.project === 'string' && row.project ? row.project : (path.basename(row.cwd) || 'unknown');
+    for (const row of this.readTableRows(source, "sessions", [
+      "id",
+      "project",
+      "cwd",
+      "started_at",
+      "ended_at",
+      "message_count",
+    ])) {
+      if (
+        typeof row.id !== "string" ||
+        typeof row.cwd !== "string" ||
+        typeof row.started_at !== "string"
+      )
+        continue;
+      const project =
+        typeof row.project === "string" && row.project
+          ? row.project
+          : path.basename(row.cwd) || "unknown";
       insert.run(
         row.id,
         project,
@@ -705,18 +823,34 @@ export class DatabaseManager {
     `);
     let copied = 0;
 
-    for (const row of this.readTableRows(source, 'messages', ['id', 'session_id', 'role', 'content', 'timestamp', 'tool_calls'])) {
+    for (const row of this.readTableRows(source, "messages", [
+      "id",
+      "session_id",
+      "role",
+      "content",
+      "timestamp",
+      "tool_calls",
+    ])) {
       if (
-        typeof row.id !== 'string'
-        || typeof row.session_id !== 'string'
-        || (row.role !== 'user' && row.role !== 'assistant' && row.role !== 'system')
-        || typeof row.content !== 'string'
-        || typeof row.timestamp !== 'string'
+        typeof row.id !== "string" ||
+        typeof row.session_id !== "string" ||
+        (row.role !== "user" &&
+          row.role !== "assistant" &&
+          row.role !== "system") ||
+        typeof row.content !== "string" ||
+        typeof row.timestamp !== "string"
       ) {
         continue;
       }
 
-      insert.run(row.id, row.session_id, row.role, row.content, row.timestamp, this.nullableString(row.tool_calls));
+      insert.run(
+        row.id,
+        row.session_id,
+        row.role,
+        row.content,
+        row.timestamp,
+        this.nullableString(row.tool_calls),
+      );
       copied++;
     }
 
@@ -730,14 +864,23 @@ export class DatabaseManager {
     `);
     let copied = 0;
 
-    for (const row of this.readTableRows(source, 'session_files', ['path', 'session_id', 'size', 'mtime_ms', 'indexed_at'])) {
-      if (typeof row.path !== 'string' || typeof row.session_id !== 'string') continue;
+    for (const row of this.readTableRows(source, "session_files", [
+      "path",
+      "session_id",
+      "size",
+      "mtime_ms",
+      "indexed_at",
+    ])) {
+      if (typeof row.path !== "string" || typeof row.session_id !== "string")
+        continue;
       insert.run(
         row.path,
         row.session_id,
         this.integerOr(row.size, 0),
         this.integerOr(row.mtime_ms, 0),
-        typeof row.indexed_at === 'string' ? row.indexed_at : new Date(0).toISOString(),
+        typeof row.indexed_at === "string"
+          ? row.indexed_at
+          : new Date(0).toISOString(),
       );
       copied++;
     }
@@ -752,25 +895,35 @@ export class DatabaseManager {
     `);
     let copied = 0;
 
-    for (const row of this.readTableRows(source, 'memories', [
-      'id',
-      'project',
-      'target',
-      'category',
-      'content',
-      'failure_reason',
-      'tool_state',
-      'corrected_to',
-      'created',
-      'last_referenced',
+    for (const row of this.readTableRows(source, "memories", [
+      "id",
+      "project",
+      "target",
+      "category",
+      "content",
+      "failure_reason",
+      "tool_state",
+      "corrected_to",
+      "created",
+      "last_referenced",
     ])) {
       const id = this.integerOr(row.id, NaN);
-      if (!Number.isFinite(id) || typeof row.content !== 'string') continue;
+      if (!Number.isFinite(id) || typeof row.content !== "string") continue;
 
-      const targetName = typeof row.target === 'string' && MEMORY_TARGETS.has(row.target) ? row.target : 'memory';
-      const category = typeof row.category === 'string' && MEMORY_CATEGORIES.has(row.category) ? row.category : null;
-      const created = typeof row.created === 'string' ? row.created : new Date(0).toISOString();
-      const lastReferenced = typeof row.last_referenced === 'string' ? row.last_referenced : created;
+      const targetName =
+        typeof row.target === "string" && MEMORY_TARGETS.has(row.target)
+          ? row.target
+          : "memory";
+      const category =
+        typeof row.category === "string" && MEMORY_CATEGORIES.has(row.category)
+          ? row.category
+          : null;
+      const created =
+        typeof row.created === "string"
+          ? row.created
+          : new Date(0).toISOString();
+      const lastReferenced =
+        typeof row.last_referenced === "string" ? row.last_referenced : created;
 
       insert.run(
         id,
@@ -790,12 +943,16 @@ export class DatabaseManager {
     return copied;
   }
 
-  private readTableRows(source: DatabaseLike, table: string, desiredColumns: string[]): Iterable<Record<string, unknown>> {
+  private readTableRows(
+    source: DatabaseLike,
+    table: string,
+    desiredColumns: string[],
+  ): Iterable<Record<string, unknown>> {
     const columns = this.getColumnNames(source, table);
     const selected = desiredColumns.filter((column) => columns.has(column));
     if (selected.length === 0) return [];
 
-    const sql = `SELECT ${selected.map(quoteIdentifier).join(', ')} FROM ${quoteIdentifier(table)} NOT INDEXED`;
+    const sql = `SELECT ${selected.map(quoteIdentifier).join(", ")} FROM ${quoteIdentifier(table)} NOT INDEXED`;
     const statement = source.prepare(sql);
     if (statement.iterate) {
       return statement.iterate() as Iterable<Record<string, unknown>>;
@@ -804,18 +961,25 @@ export class DatabaseManager {
   }
 
   private getColumnNames(db: DatabaseLike, table: string): Set<string> {
-    const rows = db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all() as { name?: unknown }[];
-    return new Set(rows.map((row) => row.name).filter((name): name is string => typeof name === 'string'));
+    const rows = db
+      .prepare(`PRAGMA table_info(${quoteIdentifier(table)})`)
+      .all() as { name?: unknown }[];
+    return new Set(
+      rows
+        .map((row) => row.name)
+        .filter((name): name is string => typeof name === "string"),
+    );
   }
 
   private nullableString(value: unknown): string | null {
-    return typeof value === 'string' ? value : null;
+    return typeof value === "string" ? value : null;
   }
 
   private integerOr(value: unknown, fallback: number): number {
-    if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
-    if (typeof value === 'bigint') return Number(value);
-    if (typeof value === 'string' && value.trim()) {
+    if (typeof value === "number" && Number.isFinite(value))
+      return Math.trunc(value);
+    if (typeof value === "bigint") return Number(value);
+    if (typeof value === "string" && value.trim()) {
       const parsed = Number.parseInt(value, 10);
       if (Number.isFinite(parsed)) return parsed;
     }
@@ -828,7 +992,7 @@ export class DatabaseManager {
   }
 
   private corruptBackupBase(): string {
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const nonce = Math.random().toString(16).slice(2, 8);
     return `${this.dbPath}.corrupt-${stamp}-${process.pid}-${nonce}`;
   }
@@ -839,7 +1003,10 @@ export class DatabaseManager {
     return `${this.dbPath}.rebuild-${process.pid}-${stamp}-${nonce}.tmp`;
   }
 
-  private swapRebuiltDatabase(tempPath: string, backupBase: string): MovedDatabaseFile[] {
+  private swapRebuiltDatabase(
+    tempPath: string,
+    backupBase: string,
+  ): MovedDatabaseFile[] {
     const moved = this.moveDatabaseFilesToBackup(backupBase);
     try {
       fs.renameSync(tempPath, this.dbPath);
@@ -877,7 +1044,9 @@ export class DatabaseManager {
     const active = this.activeRecoveryLease;
     if (!active) return;
     if (!active.coordinator.isCurrentOwner(active.key, active.token)) {
-      throw new Error(`SQLite recovery lease lost for ${this.displayDbPath}; another process took over`);
+      throw new Error(
+        `SQLite recovery lease lost for ${this.displayDbPath}; another process took over`,
+      );
     }
   }
 
@@ -900,17 +1069,23 @@ export class DatabaseManager {
   }
 
   private safeClose(db: DatabaseLike): void {
-    try { db.close(); } catch { /* best effort */ }
+    try {
+      db.close();
+    } catch {
+      /* best effort */
+    }
   }
 
   private isLegacySchemaError(err: unknown): boolean {
     if (!(err instanceof Error)) return false;
     const msg = err.message.toLowerCase();
-    return msg.includes('no such column: category')
-      || msg.includes('memories(category)')
-      || msg.includes('no such column: project')
-      || msg.includes('sessions(project)')
-      || msg.includes('memories(project)');
+    return (
+      msg.includes("no such column: category") ||
+      msg.includes("memories(category)") ||
+      msg.includes("no such column: project") ||
+      msg.includes("sessions(project)") ||
+      msg.includes("memories(project)")
+    );
   }
 
   private ensureLegacySchemaColumns(db: DatabaseLike): void {
@@ -919,58 +1094,69 @@ export class DatabaseManager {
   }
 
   private ensureMemoriesColumns(db: DatabaseLike): void {
-    const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memories'").get() as { name: string } | undefined;
+    const tableExists = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='memories'",
+      )
+      .get() as { name: string } | undefined;
     if (!tableExists) return;
 
-    const names = this.getColumnNames(db, 'memories');
+    const names = this.getColumnNames(db, "memories");
 
-    if (!names.has('project')) {
-      db.exec('ALTER TABLE memories ADD COLUMN project TEXT');
+    if (!names.has("project")) {
+      db.exec("ALTER TABLE memories ADD COLUMN project TEXT");
     }
-    if (!names.has('category')) {
-      db.exec('ALTER TABLE memories ADD COLUMN category TEXT');
+    if (!names.has("category")) {
+      db.exec("ALTER TABLE memories ADD COLUMN category TEXT");
     }
-    if (!names.has('failure_reason')) {
-      db.exec('ALTER TABLE memories ADD COLUMN failure_reason TEXT');
+    if (!names.has("failure_reason")) {
+      db.exec("ALTER TABLE memories ADD COLUMN failure_reason TEXT");
     }
-    if (!names.has('tool_state')) {
-      db.exec('ALTER TABLE memories ADD COLUMN tool_state TEXT');
+    if (!names.has("tool_state")) {
+      db.exec("ALTER TABLE memories ADD COLUMN tool_state TEXT");
     }
-    if (!names.has('corrected_to')) {
-      db.exec('ALTER TABLE memories ADD COLUMN corrected_to TEXT');
+    if (!names.has("corrected_to")) {
+      db.exec("ALTER TABLE memories ADD COLUMN corrected_to TEXT");
     }
   }
 
   private ensureSessionsColumns(db: DatabaseLike): void {
-    const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'").get() as { name: string } | undefined;
+    const tableExists = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'",
+      )
+      .get() as { name: string } | undefined;
     if (!tableExists) return;
 
-    const names = this.getColumnNames(db, 'sessions');
-    if (!names.has('project')) {
-      db.exec('ALTER TABLE sessions ADD COLUMN project TEXT');
+    const names = this.getColumnNames(db, "sessions");
+    if (!names.has("project")) {
+      db.exec("ALTER TABLE sessions ADD COLUMN project TEXT");
     }
 
     this.backfillSessionsProject(db);
   }
 
   private backfillSessionsProject(db: DatabaseLike): void {
-    const names = this.getColumnNames(db, 'sessions');
-    if (!names.has('project') || !names.has('cwd') || !names.has('id')) return;
+    const names = this.getColumnNames(db, "sessions");
+    if (!names.has("project") || !names.has("cwd") || !names.has("id")) return;
 
-    const rows = db.prepare('SELECT id, cwd, project FROM sessions').all() as Array<{
+    const rows = db
+      .prepare("SELECT id, cwd, project FROM sessions")
+      .all() as Array<{
       id?: unknown;
       cwd?: unknown;
       project?: unknown;
     }>;
-    const update = db.prepare('UPDATE sessions SET project = ? WHERE id = ?');
+    const update = db.prepare("UPDATE sessions SET project = ? WHERE id = ?");
 
     for (const row of rows) {
-      if (typeof row.id !== 'string') continue;
-      if (typeof row.project === 'string' && row.project.trim()) continue;
+      if (typeof row.id !== "string") continue;
+      if (typeof row.project === "string" && row.project.trim()) continue;
 
-      const project = typeof row.cwd === 'string' && row.cwd.trim()
-        ? (path.basename(row.cwd) || 'unknown')
-        : 'unknown';
+      const project =
+        typeof row.cwd === "string" && row.cwd.trim()
+          ? path.basename(row.cwd) || "unknown"
+          : "unknown";
       update.run(project, row.id);
     }
   }
@@ -982,20 +1168,26 @@ export class DatabaseManager {
     `);
   }
 
-
   private migrateLegacyMemoriesTargetConstraint(db: DatabaseLike): void {
-    const tableSqlRow = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='memories'").get() as { sql?: string } | undefined;
-    const tableSql = tableSqlRow?.sql ?? '';
+    const tableSqlRow = db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='memories'",
+      )
+      .get() as { sql?: string } | undefined;
+    const tableSql = tableSqlRow?.sql ?? "";
     if (!tableSql) return;
 
     // Legacy schema allowed only memory/user. New schema must allow failure too.
-    const hasLegacyTargetCheck = /target\s+TEXT\s+NOT\s+NULL\s+CHECK\s*\(\s*target\s+IN\s*\(\s*'memory'\s*,\s*'user'\s*\)\s*\)/i.test(tableSql);
+    const hasLegacyTargetCheck =
+      /target\s+TEXT\s+NOT\s+NULL\s+CHECK\s*\(\s*target\s+IN\s*\(\s*'memory'\s*,\s*'user'\s*\)\s*\)/i.test(
+        tableSql,
+      );
     if (!hasLegacyTargetCheck) return;
 
     if (!db.transaction) {
-      db.exec('PRAGMA foreign_keys = OFF');
+      db.exec("PRAGMA foreign_keys = OFF");
       try {
-        db.exec('BEGIN IMMEDIATE');
+        db.exec("BEGIN IMMEDIATE");
         db.exec(`
           CREATE TABLE memories_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1017,14 +1209,14 @@ export class DatabaseManager {
           FROM memories;
         `);
 
-        db.exec('DROP TABLE memories');
-        db.exec('ALTER TABLE memories_new RENAME TO memories');
-        db.exec('COMMIT');
+        db.exec("DROP TABLE memories");
+        db.exec("ALTER TABLE memories_new RENAME TO memories");
+        db.exec("COMMIT");
       } catch (err) {
-        db.exec('ROLLBACK');
+        db.exec("ROLLBACK");
         throw err;
       } finally {
-        db.exec('PRAGMA foreign_keys = ON');
+        db.exec("PRAGMA foreign_keys = ON");
       }
       return;
     }
@@ -1051,15 +1243,15 @@ export class DatabaseManager {
           FROM memories;
         `);
 
-      db.exec('DROP TABLE memories');
-      db.exec('ALTER TABLE memories_new RENAME TO memories');
+      db.exec("DROP TABLE memories");
+      db.exec("ALTER TABLE memories_new RENAME TO memories");
     });
 
-    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec("PRAGMA foreign_keys = OFF");
     try {
       tx();
     } finally {
-      db.exec('PRAGMA foreign_keys = ON');
+      db.exec("PRAGMA foreign_keys = ON");
     }
   }
 
@@ -1073,39 +1265,47 @@ export class DatabaseManager {
    */
   private migrateFtsTokenizer(db: DatabaseLike): void {
     const usesTrigram = (tableName: string): boolean => {
-      const row = db.prepare(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
-      ).get(tableName) as { sql?: string } | undefined;
-      return typeof row?.sql === 'string'
-        && /\btokenize\s*=\s*['"]trigram['"]/i.test(row.sql);
+      const row = db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        )
+        .get(tableName) as { sql?: string } | undefined;
+      return (
+        typeof row?.sql === "string" &&
+        /\btokenize\s*=\s*['"]trigram['"]/i.test(row.sql)
+      );
     };
     const migrationComplete = (): boolean => {
-      const versionRow = db.prepare(
-        'SELECT value FROM extension_metadata WHERE key = ?',
-      ).get(FTS5_TOKENIZER_VERSION_KEY) as { value?: string } | undefined;
-      return versionRow?.value === FTS5_TOKENIZER_VERSION
-        && usesTrigram('message_fts')
-        && usesTrigram('memory_fts');
+      const versionRow = db
+        .prepare("SELECT value FROM extension_metadata WHERE key = ?")
+        .get(FTS5_TOKENIZER_VERSION_KEY) as { value?: string } | undefined;
+      return (
+        versionRow?.value === FTS5_TOKENIZER_VERSION &&
+        usesTrigram("message_fts") &&
+        usesTrigram("memory_fts")
+      );
     };
     const isBusy = (error: unknown): boolean => {
-      const code = error && typeof error === 'object' && 'code' in error
-        ? String(error.code)
-        : '';
-      return code.startsWith('SQLITE_BUSY') || code.startsWith('SQLITE_LOCKED');
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? String(error.code)
+          : "";
+      return code.startsWith("SQLITE_BUSY") || code.startsWith("SQLITE_LOCKED");
     };
 
     let lockAttempts = 0;
     while (!migrationComplete()) {
       try {
-        db.exec('BEGIN IMMEDIATE');
+        db.exec("BEGIN IMMEDIATE");
       } catch (error) {
         // Each attempt waits up to busy_timeout. Cap the total attempts so a
         // permanently held writer cannot hang extension startup forever.
-        if (isBusy(error) && ++lockAttempts < FTS5_MIGRATION_MAX_LOCK_ATTEMPTS) continue;
+        if (isBusy(error) && ++lockAttempts < FTS5_MIGRATION_MAX_LOCK_ATTEMPTS)
+          continue;
         if (isBusy(error)) {
           throw new Error(
-            `Timed out waiting for the FTS tokenizer migration lock after ${lockAttempts} attempts. `
-              + "Close the other Pi process and retry.",
+            `Timed out waiting for the FTS tokenizer migration lock after ${lockAttempts} attempts. ` +
+              "Close the other Pi process and retry.",
             { cause: error },
           );
         }
@@ -1116,7 +1316,7 @@ export class DatabaseManager {
         // Another Pi process may have completed the migration while this
         // connection waited for the write lock.
         if (migrationComplete()) {
-          db.exec('COMMIT');
+          db.exec("COMMIT");
           return;
         }
         db.exec(`
@@ -1132,10 +1332,14 @@ export class DatabaseManager {
           VALUES (?, ?)
           ON CONFLICT(key) DO UPDATE SET value = excluded.value
         `).run(FTS5_TOKENIZER_VERSION_KEY, FTS5_TOKENIZER_VERSION);
-        db.exec('COMMIT');
+        db.exec("COMMIT");
         return;
       } catch (error) {
-        try { db.exec('ROLLBACK'); } catch { /* preserve migration error */ }
+        try {
+          db.exec("ROLLBACK");
+        } catch {
+          /* preserve migration error */
+        }
         throw error;
       }
     }
@@ -1148,9 +1352,17 @@ export class DatabaseManager {
     const db = this.db;
     if (db) {
       try {
-        measureLifecycleSync('database.checkpoint', () => db.exec('PRAGMA wal_checkpoint(TRUNCATE)'));
-      } catch { /* best effort */ }
-      try { db.close(); } catch { /* best effort — close may throw on a corrupt handle */ }
+        measureLifecycleSync("database.checkpoint", () =>
+          db.exec("PRAGMA wal_checkpoint(TRUNCATE)"),
+        );
+      } catch {
+        /* best effort */
+      }
+      try {
+        db.close();
+      } catch {
+        /* best effort — close may throw on a corrupt handle */
+      }
       this.db = null;
     }
     this.pendingOpenIntegrityScan = null;
@@ -1174,14 +1386,22 @@ export class DatabaseManager {
    * Get stats about the database.
    */
   getStats(): { sessions: number; messages: number; memories: number } {
-    const db = this.getDb();
-    const sessions = db.prepare('SELECT COUNT(*) as count FROM sessions').get() as { count: number };
-    const messages = db.prepare('SELECT COUNT(*) as count FROM messages').get() as { count: number };
-    const memories = db.prepare('SELECT COUNT(*) as count FROM memories').get() as { count: number };
-    return {
-      sessions: sessions.count,
-      messages: messages.count,
-      memories: memories.count,
-    };
+    return this.withCorruptionRecovery(() => {
+      const db = this.getDb();
+      const sessions = db
+        .prepare("SELECT COUNT(*) as count FROM sessions")
+        .get() as { count: number };
+      const messages = db
+        .prepare("SELECT COUNT(*) as count FROM messages")
+        .get() as { count: number };
+      const memories = db
+        .prepare("SELECT COUNT(*) as count FROM memories")
+        .get() as { count: number };
+      return {
+        sessions: sessions.count,
+        messages: messages.count,
+        memories: memories.count,
+      };
+    });
   }
 }

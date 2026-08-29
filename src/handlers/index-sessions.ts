@@ -2,40 +2,59 @@
  * Index sessions command — /memory-index-sessions imports past sessions into SQLite.
  */
 
-import path from 'node:path';
-import fs from 'node:fs';
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { DatabaseManager } from '../store/db.js';
-import { indexAllSessions, getSessionStats } from '../store/session-indexer.js';
-import { AGENT_ROOT } from '../paths.js';
+import path from "node:path";
+import fs from "node:fs";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+} from "@earendil-works/pi-coding-agent";
+import { DatabaseManager } from "../store/db.js";
+import { indexAllSessions, getSessionStats } from "../store/session-indexer.js";
+import { AGENT_ROOT } from "../paths.js";
+import type { MemoryConfig } from "../types.js";
 
-const SESSIONS_DIR = process.env.PI_CODING_AGENT_SESSION_DIR || path.join(AGENT_ROOT, 'sessions');
+const SESSIONS_DIR =
+  process.env.PI_CODING_AGENT_SESSION_DIR || path.join(AGENT_ROOT, "sessions");
 
-export function registerIndexSessionsCommand(pi: ExtensionAPI): void {
+export function registerIndexSessionsCommand(
+  pi: ExtensionAPI,
+  config: Pick<MemoryConfig, "quickCheckOnOpen"> = {},
+): void {
   pi.registerCommand("memory-index-sessions", {
     description: "Import past Pi sessions into the search database",
     handler: async (_args, ctx: ExtensionCommandContext) => {
       // Show initial progress
-      ctx.ui.notify('🔍 Scanning session directories...', 'info');
+      ctx.ui.notify("🔍 Scanning session directories...", "info");
 
       try {
         // Count sessions first for progress display
         let totalFiles = 0;
         let projectDirs: string[] = [];
         if (fs.existsSync(SESSIONS_DIR)) {
-          projectDirs = fs.readdirSync(SESSIONS_DIR)
-            .filter(d => fs.statSync(path.join(SESSIONS_DIR, d)).isDirectory());
+          projectDirs = fs
+            .readdirSync(SESSIONS_DIR)
+            .filter((d) =>
+              fs.statSync(path.join(SESSIONS_DIR, d)).isDirectory(),
+            );
           for (const dir of projectDirs) {
-            const files = fs.readdirSync(path.join(SESSIONS_DIR, dir))
-              .filter(f => f.endsWith('.jsonl'));
+            const files = fs
+              .readdirSync(path.join(SESSIONS_DIR, dir))
+              .filter((f) => f.endsWith(".jsonl"));
             totalFiles += files.length;
           }
         }
 
-        ctx.ui.notify(`📁 Found ${totalFiles} session files across ${projectDirs.length} projects\n⏳ Indexing...`, 'info');
+        ctx.ui.notify(
+          `📁 Found ${totalFiles} session files across ${projectDirs.length} projects\n⏳ Indexing...`,
+          "info",
+        );
 
-        const memoryDir = path.join(AGENT_ROOT, 'pi-hermes-memory');
-        const dbManager = new DatabaseManager(memoryDir);
+        const memoryDir = path.join(AGENT_ROOT, "pi-hermes-memory");
+        // Forward the configured open-time check so a user who disabled the
+        // quick_check (quickCheckOnOpen: false) is not hit by it here either.
+        const dbManager = new DatabaseManager(memoryDir, {
+          quickCheckOnOpen: config.quickCheckOnOpen,
+        });
 
         try {
           const result = indexAllSessions(dbManager, SESSIONS_DIR);
@@ -73,12 +92,15 @@ export function registerIndexSessionsCommand(pi: ExtensionAPI): void {
 
           output += `\n💡 Use the session_search tool to search across indexed sessions.`;
 
-          ctx.ui.notify(output, 'info');
+          ctx.ui.notify(output, "info");
         } finally {
           dbManager.close();
         }
       } catch (err) {
-        ctx.ui.notify(`❌ Session indexing failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
+        ctx.ui.notify(
+          `❌ Session indexing failed: ${err instanceof Error ? err.message : String(err)}`,
+          "error",
+        );
       }
     },
   });

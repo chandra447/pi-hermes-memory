@@ -5,12 +5,8 @@ import { canonicalStoragePath } from "./canonical-storage-path.js";
 const MUTATION_WAIT_MS = 5_000;
 const MUTATION_STALE_MS = 300_000;
 
-export async function canonicalMarkdownIdentity(filePath: string): Promise<string> {
-  return canonicalStoragePath(filePath);
-}
-
 export async function acquireMarkdownMutationLock(filePath: string): Promise<AtomicLockLease> {
-  const identity = await canonicalMarkdownIdentity(filePath);
+  const identity = await canonicalStoragePath(filePath);
   const coordinatorDir = path.dirname(path.dirname(identity));
   const coordinator = AtomicLockCoordinator.shared(path.join(coordinatorDir, ".pi-hermes-locks.sqlite"));
   const lockKey = `mutation:${identity}`;

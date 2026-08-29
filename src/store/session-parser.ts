@@ -45,7 +45,7 @@ interface JsonlEntry {
 /**
  * Extract text content from a message's content array.
  */
-function extractTextContent(content: unknown): string {
+export function extractTextContent(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
 
@@ -76,7 +76,7 @@ function extractTextContent(content: unknown): string {
 /**
  * Extract tool call names from a message's content array.
  */
-function extractToolCalls(content: unknown): string[] | undefined {
+export function extractToolCalls(content: unknown): string[] | undefined {
   if (!Array.isArray(content)) return undefined;
 
   const toolNames: string[] = [];
@@ -198,16 +198,4 @@ export function getSessionFiles(sessionsDir: string, projectDir?: string): strin
     }
   }
   return files;
-}
-
-/**
- * Decode a project directory name to a human-readable project name.
- * "--Users-chandrateja-Documents-pi-hermes-memory--" → "pi-hermes-memory"
- */
-export function decodeProjectDir(dirName: string): string {
-  // Remove leading/trailing dashes
-  const cleaned = dirName.replace(/^-+|-+$/g, '');
-  // Split by dash and take the last segment (project name)
-  const segments = cleaned.split('-');
-  return segments[segments.length - 1] ?? cleaned;
 }

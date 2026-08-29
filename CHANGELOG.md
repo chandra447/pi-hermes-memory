@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Background-review PR #207 review changes**:
+  - An empty direct-completion response is now classified as `no_content` and triggers the subprocess fallback instead of being silently dropped; an explicit `{"operations":[]}` remains a deliberate no-op.
+  - Memory operations are now parsed only from the final response text: thinking blocks are diagnostic scratch space and no longer feed `parseReviewOperations()`.
+  - No-override child retries now also drop the inherited thinking level, so a failed `--thinking` flag cannot repeat on retry.
+  - Public read boundaries (`memory_search`, `session_search`, and stats reads) are wrapped in corruption recovery, so with `quickCheckOnOpen: false` a corrupt page still quarantines, rebuilds, and retries instead of surfacing raw errors.
+  - `/memory-index-sessions` forwards the configured `quickCheckOnOpen` option into its command-local database manager.
+  - The subprocess fallback preserves SDK-built branch context with an intentional 5000-char per-message limit instead of the legacy 500-char truncation.
+
 - **Open-time SQLite checks are configurable** ([#194](https://github.com/chandra447/pi-hermes-memory/issues/194)): the synchronous full-database `quick_check` remains enabled by default for compatibility, but `quickCheckOnOpen: false` now skips it on large databases so opening the extension cannot stall the host event loop; operation-time corruption recovery remains enabled. Background direct reviews also reuse the active session's system prompt, converted branch, and thinking level when the full-history mode is selected; their subprocess fallback formats the same SDK-built branch context, without forcing `thinking: off` on model overrides.
 
 - **Clean process exit on Node 24+** ([#193](https://github.com/chandra447/pi-hermes-memory/issues/193), reported by [@vanneswong](https://github.com/vanneswong)): `better-sqlite3` 12.x inherits Node's raw `node::ObjectWrap`, whose destructor calls `RemoveEnvironmentCleanupHook` after Node has torn down its Environment — so on Node 24 (observed on Linux aarch64) Pi could abort with SIGABRT and a non-zero exit code at every shutdown, after all work completed. The dependency moves to `better-sqlite3@^13.0.3`, the first N-API/node-addon-api release, which removes that crash path. The public API this extension uses is unchanged; the declared engines (`>=22`) cover every Pi-supported runtime.
@@ -275,6 +283,7 @@ If you ran 0.9.0, the skills it relocated into `~/.pi/agent/skills/` **stay ther
 ### Added
 
 **Procedural Skills (`skill` tool)**
+
 - New `skill` tool with actions: `create`, `view`, `patch`, `edit`, `delete`
 - Skills stored as SKILL.md files in `~/.pi/agent/memory/skills/`
 - Progressive disclosure — skill index (name + description only) injected into system prompt, full content loaded on demand via `skill view`
@@ -284,6 +293,7 @@ If you ran 0.9.0, the skills it relocated into `~/.pi/agent/skills/` **stay ther
 - New `/memory-skills` command to list all agent-created skills
 
 **Auto-Consolidation**
+
 - When `add()` would exceed the character limit, automatically trigger consolidation instead of returning an error
 - Consolidation spawns a one-shot `pi.exec()` process that merges related entries and removes outdated ones
 - Parent process reloads from disk after consolidation to stay in sync with changes
@@ -291,6 +301,7 @@ If you ran 0.9.0, the skills it relocated into `~/.pi/agent/skills/` **stay ther
 - Configurable via `autoConsolidate` setting (default: `true`)
 
 **Correction Detection**
+
 - Detect user corrections in real-time and trigger immediate memory save
 - Two-pass pattern filter:
   - **Strong patterns** (always trigger): "don't do that", "I said...", "please don't...", "that's not what I..."
@@ -300,12 +311,14 @@ If you ran 0.9.0, the skills it relocated into `~/.pi/agent/skills/` **stay ther
 - Configurable via `correctionDetection` setting (default: `true`)
 
 **Tool-Call-Aware Nudge**
+
 - Background review now triggers based on tool call count OR turn count, whichever comes first
 - Counts `toolCall` blocks from the session branch at `turn_end` time
 - Default: triggers at 15 tool calls (configurable via `nudgeToolCalls`)
 - Both turn and tool-call counters reset after each review
 
 **Updated Background Review Prompt**
+
 - `COMBINED_REVIEW_PROMPT` now explicitly references the `skill` tool
 - Tells the agent to use `create` for new skills and `patch` for updating existing ones
 - Single review pass can save both memories and skills
@@ -321,7 +334,7 @@ If you ran 0.9.0, the skills it relocated into `~/.pi/agent/skills/` **stay ther
 New settings in `~/.pi/agent/hermes-memory-config.json`:
 
 | Setting | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `autoConsolidate` | `true` | Auto-merge when memory hits capacity |
 | `correctionDetection` | `true` | Detect user corrections and save immediately |
 | `nudgeToolCalls` | `15` | Tool calls before background review triggers |
@@ -334,6 +347,7 @@ New settings in `~/.pi/agent/hermes-memory-config.json`:
 ### Files Changed
 
 **New files (7 source + 6 test):**
+
 - `src/store/skill-store.ts` — SkillStore class with CRUD, frontmatter parsing, progressive disclosure
 - `src/tools/skill-tool.ts` — `skill` LLM tool registration and execute
 - `src/handlers/auto-consolidate.ts` — Consolidation trigger and `/memory-consolidate` command
@@ -347,6 +361,7 @@ New settings in `~/.pi/agent/hermes-memory-config.json`:
 - `tests/tools/skill-tool.test.ts`
 
 **Modified files (8):**
+
 - `src/index.ts` — Wire all new handlers, tools, commands, and system prompt injection
 - `src/types.ts` — New interfaces (`ConsolidationResult`, `SkillIndex`, `SkillDocument`, `SkillResult`) + config fields
 - `src/constants.ts` — New prompts (`CONSOLIDATION_PROMPT`, `CORRECTION_SAVE_PROMPT`, `SKILL_TOOL_DESCRIPTION`), correction patterns, updated `COMBINED_REVIEW_PROMPT`

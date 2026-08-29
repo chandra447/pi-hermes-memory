@@ -19,7 +19,11 @@ import {
 } from "../constants.js";
 import type { MemoryConfig } from "../types.js";
 import { measureLifecycle } from "../lifecycle-timing.js";
-import { collectMessageParts } from "./message-parts.js";
+import {
+  appendPromptConversationSection,
+  buildMemoryPromptSections,
+  collectMessageParts,
+} from "./message-parts.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
 import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
@@ -29,29 +33,13 @@ function buildDirectFlushUserPrompt(
   projectStore: MemoryStore | null,
   parts: string[],
 ): string {
-  const sections = [
-    "--- Current Memory ---",
-    store.getMemoryEntries().join(ENTRY_DELIMITER) || "(empty)",
-    "",
-    "--- Current User Profile ---",
-    store.getUserEntries().join(ENTRY_DELIMITER) || "(empty)",
-  ];
-
-  if (projectStore) {
-    sections.push(
-      "",
-      "--- Current Project Memory ---",
-      projectStore.getMemoryEntries().join(ENTRY_DELIMITER) || "(empty)",
-    );
-  }
-
-  sections.push(
-    "",
-    "--- Conversation ---",
-    parts.join("\n\n"),
+  const sections = buildMemoryPromptSections(
+    store.getMemoryEntries().join(ENTRY_DELIMITER),
+    store.getUserEntries().join(ENTRY_DELIMITER),
+    projectStore ? projectStore.getMemoryEntries().join(ENTRY_DELIMITER) : null,
   );
 
-  return sections.join("\n");
+  return appendPromptConversationSection(sections, parts, "Conversation").join("\n");
 }
 
 export function setupSessionFlush(

@@ -7,7 +7,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { MemoryConfig, ThinkingLevel } from "../types.js";
 import { AGENT_ROOT } from "../paths.js";
 
-type ChildLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride" | "childExtensionPaths">;
+type ChildLlmConfig = Pick<
+  MemoryConfig,
+  "llmModelOverride" | "llmThinkingOverride" | "childExtensionPaths"
+>;
 
 interface PiExecResult {
   code: number;
@@ -65,7 +68,8 @@ interface ResolveChildPiInvocationOptions {
 }
 
 const OVERRIDE_FAILURE_SUBJECT = /\b(model|provider|thinking)\b/i;
-const OVERRIDE_FAILURE_REASON = /\b(not found|unknown|invalid|unsupported|unavailable|unrecognized|no match|no matches|cannot resolve|failed to resolve)\b/i;
+const OVERRIDE_FAILURE_REASON =
+  /\b(not found|unknown|invalid|unsupported|unavailable|unrecognized|no match|no matches|cannot resolve|failed to resolve)\b/i;
 
 // Resolve the path to pi-hermes-memory's own extension entry point.
 // Used to pass -e <path> to child subprocesses so they only load this
@@ -83,35 +87,17 @@ function normalizedModelOverride(config: ChildLlmConfig): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function effectiveThinkingOverride(config: ChildLlmConfig): ThinkingLevel | undefined {
+function effectiveThinkingOverride(
+  config: ChildLlmConfig,
+): ThinkingLevel | undefined {
   return config.llmThinkingOverride;
 }
 
 export function hasChildLlmOverrides(config: ChildLlmConfig): boolean {
-  return normalizedModelOverride(config) !== undefined || effectiveThinkingOverride(config) !== undefined;
-}
-
-/** @deprecated No longer called after PR #78 — kept for API backward compat. */
-export function inheritedExtensionArgs(argv: string[] = process.argv.slice(2)): string[] {
-  const args: string[] = [];
-
-  for (let i = 0; i < argv.length; i++) {
-    const current = argv[i];
-    if (current === "-e" || current === "--extension") {
-      const next = argv[i + 1];
-      if (typeof next === "string" && next.length > 0) {
-        args.push(current, next);
-        i++;
-      }
-      continue;
-    }
-
-    if (current.startsWith("--extension=")) {
-      args.push(current);
-    }
-  }
-
-  return args;
+  return (
+    normalizedModelOverride(config) !== undefined ||
+    effectiveThinkingOverride(config) !== undefined
+  );
 }
 
 // Provider-auth-adapter packages (e.g. Anthropic/xAI/Codex OAuth) inject
@@ -142,8 +128,8 @@ const AUTH_ADAPTER_PACKAGE_NAMES: ReadonlySet<string> = new Set([
 
 function isAuthAdapterPackageName(name: string): boolean {
   return (
-    AUTH_ADAPTER_PACKAGE_NAMES.has(name)
-    || AUTH_ADAPTER_NAME_PATTERNS.some((pattern) => pattern.test(name))
+    AUTH_ADAPTER_PACKAGE_NAMES.has(name) ||
+    AUTH_ADAPTER_NAME_PATTERNS.some((pattern) => pattern.test(name))
   );
 }
 
@@ -161,7 +147,9 @@ function readPackageExtensionEntries(packageDir: string): string[] {
     return [];
   }
 
-  const declaredExtensions = (manifest as { pi?: { extensions?: unknown } } | null)?.pi?.extensions;
+  const declaredExtensions = (
+    manifest as { pi?: { extensions?: unknown } } | null
+  )?.pi?.extensions;
   if (!Array.isArray(declaredExtensions)) return [];
 
   const entries: string[] = [];
@@ -194,7 +182,9 @@ function scanRootForAuthAdapters(root: string): string[] {
       }
       for (const scopedName of scopedPackages) {
         if (!isAuthAdapterPackageName(`${entry}/${scopedName}`)) continue;
-        detected.push(...readPackageExtensionEntries(join(scopeDir, scopedName)));
+        detected.push(
+          ...readPackageExtensionEntries(join(scopeDir, scopedName)),
+        );
       }
       continue;
     }
@@ -212,10 +202,14 @@ function scanRootForAuthAdapters(root: string): string[] {
 // directory (covers pi-hermes-memory being loaded from elsewhere, e.g. a
 // local dev checkout via -e, while the adapter is still npm-managed).
 export function detectAuthAdapterExtensionPaths(roots?: string[]): string[] {
-  const searchRoots = roots ?? [
-    OWN_EXTENSION_PATH ? resolve(dirname(dirname(OWN_EXTENSION_PATH)), "..") : "",
-    join(AGENT_ROOT, "npm", "node_modules"),
-  ].filter((root) => root.length > 0);
+  const searchRoots =
+    roots ??
+    [
+      OWN_EXTENSION_PATH
+        ? resolve(dirname(dirname(OWN_EXTENSION_PATH)), "..")
+        : "",
+      join(AGENT_ROOT, "npm", "node_modules"),
+    ].filter((root) => root.length > 0);
 
   const seenRoots: string[] = [];
   const detected: string[] = [];
@@ -239,7 +233,8 @@ function childExtensionSources(config: ChildLlmConfig): string[] {
 
   // These paths are discovered by Hermes rather than explicitly trusted in
   // configuration, so keep the local existence check before forwarding them.
-  if (OWN_EXTENSION_PATH && existsSync(OWN_EXTENSION_PATH)) append(OWN_EXTENSION_PATH);
+  if (OWN_EXTENSION_PATH && existsSync(OWN_EXTENSION_PATH))
+    append(OWN_EXTENSION_PATH);
   for (const source of config.childExtensionPaths ?? []) append(source);
   for (const adapterPath of detectAuthAdapterExtensionPaths()) {
     const normalized = resolve(adapterPath);
@@ -262,13 +257,15 @@ function appendOwnExtensionArgs(args: string[], config: ChildLlmConfig): void {
 export function buildChildPiPromptArgs(
   prompt: string,
   config: ChildLlmConfig,
-  _argv: string[] = process.argv.slice(2),
   activeModel?: ChildPiModel,
   activeThinking?: ThinkingLevel,
 ): string[] {
   const args = ["-p", "--no-session"];
-  const model = normalizedModelOverride(config)
-    ?? (activeModel?.provider && activeModel.id ? `${activeModel.provider}/${activeModel.id}` : undefined);
+  const model =
+    normalizedModelOverride(config) ??
+    (activeModel?.provider && activeModel.id
+      ? `${activeModel.provider}/${activeModel.id}`
+      : undefined);
   const thinking = effectiveThinkingOverride(config) ?? activeThinking;
 
   if (model) args.push("--model", model);
@@ -283,15 +280,15 @@ function basePromptArgs(
   prompt: string,
   config: ChildLlmConfig,
   activeModel?: ChildPiModel,
-  activeThinking?: ThinkingLevel,
 ): string[] {
   // Always use --no-extensions + own path so the retry also avoids loading
-  // all settings.json packages — matching the primary code path.
+  // all settings.json packages — matching the primary code path. The retry
+  // drops configured overrides AND the inherited thinking level, since a
+  // failed `--thinking <level>` flag may itself be the root cause.
   const args = ["-p", "--no-session"];
   if (activeModel?.provider && activeModel.id) {
     args.push("--model", `${activeModel.provider}/${activeModel.id}`);
   }
-  if (activeThinking) args.push("--thinking", activeThinking);
   appendOwnExtensionArgs(args, config);
   args.push(prompt);
   return args;
@@ -313,7 +310,9 @@ function resolvedInstalledPiCliPath(): string | undefined {
   }
 }
 
-function resolvedPiCliPath(options: ResolveChildPiInvocationOptions): string | undefined {
+function resolvedPiCliPath(
+  options: ResolveChildPiInvocationOptions,
+): string | undefined {
   if (options.piCliPath !== undefined) {
     return options.piCliPath ?? undefined;
   }
@@ -344,13 +343,29 @@ function resolvedWindowsPiInvocation(
       }
     }
 
-    if (!existsSync(join(directory, "pi.cmd")) && !existsSync(join(directory, "pi.bat"))) {
+    if (
+      !existsSync(join(directory, "pi.cmd")) &&
+      !existsSync(join(directory, "pi.bat"))
+    ) {
       continue;
     }
 
     for (const cliPath of [
-      join(directory, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js"),
-      join(directory, "node_modules", "@earendil-works", "pi-coding-agent", "cli.js"),
+      join(
+        directory,
+        "node_modules",
+        "@earendil-works",
+        "pi-coding-agent",
+        "dist",
+        "cli.js",
+      ),
+      join(
+        directory,
+        "node_modules",
+        "@earendil-works",
+        "pi-coding-agent",
+        "cli.js",
+      ),
     ]) {
       if (existsSync(cliPath)) {
         return { command: execPath, args: [cliPath, ...args] };
@@ -378,7 +393,10 @@ export function resolveChildPiInvocation(
     };
   }
 
-  const fallback = resolvedWindowsPiInvocation(args, options.execPath ?? process.execPath);
+  const fallback = resolvedWindowsPiInvocation(
+    args,
+    options.execPath ?? process.execPath,
+  );
   if (fallback) return fallback;
 
   throw new Error("Unable to resolve a directly executable Pi CLI on Windows");
@@ -401,27 +419,41 @@ export function resolveWatchedChildPiInvocation(
   };
 }
 
-function shouldRetryWithoutOverridesFromText(text: string | undefined): boolean {
+function shouldRetryWithoutOverridesFromText(
+  text: string | undefined,
+): boolean {
   if (!text) return false;
-  return OVERRIDE_FAILURE_SUBJECT.test(text) && OVERRIDE_FAILURE_REASON.test(text);
+  return (
+    OVERRIDE_FAILURE_SUBJECT.test(text) && OVERRIDE_FAILURE_REASON.test(text)
+  );
 }
 
 function shouldRetryWithoutOverrides(result: PiExecResult): boolean {
-  return shouldRetryWithoutOverridesFromText(result.stderr) || shouldRetryWithoutOverridesFromText(result.stdout);
+  return (
+    shouldRetryWithoutOverridesFromText(result.stderr) ||
+    shouldRetryWithoutOverridesFromText(result.stdout)
+  );
 }
 
 function shouldRetryWithoutOverridesForError(error: unknown): boolean {
   return shouldRetryWithoutOverridesFromText(String(error));
 }
 
-async function writePromptToTemporaryFile(prompt: string): Promise<{ dir: string; filePath: string }> {
+async function writePromptToTemporaryFile(
+  prompt: string,
+): Promise<{ dir: string; filePath: string }> {
   const dir = await fs.mkdtemp(join(os.tmpdir(), "pi-hermes-prompt-"));
   const filePath = join(dir, "prompt.md");
   try {
     await fs.writeFile(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
     return { dir, filePath };
   } catch (error) {
-    try { await fs.rm(dir, { recursive: true, force: true }); } catch {}
+    // Best effort: clean up the temp dir before propagating the write error.
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+    } catch {
+      /* cleanup failure is secondary to the original error */
+    }
     throw error;
   }
 }
@@ -442,9 +474,13 @@ export async function execChildPrompt(
   const cancellationPath = join(temporaryPrompt.dir, "cancel");
   let cancellationRequest: Promise<void> | undefined;
   const requestCancellation = () => {
-    cancellationRequest ??= fs.writeFile(cancellationPath, "", { mode: 0o600 }).catch(() => {});
+    cancellationRequest ??= fs
+      .writeFile(cancellationPath, "", { mode: 0o600 })
+      .catch(() => {});
   };
-  options.signal?.addEventListener("abort", requestCancellation, { once: true });
+  options.signal?.addEventListener("abort", requestCancellation, {
+    once: true,
+  });
   if (options.signal?.aborted) {
     requestCancellation();
     await cancellationRequest;
@@ -457,7 +493,6 @@ export async function execChildPrompt(
           buildChildPiPromptArgs(
             promptReference,
             config,
-            process.argv.slice(2),
             options.model,
             options.thinking,
           ),
@@ -465,7 +500,11 @@ export async function execChildPrompt(
         options.timeoutMs,
         cancellationPath,
       );
-      const result = await pi.exec(invocation.command, invocation.args, execOptions) as PiExecResult;
+      const result = (await pi.exec(
+        invocation.command,
+        invocation.args,
+        execOptions,
+      )) as PiExecResult;
       if (
         result.code === 0 ||
         !options.retryWithoutOverrides ||
@@ -486,18 +525,27 @@ export async function execChildPrompt(
 
     const retryInvocation = resolveWatchedChildPiInvocation(
       resolveChildPiInvocation(
-        basePromptArgs(promptReference, config, options.model, options.thinking),
+        basePromptArgs(promptReference, config, options.model),
       ),
       options.timeoutMs,
       cancellationPath,
     );
-    return await pi.exec(retryInvocation.command, retryInvocation.args, execOptions) as PiExecResult;
+    return (await pi.exec(
+      retryInvocation.command,
+      retryInvocation.args,
+      execOptions,
+    )) as PiExecResult;
   } finally {
     options.signal?.removeEventListener("abort", requestCancellation);
     try {
       await dependencies.removeTemporaryDirectory(temporaryPrompt.dir);
     } catch {
-      try { await fs.unlink(temporaryPrompt.filePath); } catch {}
+      // Best effort: fall back to removing just the prompt file if the whole-dir cleanup failed.
+      try {
+        await fs.unlink(temporaryPrompt.filePath);
+      } catch {
+        /* last-resort cleanup; the prompt file is in os.tmpdir */
+      }
     }
   }
 }

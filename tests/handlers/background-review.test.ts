@@ -16,11 +16,6 @@ import type { MemoryConfig } from "../../src/types.js";
 
 // ─── Mock infrastructure ───
 
-interface CallLog {
-  handler: string;
-  args: any[];
-}
-
 let handlers: Record<string, Function[]>;
 let execCalls: any[];
 let directCalls: any[];
@@ -44,7 +39,10 @@ function setup(
   extraDeps: BackgroundReviewDeps = {},
 ): void {
   setupBackgroundReview(pi, mockStore, null, config, {
-    deps: { onReviewSettled: () => reviewSettledSignal.resolve(), ...extraDeps },
+    deps: {
+      onReviewSettled: () => reviewSettledSignal.resolve(),
+      ...extraDeps,
+    },
   });
 }
 
@@ -53,12 +51,19 @@ function captureExecArgs(args: any[]): any[] {
   const capturedArgs = [...childArgs];
   const promptReference = capturedArgs.at(-1);
   if (typeof promptReference === "string" && promptReference.startsWith("@")) {
-    capturedArgs[capturedArgs.length - 1] = readFileSync(promptReference.slice(1), "utf-8");
+    capturedArgs[capturedArgs.length - 1] = readFileSync(
+      promptReference.slice(1),
+      "utf-8",
+    );
   }
   return [command, capturedArgs, options];
 }
 
-function createMockPi(execReturn?: { code: number; stdout: string; stderr: string }) {
+function createMockPi(execReturn?: {
+  code: number;
+  stdout: string;
+  stderr: string;
+}) {
   const defaultReturn = { code: 0, stdout: "Saved memory", stderr: "" };
   const ret = execReturn ?? defaultReturn;
 
@@ -81,13 +86,18 @@ function makeBranch(numMessages: number) {
     type: "message",
     message: {
       role: i % 2 === 0 ? "user" : "assistant",
-      content: [{ type: "text", text: `Message number ${i} with some real content here` }],
+      content: [
+        {
+          type: "text",
+          text: `Message number ${i} with some real content here`,
+        },
+      ],
       timestamp: i,
     },
   }));
 }
 
-function makeCtx(branch: any[] = [], overrides: Record<string, any> = {}) {
+function makeCtx(branch: any[] = [], overrides: Record<string, unknown> = {}) {
   return {
     sessionManager: { getBranch: () => branch },
     signal: undefined as any,
@@ -129,11 +139,17 @@ function fireMessageEnd(role: string) {
   const h = handlers["message_end"];
   if (!h) throw new Error("No message_end handler registered");
   for (const fn of h) {
-    fn({ message: { role, content: [{ type: "text", text: "hi" }] } }, makeCtx());
+    fn(
+      { message: { role, content: [{ type: "text", text: "hi" }] } },
+      makeCtx(),
+    );
   }
 }
 
-function fireTurnEnd(branch: any[] = makeBranch(10), ctxOverrides: Record<string, any> = {}) {
+function fireTurnEnd(
+  branch: any[] = makeBranch(10),
+  ctxOverrides: Record<string, unknown> = {},
+) {
   const h = handlers["turn_end"];
   if (!h) throw new Error("No turn_end handler registered");
   const ctx = makeCtx(branch, ctxOverrides);
@@ -164,10 +180,16 @@ async function settle(ms = 10): Promise<void> {
 function logicalChildArgs(index = execCalls.length - 1): string[] {
   const [cmd, args] = execCalls[index];
   const underlying = { command: args[3], args: args.slice(4) };
-  const expected = resolveWatchedChildPiInvocation(underlying, Number(args[1]), args[2]);
+  const expected = resolveWatchedChildPiInvocation(
+    underlying,
+    Number(args[1]),
+    args[2],
+  );
   assert.strictEqual(cmd, expected.command);
   assert.deepStrictEqual(args, expected.args);
-  return underlying.command === "pi" ? underlying.args : underlying.args.slice(1);
+  return underlying.command === "pi"
+    ? underlying.args
+    : underlying.args.slice(1);
 }
 
 function reviewPrompt(index = execCalls.length - 1): string {
@@ -184,13 +206,21 @@ describe("buildDirectReviewSessionContext", () => {
         type: "message",
         id: "root",
         parentId: null,
-        message: { role: "user", content: [{ type: "text", text: "root" }], timestamp: 1 },
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "root" }],
+          timestamp: 1,
+        },
       },
       {
         type: "message",
         id: "sibling",
         parentId: "root",
-        message: { role: "user", content: [{ type: "text", text: "sibling" }], timestamp: 2 },
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "sibling" }],
+          timestamp: 2,
+        },
       },
       {
         type: "message",
@@ -198,7 +228,14 @@ describe("buildDirectReviewSessionContext", () => {
         parentId: "root",
         message: {
           role: "assistant",
-          content: [{ type: "toolCall", id: "call-1", name: "memory_search", arguments: "{}" }],
+          content: [
+            {
+              type: "toolCall",
+              id: "call-1",
+              name: "memory_search",
+              arguments: "{}",
+            },
+          ],
           api: "openai-completions",
           provider: "test",
           model: "test-model",
@@ -234,7 +271,11 @@ describe("buildDirectReviewSessionContext", () => {
         type: "message",
         id: "leaf",
         parentId: "custom",
-        message: { role: "user", content: [{ type: "text", text: "leaf" }], timestamp: 6 },
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "leaf" }],
+          timestamp: 6,
+        },
       },
     ];
 
@@ -247,27 +288,40 @@ describe("buildDirectReviewSessionContext", () => {
     } as any);
 
     assert.strictEqual(context?.systemPrompt, "parent system");
-    assert.deepStrictEqual(context?.messages.map((message) => message.role), [
-      "user", "assistant", "toolResult", "user", "user",
-    ]);
-    assert.strictEqual(context?.messages.some((message) => (
-      message.content?.some((block: any) => block.type === "text" && block.text === "sibling")
-    )), false);
-    assert.strictEqual((context?.messages[1].content[0] as any).name, "memory_search");
-    assert.strictEqual((context?.messages[2].content[0] as any).text, "result");
-    assert.strictEqual((context?.messages[3].content[0] as any).text, "custom context");
+    assert.deepStrictEqual(
+      context?.messages.map((message) => message.role),
+      ["user", "assistant", "toolResult", "user", "user"],
+    );
+    assert.strictEqual(
+      context?.messages.some((message) =>
+        message.content?.some(
+          (block: any) => block.type === "text" && block.text === "sibling",
+        ),
+      ),
+      false,
+    );
+    assert.ok(context, "session context expected");
+    assert.strictEqual(context.messages[1].content[0].name, "memory_search");
+    assert.strictEqual(context.messages[2].content[0].text, "result");
+    assert.strictEqual(context.messages[3].content[0].text, "custom context");
   });
 
   it("preserves an explicit empty leaf instead of falling back to the last entry", () => {
     const context = buildDirectReviewSessionContext({
       getSystemPrompt: () => "parent system",
       sessionManager: {
-        getBranch: () => [{
-          type: "message",
-          id: "stale",
-          parentId: null,
-          message: { role: "user", content: [{ type: "text", text: "stale" }], timestamp: 1 },
-        }],
+        getBranch: () => [
+          {
+            type: "message",
+            id: "stale",
+            parentId: null,
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "stale" }],
+              timestamp: 1,
+            },
+          },
+        ],
         getLeafId: () => null,
       },
     } as any);
@@ -281,13 +335,21 @@ describe("buildDirectReviewSessionContext", () => {
         type: "message",
         id: "before",
         parentId: null,
-        message: { role: "user", content: [{ type: "text", text: "before compaction" }], timestamp: 1 },
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "before compaction" }],
+          timestamp: 1,
+        },
       },
       {
         type: "message",
         id: "kept",
         parentId: "before",
-        message: { role: "assistant", content: [{ type: "text", text: "kept message" }], timestamp: 2 },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "kept message" }],
+          timestamp: 2,
+        },
       },
       {
         type: "compaction",
@@ -320,7 +382,11 @@ describe("buildDirectReviewSessionContext", () => {
         type: "message",
         id: "after",
         parentId: "custom",
-        message: { role: "user", content: [{ type: "text", text: "after compaction" }], timestamp: 6 },
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "after compaction" }],
+          timestamp: 6,
+        },
       },
     ];
 
@@ -345,13 +411,21 @@ describe("buildDirectReviewSessionContext", () => {
         type: "message",
         id: "before",
         parentId: null,
-        message: { role: "user", content: [{ type: "text", text: "before" }], timestamp: 1 },
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "before" }],
+          timestamp: 1,
+        },
       },
       {
         type: "message",
         id: "kept",
         parentId: "before",
-        message: { role: "assistant", content: [{ type: "text", text: "kept" }], timestamp: 2 },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "kept" }],
+          timestamp: 2,
+        },
       },
       {
         type: "compaction",
@@ -366,7 +440,11 @@ describe("buildDirectReviewSessionContext", () => {
         type: "message",
         id: "after",
         parentId: "compact",
-        message: { role: "user", content: [{ type: "text", text: "after" }], timestamp: 4 },
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "after" }],
+          timestamp: 4,
+        },
       },
     ];
 
@@ -401,7 +479,10 @@ describe("setupBackgroundReview", () => {
   function setupWithDirectDeps(
     pi: ExtensionAPI,
     directResult: DirectReviewResult,
-    config: MemoryConfig = { ...defaultConfig, reviewTransport: "direct" as const } as MemoryConfig,
+    config: MemoryConfig = {
+      ...defaultConfig,
+      reviewTransport: "direct" as const,
+    } as MemoryConfig,
   ): void {
     setup(pi, config, {
       runDirectReview: async (...args: any[]) => {
@@ -428,7 +509,10 @@ describe("setupBackgroundReview", () => {
     await reviewSettledSignal.promise;
 
     // exec should have been called since we have 3 user turns and 10 turn_end events
-    assert.ok(execCalls.length > 0, "exec should be called with 3 user turns and 10 turn_end events");
+    assert.ok(
+      execCalls.length > 0,
+      "exec should be called with 3 user turns and 10 turn_end events",
+    );
   });
 
   it("triggers review at nudgeInterval (10) turns", async () => {
@@ -444,20 +528,34 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 9; i++) {
       fireTurnEnd();
     }
-    assert.strictEqual(execCalls.length, 0, "exec should NOT be called at 9 turns");
+    assert.strictEqual(
+      execCalls.length,
+      0,
+      "exec should NOT be called at 9 turns",
+    );
 
     // 10th turn_end triggers review
     fireTurnEnd();
     await reviewSettledSignal.promise;
 
-    assert.strictEqual(execCalls.length, 1, "exec should be called once at turn 10");
+    assert.strictEqual(
+      execCalls.length,
+      1,
+      "exec should be called once at turn 10",
+    );
     // Verify it calls pi.exec with review prompt
     const cmdArgs = logicalChildArgs(0);
     assert.ok(cmdArgs[0] === "-p", "should use -p flag");
     assert.ok(cmdArgs.includes("--no-session"), "should include --no-session");
     const prompt = reviewPrompt(0);
-    assert.match(prompt, /Do NOT create or modify skills in this background review/i);
-    assert.doesNotMatch(prompt, /save a reusable procedure using the skill tool/i);
+    assert.match(
+      prompt,
+      /Do NOT create or modify skills in this background review/i,
+    );
+    assert.doesNotMatch(
+      prompt,
+      /save a reusable procedure using the skill tool/i,
+    );
   });
 
   it("passes child LLM override args to the review subprocess", async () => {
@@ -478,10 +576,14 @@ describe("setupBackgroundReview", () => {
     await reviewSettledSignal.promise;
 
     const cmdArgs = logicalChildArgs(0);
-    assert.deepStrictEqual(
-      cmdArgs.slice(0, 6),
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "minimal"],
-    );
+    assert.deepStrictEqual(cmdArgs.slice(0, 6), [
+      "-p",
+      "--no-session",
+      "--model",
+      "openrouter/deepseek/deepseek-v4-flash",
+      "--thinking",
+      "minimal",
+    ]);
   });
 
   it("does NOT trigger review when reviewEnabled is false", async () => {
@@ -498,7 +600,11 @@ describe("setupBackgroundReview", () => {
     }
     await settle();
 
-    assert.strictEqual(execCalls.length, 0, "exec should NOT be called when reviewEnabled is false");
+    assert.strictEqual(
+      execCalls.length,
+      0,
+      "exec should NOT be called when reviewEnabled is false",
+    );
   });
 
   it("does NOT trigger review with fewer than 3 user turns", async () => {
@@ -514,7 +620,11 @@ describe("setupBackgroundReview", () => {
     }
     await settle();
 
-    assert.strictEqual(execCalls.length, 0, "exec should NOT be called with only 2 user turns");
+    assert.strictEqual(
+      execCalls.length,
+      0,
+      "exec should NOT be called with only 2 user turns",
+    );
   });
 
   it("reviewInProgress guard prevents double-trigger", async () => {
@@ -527,7 +637,9 @@ describe("setupBackgroundReview", () => {
       },
       exec: async (...args: any[]) => {
         execCalls.push(captureExecArgs(args));
-        await new Promise<void>((r) => { resolveExec = r; });
+        await new Promise<void>((r) => {
+          resolveExec = r;
+        });
         return { code: 0, stdout: "Saved", stderr: "" };
       },
       registerTool: () => {},
@@ -546,7 +658,11 @@ describe("setupBackgroundReview", () => {
     }
     await settle(5);
 
-    assert.strictEqual(execCalls.length, 1, "exec should be called once for first trigger");
+    assert.strictEqual(
+      execCalls.length,
+      1,
+      "exec should be called once for first trigger",
+    );
 
     // Fire more turn_end events — should be blocked by reviewInProgress
     for (let i = 0; i < 15; i++) {
@@ -554,7 +670,11 @@ describe("setupBackgroundReview", () => {
     }
     await settle(5);
 
-    assert.strictEqual(execCalls.length, 1, "exec should still only be called once — reviewInProgress guard");
+    assert.strictEqual(
+      execCalls.length,
+      1,
+      "exec should still only be called once — reviewInProgress guard",
+    );
 
     // Resolve the pending exec to clean up
     resolveExec!();
@@ -571,8 +691,17 @@ describe("setupBackgroundReview", () => {
 
     // Branch with only 2 message entries (< 4 parts)
     const shortBranch = [
-      { type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] } },
-      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "hello" }] } },
+      {
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "hello" }],
+        },
+      },
     ];
 
     for (let i = 0; i < 10; i++) {
@@ -580,7 +709,11 @@ describe("setupBackgroundReview", () => {
     }
     await settle();
 
-    assert.strictEqual(execCalls.length, 0, "exec should NOT be called for short conversations");
+    assert.strictEqual(
+      execCalls.length,
+      0,
+      "exec should NOT be called for short conversations",
+    );
   });
 
   it("uses the full conversation by default", async () => {
@@ -597,8 +730,14 @@ describe("setupBackgroundReview", () => {
     await reviewSettledSignal.promise;
 
     const prompt = reviewPrompt();
-    assert.ok(prompt.includes("Message number 0"), "default should include older messages");
-    assert.ok(prompt.includes("Message number 9"), "default should include latest messages");
+    assert.ok(
+      prompt.includes("Message number 0"),
+      "default should include older messages",
+    );
+    assert.ok(
+      prompt.includes("Message number 9"),
+      "default should include latest messages",
+    );
   });
 
   it("uses compaction and branch-aware context in subprocess prompts", async () => {
@@ -610,13 +749,19 @@ describe("setupBackgroundReview", () => {
         type: "message",
         id: "before",
         parentId: null,
-        message: { role: "user", content: [{ type: "text", text: "before compaction" }] },
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "before compaction" }],
+        },
       },
       {
         type: "message",
         id: "kept",
         parentId: "before",
-        message: { role: "assistant", content: [{ type: "text", text: "kept message" }] },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "kept message" }],
+        },
       },
       {
         type: "compaction",
@@ -649,13 +794,19 @@ describe("setupBackgroundReview", () => {
         type: "message",
         id: "after",
         parentId: "custom",
-        message: { role: "user", content: [{ type: "text", text: "after compaction" }] },
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "after compaction" }],
+        },
       },
       {
         type: "message",
         id: "final",
         parentId: "after",
-        message: { role: "assistant", content: [{ type: "text", text: "final message" }] },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "final message" }],
+        },
       },
     ];
 
@@ -696,7 +847,10 @@ describe("setupBackgroundReview", () => {
     await reviewSettledSignal.promise;
 
     const prompt = reviewPrompt();
-    assert.ok(!prompt.includes("Message number 6"), "window should exclude older messages");
+    assert.ok(
+      !prompt.includes("Message number 6"),
+      "window should exclude older messages",
+    );
     assert.ok(prompt.includes("Message number 7"));
     assert.ok(prompt.includes("Message number 8"));
     assert.ok(prompt.includes("Message number 9"));
@@ -716,7 +870,10 @@ describe("setupBackgroundReview", () => {
     }
     await reviewSettledSignal.promise;
 
-    assert.ok(reviewPrompt().includes("Message number 0"), "flush limit must not affect review");
+    assert.ok(
+      reviewPrompt().includes("Message number 0"),
+      "flush limit must not affect review",
+    );
   });
 
   it("keeps the short conversation guard based on the full conversation", async () => {
@@ -733,7 +890,11 @@ describe("setupBackgroundReview", () => {
     }
     await reviewSettledSignal.promise;
 
-    assert.strictEqual(execCalls.length, 1, "full conversation has enough parts to review");
+    assert.strictEqual(
+      execCalls.length,
+      1,
+      "full conversation has enough parts to review",
+    );
     const prompt = reviewPrompt();
     assert.ok(!prompt.includes("Message number 0"));
     assert.ok(!prompt.includes("Message number 1"));
@@ -764,11 +925,19 @@ describe("setupBackgroundReview", () => {
     }
     await reviewSettledSignal.promise;
 
-    assert.strictEqual(execCalls.length, 2, "second review should trigger after counter reset");
+    assert.strictEqual(
+      execCalls.length,
+      2,
+      "second review should trigger after counter reset",
+    );
   });
 
   it("shows notification only when review saves something", async () => {
-    const pi = createMockPi({ code: 0, stdout: "Saved new memory about user preferences", stderr: "" });
+    const pi = createMockPi({
+      code: 0,
+      stdout: "Saved new memory about user preferences",
+      stderr: "",
+    });
     setup(pi, defaultConfig);
 
     fireMessageEnd("user");
@@ -781,8 +950,13 @@ describe("setupBackgroundReview", () => {
     await reviewSettledSignal.promise;
 
     // 10 diagnostic notifications + 1 auto-review notification
-    const reviewNotify = notifyCalls.find(n => n.msg.includes("Memory auto-reviewed"));
-    assert.ok(reviewNotify, "should have a 'Memory auto-reviewed' notification");
+    const reviewNotify = notifyCalls.find((n) =>
+      n.msg.includes("Memory auto-reviewed"),
+    );
+    assert.ok(
+      reviewNotify,
+      "should have a 'Memory auto-reviewed' notification",
+    );
 
     // Reset and test "nothing to save" case
     handlers = {};
@@ -790,7 +964,11 @@ describe("setupBackgroundReview", () => {
     notifyCalls = [];
     resetReviewSettledSignal();
 
-    const nothingPi = createMockPi({ code: 0, stdout: "Nothing to save.", stderr: "" });
+    const nothingPi = createMockPi({
+      code: 0,
+      stdout: "Nothing to save.",
+      stderr: "",
+    });
     setup(nothingPi, defaultConfig);
 
     fireMessageEnd("user");
@@ -802,8 +980,14 @@ describe("setupBackgroundReview", () => {
     }
     await reviewSettledSignal.promise;
 
-    const reviewNotify2 = notifyCalls.find(n => n.msg.includes("Memory auto-reviewed"));
-    assert.strictEqual(reviewNotify2, undefined, "no 'Memory auto-reviewed' notification for 'nothing to save'");
+    const reviewNotify2 = notifyCalls.find((n) =>
+      n.msg.includes("Memory auto-reviewed"),
+    );
+    assert.strictEqual(
+      reviewNotify2,
+      undefined,
+      "no 'Memory auto-reviewed' notification for 'nothing to save'",
+    );
   });
 
   it("does NOT crash agent when exec throws", async () => {
@@ -851,7 +1035,11 @@ describe("setupBackgroundReview", () => {
     }
     await settle();
 
-    assert.strictEqual(execCalls.length, 0, "exec should NOT be called — no user messages");
+    assert.strictEqual(
+      execCalls.length,
+      0,
+      "exec should NOT be called — no user messages",
+    );
   });
 
   // ─── Tool-call-aware nudge tests (Epic 4) ───
@@ -889,7 +1077,10 @@ describe("setupBackgroundReview", () => {
     fireTurnEnd(branchWithToolCalls);
     await reviewSettledSignal.promise;
 
-    assert.ok(execCalls.length >= 1, "exec should be called due to tool call threshold");
+    assert.ok(
+      execCalls.length >= 1,
+      "exec should be called due to tool call threshold",
+    );
   });
 
   it("triggers when both thresholds are met", async () => {
@@ -922,7 +1113,10 @@ describe("setupBackgroundReview", () => {
     }
     await reviewSettledSignal.promise;
 
-    assert.ok(execCalls.length >= 1, "exec should be called when either threshold is met");
+    assert.ok(
+      execCalls.length >= 1,
+      "exec should be called when either threshold is met",
+    );
   });
 
   it("resets both counters after review", async () => {
@@ -961,7 +1155,11 @@ describe("setupBackgroundReview", () => {
       fireTurnEnd(makeBranch(10));
     }
     await reviewSettledSignal.promise;
-    assert.strictEqual(execCalls.length, 2, "second review should trigger after counter reset");
+    assert.strictEqual(
+      execCalls.length,
+      2,
+      "second review should trigger after counter reset",
+    );
   });
 
   it("does not trigger when neither threshold is met", async () => {
@@ -994,7 +1192,11 @@ describe("setupBackgroundReview", () => {
     }
     await settle();
 
-    assert.strictEqual(execCalls.length, 0, "exec should NOT be called when neither threshold met");
+    assert.strictEqual(
+      execCalls.length,
+      0,
+      "exec should NOT be called when neither threshold met",
+    );
   });
 
   it("ignores text blocks when counting tool calls", async () => {
@@ -1007,9 +1209,7 @@ describe("setupBackgroundReview", () => {
     fireMessageEnd("user");
 
     // Branch with text-only messages (no toolCall blocks)
-    const branchWithTextOnly = [
-      ...makeBranch(10),
-    ];
+    const branchWithTextOnly = [...makeBranch(10)];
 
     // Fire enough turns but no tool calls
     for (let i = 0; i < 5; i++) {
@@ -1017,15 +1217,23 @@ describe("setupBackgroundReview", () => {
     }
     await settle();
 
-    assert.strictEqual(execCalls.length, 0, "exec should NOT be called — no toolCall blocks, turn threshold not met");
+    assert.strictEqual(
+      execCalls.length,
+      0,
+      "exec should NOT be called — no toolCall blocks, turn threshold not met",
+    );
   });
 
   it("uses direct review by default and does not call subprocess", async () => {
     const pi = createMockPi();
-    setupWithDirectDeps(pi, { ok: true, appliedCount: 1 }, {
-      ...defaultConfig,
-      reviewTransport: "direct",
-    });
+    setupWithDirectDeps(
+      pi,
+      { ok: true, appliedCount: 1 },
+      {
+        ...defaultConfig,
+        reviewTransport: "direct",
+      },
+    );
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -1037,21 +1245,31 @@ describe("setupBackgroundReview", () => {
     await reviewSettledSignal.promise;
 
     assert.strictEqual(directCalls.length, 1, "direct review should run once");
-    assert.strictEqual(execCalls.length, 0, "subprocess should not run on successful direct review");
+    assert.strictEqual(
+      execCalls.length,
+      0,
+      "subprocess should not run on successful direct review",
+    );
     const directOptions = directCalls[0][3] as { systemPrompt: string };
     assert.match(directOptions.systemPrompt, /target routing/i);
     assert.match(directOptions.systemPrompt, /use target "memory"/i);
     assert.match(directOptions.systemPrompt, /do not emit target "project"/i);
-    const reviewNotify = notifyCalls.find((n) => n.msg.includes("Memory auto-reviewed"));
+    const reviewNotify = notifyCalls.find((n) =>
+      n.msg.includes("Memory auto-reviewed"),
+    );
     assert.ok(reviewNotify, "should notify when direct review applies memory");
   });
 
   it("passes the active session context and thinking level to direct review", async () => {
     const pi = createMockPi();
-    setupWithDirectDeps(pi, { ok: true, appliedCount: 0 }, {
-      ...defaultConfig,
-      reviewTransport: "direct",
-    });
+    setupWithDirectDeps(
+      pi,
+      { ok: true, appliedCount: 0 },
+      {
+        ...defaultConfig,
+        reviewTransport: "direct",
+      },
+    );
 
     const branch = [
       {
@@ -1127,13 +1345,22 @@ describe("setupBackgroundReview", () => {
     const options = directCalls[0][3] as {
       systemPrompt: string;
       userPrompt: string;
-      context?: { systemPrompt: string; thinkingLevel: string; messages: any[] };
+      context?: {
+        systemPrompt: string;
+        thinkingLevel: string;
+        messages: any[];
+      };
     };
     assert.strictEqual(options.context?.systemPrompt, "main-system-prompt");
     assert.strictEqual(options.context?.thinkingLevel, "high");
     assert.deepStrictEqual(
       options.context?.messages.map((message) => message.content?.[0]?.text),
-      ["Message number 0", "Message number 1", "Message number 2", "Message number 3"],
+      [
+        "Message number 0",
+        "Message number 1",
+        "Message number 2",
+        "Message number 3",
+      ],
     );
     assert.ok(!options.userPrompt.includes("Message number 0"));
     assert.strictEqual(options.systemPrompt, "main-system-prompt");
@@ -1141,10 +1368,14 @@ describe("setupBackgroundReview", () => {
 
   it("falls back to subprocess when direct review cannot run", async () => {
     const pi = createMockPi();
-    setupWithDirectDeps(pi, { ok: false, appliedCount: 0, fallbackReason: "no_model" }, {
-      ...defaultConfig,
-      reviewTransport: "direct",
-    });
+    setupWithDirectDeps(
+      pi,
+      { ok: false, appliedCount: 0, fallbackReason: "no_model" },
+      {
+        ...defaultConfig,
+        reviewTransport: "direct",
+      },
+    );
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -1155,9 +1386,50 @@ describe("setupBackgroundReview", () => {
     }
     await reviewSettledSignal.promise;
 
-    assert.strictEqual(directCalls.length, 1, "direct review should be attempted first");
-    assert.strictEqual(execCalls.length, 1, "subprocess should run as fallback");
+    assert.strictEqual(
+      directCalls.length,
+      1,
+      "direct review should be attempted first",
+    );
+    assert.strictEqual(
+      execCalls.length,
+      1,
+      "subprocess should run as fallback",
+    );
   });
+
+  it("falls back to subprocess when direct review returns no_content", async () => {
+    const pi = createMockPi();
+    setupWithDirectDeps(
+      pi,
+      { ok: false, appliedCount: 0, fallbackReason: "no_content" },
+      {
+        ...defaultConfig,
+        reviewTransport: "direct",
+      },
+    );
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd();
+    }
+    await reviewSettledSignal.promise;
+
+    assert.strictEqual(
+      directCalls.length,
+      1,
+      "direct review should be attempted first",
+    );
+    assert.strictEqual(
+      execCalls.length,
+      1,
+      "subprocess should run as fallback for no_content",
+    );
+  });
+
   it("does not inherit active thinking when subprocess transport is forced", async () => {
     const pi = createMockPi();
     setup(pi, {
@@ -1176,7 +1448,10 @@ describe("setupBackgroundReview", () => {
         type: "message",
         id: "assistant-1",
         parentId: "user-1",
-        message: { role: "assistant", content: [{ type: "text", text: "second" }] },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "second" }],
+        },
       },
       {
         type: "thinking_level_change",
@@ -1194,7 +1469,10 @@ describe("setupBackgroundReview", () => {
         type: "message",
         id: "assistant-2",
         parentId: "user-2",
-        message: { role: "assistant", content: [{ type: "text", text: "fourth" }] },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "fourth" }],
+        },
       },
     ];
 
@@ -1213,16 +1491,24 @@ describe("setupBackgroundReview", () => {
     await reviewSettledSignal.promise;
 
     assert.deepStrictEqual(logicalChildArgs(0).slice(0, 5), [
-      "-p", "--no-session", "--model", "local-llama/local-9b", "--no-extensions",
+      "-p",
+      "--no-session",
+      "--model",
+      "local-llama/local-9b",
+      "--no-extensions",
     ]);
   });
 
   it("inherits the active thinking level for subprocess fallback", async () => {
     const pi = createMockPi();
-    setupWithDirectDeps(pi, { ok: false, appliedCount: 0, fallbackReason: "no_auth" }, {
-      ...defaultConfig,
-      reviewTransport: "direct",
-    });
+    setupWithDirectDeps(
+      pi,
+      { ok: false, appliedCount: 0, fallbackReason: "no_auth" },
+      {
+        ...defaultConfig,
+        reviewTransport: "direct",
+      },
+    );
 
     const messageBranch = makeBranch(4).map((entry, index) => ({
       ...entry,
@@ -1255,16 +1541,26 @@ describe("setupBackgroundReview", () => {
     await reviewSettledSignal.promise;
 
     assert.deepStrictEqual(logicalChildArgs(0).slice(0, 7), [
-      "-p", "--no-session", "--model", "local-llama/local-9b", "--thinking", "high", "--no-extensions",
+      "-p",
+      "--no-session",
+      "--model",
+      "local-llama/local-9b",
+      "--thinking",
+      "high",
+      "--no-extensions",
     ]);
   });
 
   it("inherits the active session model and execution context for subprocess fallback", async () => {
     const pi = createMockPi();
-    setupWithDirectDeps(pi, { ok: false, appliedCount: 0, fallbackReason: "no_auth" }, {
-      ...defaultConfig,
-      reviewTransport: "direct",
-    });
+    setupWithDirectDeps(
+      pi,
+      { ok: false, appliedCount: 0, fallbackReason: "no_auth" },
+      {
+        ...defaultConfig,
+        reviewTransport: "direct",
+      },
+    );
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -1280,7 +1576,11 @@ describe("setupBackgroundReview", () => {
     await reviewSettledSignal.promise;
 
     assert.deepStrictEqual(logicalChildArgs(0).slice(0, 5), [
-      "-p", "--no-session", "--model", "local-llama/local-9b", "--no-extensions",
+      "-p",
+      "--no-session",
+      "--model",
+      "local-llama/local-9b",
+      "--no-extensions",
     ]);
     assert.deepStrictEqual(execCalls[0][2], {
       cwd: "/tmp/local-session",
@@ -1289,16 +1589,24 @@ describe("setupBackgroundReview", () => {
   });
 
   it("surfaces one actionable diagnostic when direct and subprocess review both fail", async () => {
-    const pi = createMockPi({ code: 1, stdout: "", stderr: "No API key for local-llama/local-9b" });
-    setupWithDirectDeps(pi, {
-      ok: false,
-      appliedCount: 0,
-      fallbackReason: "no_auth",
-      error: "No API key for local-llama",
-    }, {
-      ...defaultConfig,
-      reviewTransport: "direct",
+    const pi = createMockPi({
+      code: 1,
+      stdout: "",
+      stderr: "No API key for local-llama/local-9b",
     });
+    setupWithDirectDeps(
+      pi,
+      {
+        ok: false,
+        appliedCount: 0,
+        fallbackReason: "no_auth",
+        error: "No API key for local-llama",
+      },
+      {
+        ...defaultConfig,
+        reviewTransport: "direct",
+      },
+    );
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -1318,7 +1626,6 @@ describe("setupBackgroundReview", () => {
     assert.match(failures[0].msg, /llmModelOverride/i);
   });
 
-
   it("falls back to subprocess when direct review throws", async () => {
     const pi = createMockPi();
     setup(pi, { ...defaultConfig, reviewTransport: "direct" } as MemoryConfig, {
@@ -1337,16 +1644,28 @@ describe("setupBackgroundReview", () => {
     }
     await reviewSettledSignal.promise;
 
-    assert.strictEqual(directCalls.length, 1, "direct review should be attempted first");
-    assert.strictEqual(execCalls.length, 1, "subprocess should run as fallback when direct review throws");
+    assert.strictEqual(
+      directCalls.length,
+      1,
+      "direct review should be attempted first",
+    );
+    assert.strictEqual(
+      execCalls.length,
+      1,
+      "subprocess should run as fallback when direct review throws",
+    );
   });
 
   it("does not notify when direct review returns no operations", async () => {
     const pi = createMockPi();
-    setupWithDirectDeps(pi, { ok: true, appliedCount: 0, fallbackReason: "empty" }, {
-      ...defaultConfig,
-      reviewTransport: "direct",
-    });
+    setupWithDirectDeps(
+      pi,
+      { ok: true, appliedCount: 0, fallbackReason: "empty" },
+      {
+        ...defaultConfig,
+        reviewTransport: "direct",
+      },
+    );
 
     fireMessageEnd("user");
     fireMessageEnd("user");
@@ -1357,9 +1676,19 @@ describe("setupBackgroundReview", () => {
     }
     await reviewSettledSignal.promise;
 
-    const reviewNotify = notifyCalls.find((n) => n.msg.includes("Memory auto-reviewed"));
-    assert.strictEqual(reviewNotify, undefined, "empty direct review should not notify");
-    assert.strictEqual(execCalls.length, 0, "empty direct review should not fall back");
+    const reviewNotify = notifyCalls.find((n) =>
+      n.msg.includes("Memory auto-reviewed"),
+    );
+    assert.strictEqual(
+      reviewNotify,
+      undefined,
+      "empty direct review should not notify",
+    );
+    assert.strictEqual(
+      execCalls.length,
+      0,
+      "empty direct review should not fall back",
+    );
   });
 
   it("includes explicit target routing for an available project store", () => {
@@ -1418,7 +1747,11 @@ describe("setupBackgroundReview", () => {
 
     // getBranch throws — should not crash
     const crashCtx = {
-      sessionManager: { getBranch: () => { throw new Error("session expired"); } },
+      sessionManager: {
+        getBranch: () => {
+          throw new Error("session expired");
+        },
+      },
       signal: undefined as any,
       ui: { notify: () => {} },
     };

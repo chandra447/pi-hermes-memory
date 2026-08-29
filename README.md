@@ -53,7 +53,7 @@ No manual action is needed. Launch Pi once after upgrade to let migration/normal
 ## Features
 
 | Feature | What happens |
-|---|---|
+| --- | --- |
 | 🔍 **Session Search** | Search across all past conversations via SQLite FTS5 |
 | 🧠 **Persistent Memory** | Facts, preferences, lessons saved to markdown files |
 | 🔄 **Memory Search Sync** | Successful Markdown memory writes are mirrored into SQLite for `memory_search` |
@@ -79,7 +79,7 @@ No manual action is needed. Launch Pi once after upgrade to let migration/normal
 The extension manages three types of knowledge:
 
 | Type | What | Storage | Token cost |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Memory** (MEMORY.md) | Facts — env details, project conventions, tool quirks | 5,000 chars max | Searchable by default |
 | **User Profile** (USER.md) | Who you are — name, preferences, communication style | 5,000 chars max | Searchable by default |
 | **Skills** (Pi-native `SKILL.md`) | Procedures — *how* to do something, reusable across sessions | Unlimited | Discoverable by Pi + manageable via the `skill_manage` tool |
@@ -144,7 +144,7 @@ Or install Pi with npm so the host runtime and extension install share one Node 
 The extension stores memory at two levels:
 
 | Tier | Location | What goes here | Available when |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Global** | `~/.pi/agent/pi-hermes-memory/` | Facts that apply everywhere — your name, preferences, OS, tools | Searchable via `memory_search` |
 | **Project** | `~/.pi/agent/projects-memory/<project>/` | Facts scoped to one codebase — architecture decisions, API quirks, team norms | Searchable when cwd matches the project |
 
@@ -179,7 +179,7 @@ Standing instructions are the answer to that: a small, user-authored file that i
 They land in a `<standing-instructions>` block placed after the memory policy, so they read as a direct user directive rather than as recalled context.
 
 | Property | Behavior |
-|---|---|
+| --- | --- |
 | **Provenance** | Stored in `~/.pi/agent/pi-hermes-memory/STANDING.md`. Background review, consolidation, and the correction detector never write there — only your editor or `/memory-pin` can. The agent cannot promote its own memory into this block. |
 | **Budget** | Hard cap of 20 entries / 2,000 characters, separate from `memoryCharLimit` and `userCharLimit`. `/memory-pin` refuses a write past the cap; a hand-edited file over the cap is truncated at injection and the omission is stated loudly inside the block. |
 | **Safety** | Every pin goes through the same `scanContent()` injection/exfiltration scan as any memory write, and the block is fenced. |
@@ -196,7 +196,7 @@ The agent learns from failures, corrections, and insights — just like humans d
 ### Memory Categories
 
 | Category | What it stores | Example |
-|---|---|---|
+| --- | --- | --- |
 | `failure` | What didn't work and why | "Tried localStorage for tokens — XSS vulnerability" |
 | `correction` | User corrections | "Use pnpm, not npm" |
 | `insight` | Learnings from experience | "Auth0 SDK handles refresh tokens automatically" |
@@ -234,7 +234,7 @@ Once installed, the extension works automatically for durable memory. Skills are
 The agent gets action-specific memory tools it can call proactively:
 
 | Tool | Required fields | What it does |
-|---|---|---|
+| --- | --- | --- |
 | `memory_add` | `target`, `content` | Append a new durable entry |
 | `memory_replace` | `target`, `old_text`, `content` | Update an existing entry matched by substring |
 | `memory_remove` | `target`, `old_text` | Delete an existing entry matched by substring |
@@ -246,7 +246,7 @@ Targets are `memory`, `user`, `project`, and `failure`. Failure writes may also 
 The agent also gets a `skill_manage` tool for saving reusable procedures. The explicit name is intentional: it manages saved procedures and avoids being mistaken for generic skill discovery.
 
 | Action | What it does |
-|---|---|
+| --- | --- |
 | `create` | Save a new skill (name, description, step-by-step body, required `scope`) |
 | `view` | Read a skill's full content by `skill_id`, or list all skills if no id is given |
 | `patch` | Update one section of an existing skill by `skill_id` |
@@ -319,7 +319,7 @@ This lets Pi discover project skills as native skills without copying them into 
 ### Memory vs User Profile vs Skills
 
 | Store | File | What goes here | Limit |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **memory** | `MEMORY.md` | Agent's notes — env facts, project conventions, tool quirks, lessons learned | 5,000 chars |
 | **user** | `USER.md` | User profile — name, preferences, communication style, habits | 5,000 chars |
 | **skills** | `~/.pi/agent/pi-hermes-memory/skills/<slug>/SKILL.md` or `projects-memory/<project>/skills/<slug>/SKILL.md` | Procedures — *how* to debug, deploy, test, or fix something | Unlimited |
@@ -336,6 +336,7 @@ By default, the extension indexes your Pi session history into a SQLite database
 | `memory_search` | Search extended memory store — unlimited capacity, keyword-based |
 
 Search behavior notes:
+
 - Multi-word natural-language queries are supported for both `memory_search` and `session_search`.
 - Exact phrases can be requested with quotes, for example `"memory search"`.
 - Advanced FTS queries with operators like `OR` still work when you need them.
@@ -354,11 +355,13 @@ For users who prefer source anchors over snippets, `sessionSearch.variant` can b
 The extension keeps Markdown memory as the human-readable source of truth, and mirrors successful writes into the SQLite-backed search store used by `memory_search`.
 
 This means:
+
 - Fresh `memory_add`, `memory_replace`, and `memory_remove` writes become searchable immediately
 - Older Markdown entries can be backfilled with `/memory-sync-markdown`
 - SQLite search does **not** replace the core Markdown limit
 
 This is the **hybrid memory architecture**:
+
 - **Core memory** (MEMORY.md/USER.md/failures.md): Human-readable, size-limited, searchable by default
 - **SQLite memory mirror/store** (`sessions.db`): Searchable on demand via `memory_search`
 
@@ -369,7 +372,7 @@ Important: if core Markdown memory is full and consolidation cannot free space, 
 When you correct the agent, it saves immediately — no waiting for the background review. Examples of corrections the agent detects:
 
 | You say | What happens |
-|---|---|
+| --- | --- |
 | "don't do that" | ✅ Immediate save |
 | "no, use yarn instead" | ✅ Immediate save |
 | "actually, fix the test first" | ✅ Immediate save |
@@ -401,12 +404,12 @@ Both counters reset after each review.
 
 By default, background review, session flush, correction save, and the manual `/memory-consolidate` command use an in-process `completeSimple()` side-channel: no child `pi` process, memory writes applied directly by the extension, and a JSON-only review request. Eligible full-history background reviews (`reviewRecentMessages: 0` with no model or thinking override) reuse the active session's system prompt, branch/compaction context, and thinking level, so providers can reuse the parent prefix cache. A recent-message window or explicit override uses the compact legacy prompt instead.
 
-If direct mode fails (no model, no auth, provider error, unparseable response, or — for consolidation only — a result that didn't actually free any space), it automatically falls back to the legacy `pi -p --no-session` subprocess path. Background-review fallback still formats the SDK-built active branch, including compaction and branch summaries. The automatic over-capacity consolidator triggered from `MemoryStore` itself always uses the subprocess path, since it runs without extension-runtime access.
+If direct mode fails (no model, no auth, provider error, no final content (`no_content`), unparseable response, or — for consolidation only — a result that didn't actually free any space), it automatically falls back to the legacy `pi -p --no-session` subprocess path. An explicit `{"operations":[]}` response is still treated as a deliberate no-op, not a failure. Background-review fallback still formats the SDK-built active branch, including compaction and branch summaries, using an intentional 5000-char limit per message so long summaries are not truncated at the legacy 500-char default. The automatic over-capacity consolidator triggered from `MemoryStore` itself always uses the subprocess path, since it runs without extension-runtime access.
 
 Set `reviewTransport` in config only when you need to override this:
 
 | Value | Behavior |
-|---|---|
+| --- | --- |
 | `direct` (default) | Try in-process `completeSimple()` first; fall back to subprocess on failure |
 | `subprocess` | Always use `pi -p` subprocess for every LLM-driven memory operation (pre-PR #92 behavior) |
 
@@ -421,7 +424,7 @@ This means skills build up naturally over time without you having to ask.
 ### Commands
 
 | Command | What it does |
-|---|---|
+| --- | --- |
 | `/memory-insights` | Shows everything stored in memory and user profile |
 | `/memory-skills` | Opens an interactive skills manager for search, multi-select, move, and delete |
 | `/memory-consolidate` | Manually trigger memory consolidation to free space |
@@ -457,6 +460,7 @@ This means skills build up naturally over time without you having to ask.
 `/memory-skills` now opens an interactive TUI modal for skill management.
 
 Features:
+
 - fuzzy search by skill name
 - single-list view with scope badges (`[G]` global, `[P]` project)
 - multi-select with spacebar
@@ -465,6 +469,7 @@ Features:
 - inline action summaries for partial success/conflicts
 
 Keybindings:
+
 - `↑` / `↓` — move focus
 - `space` — toggle selection
 - `/` — focus search
@@ -477,6 +482,7 @@ Keybindings:
 - `esc` — close the modal
 
 Move behavior:
+
 - moves are **conflict-safe**
 - if the destination already contains the same slug, the conflicting skill stays in place
 - batch moves use partial-success semantics: non-conflicting skills move, blocked skills are reported in the summary
@@ -522,7 +528,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 ```
 
 | Setting | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `memoryMode` | `policy-only` | Prompt behavior: `policy-only` injects only memory policy; `legacy-inject` restores full memory prompt injection |
 | `memoryPolicyStyle` | `full` | Policy text used in `policy-only` mode: `full` preserves the default v0.7 policy; `compact` uses shorter built-in guidance; `custom` uses `memoryPolicyCustomText`; `none` injects no policy text |
 | `memoryPolicyCustomText` | unset | Custom policy text used when `memoryPolicyStyle` is `custom`; blank or missing text falls back to `compact` |
@@ -533,7 +539,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `memoryDir` | `~/.pi/agent/pi-hermes-memory` | Custom directory for extension storage files |
 | `projectsMemoryDir` | `projects-memory` | Subdirectory under `~/.pi/agent/` for project-scoped memory |
 | `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.pi/agent/sessions/` |
-| `llmModelOverride` | unset | Optional model override for background review (direct and subprocess), correction save, session flush, and consolidation |
+| `llmModelOverride` | unset | Optional model override for background review (direct and subprocess), correction save, session flush, and consolidation. If set without `llmThinkingOverride`, every child transport uses the provider's default thinking level (the legacy implicit `thinking: off` was removed). When an override-related failure triggers the no-override retry, that retry drops the configured overrides AND the inherited thinking level. |
 | `llmThinkingOverride` | unset | Optional thinking override for those LLM calls; valid values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. If unset, eligible full-history direct reviews inherit the active session thinking level; forced subprocess reviews use the provider default, while a subprocess fallback can inherit that level from the failed direct review |
 | `childExtensionPaths` | unset | Trusted provider/auth extension sources explicitly allowed in isolated child Pi processes. Values are passed to Pi's standard `-e` resolver, so absolute paths, `~/...`, paths relative to the child working directory, and `git:`/`npm:` package sources are supported. Sibling packages matching the `*-oauth-adapter`/`*-auth-adapter` naming convention (including scoped packages, via their `package.json` `pi.extensions` manifest) are detected automatically. This setting is only needed for custom providers or adapters that are not detected. In-process direct transport (the default for review/flush/correction/consolidation) doesn't need it, since it reads whatever provider auth is already registered. |
 | `nudgeInterval` | `10` | Turns between auto-reviews |
@@ -541,7 +547,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `reviewRecentMessages` | `0` | Recent messages included in background review (`0` = all) |
 | `reviewEnabled` | `true` | Enable/disable background learning loop |
 | `reviewTransport` | `direct` | LLM transport for background review, session flush, correction save, and manual consolidation: `direct` uses in-process `completeSimple()` with subprocess fallback; `subprocess` forces legacy `pi -p` only |
-| `quickCheckOnOpen` | `true` | Run the synchronous full-database SQLite `quick_check` after opening. Set to `false` for large databases to avoid startup/event-loop stalls; operation-time corruption recovery remains enabled |
+| `quickCheckOnOpen` | `true` | Run the synchronous full-database SQLite `quick_check` after opening. Set to `false` for large databases to avoid startup/event-loop stalls. Operation-time corruption recovery is wrapped around the public read boundaries (`memory_search`, `session_search`, and stats reads), so a corrupt page still triggers quarantine, rebuild, and retry; the `/memory-index-sessions` command forwards this option to its own database manager |
 | `memoryOverflowStrategy` | `auto-consolidate` | Behavior when MEMORY.md, USER.md, failures.md, or project-scoped memory reaches its character limit: `auto-consolidate` runs the existing consolidation flow; `reject` returns an error; `fifo-evict` rotates older entries in file order until the new entry fits |
 | `autoConsolidate` | `true` | Legacy alias for `memoryOverflowStrategy` when `memoryOverflowStrategy` is not set (`true` = `auto-consolidate`, `false` = `reject`) |
 | `consolidationTimeoutMs` | `180000` | Maximum time in milliseconds for a consolidation run (auto and `/memory-consolidate` alike). Configured values are used verbatim; a consolidation pays child-process boot plus a full LLM turn, so values below the default are frequently killed mid-run and log a warning at startup |
@@ -611,6 +617,7 @@ If you are upgrading from a version that stored project memory directly at `~/.p
 The `sessions.db` SQLite database stores session history and extended memory entries. It's searchable via FTS5 full-text search.
 
 ## Known Limitations
+
 - **CJK search length**: The trigram tokenizer supports CJK substring search for terms of three or more characters. One- and two-character `memory_search` terms may need a longer phrase or an English/ASCII token.
 
 - **`§` delimiter**: Memory entries are separated by `§` (section sign). If an entry naturally contains `§`, it will be split incorrectly on reload. This is rare in English text but possible. [Hermes uses the same delimiter.]

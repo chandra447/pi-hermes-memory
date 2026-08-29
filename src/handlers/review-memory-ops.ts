@@ -3,11 +3,20 @@
  */
 
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { completeSimple, type Message, type SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
+import {
+  completeSimple,
+  type Message,
+  type SimpleStreamOptions,
+} from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { MemoryStore } from "../store/memory-store.js";
+import type { MemoryStore } from "../store/memory-store.js";
 import type { DatabaseManager } from "../store/db.js";
-import type { MemoryCategory, MemoryConfig, MemoryResult, ThinkingLevel } from "../types.js";
+import type {
+  MemoryCategory,
+  MemoryConfig,
+  MemoryResult,
+  ThinkingLevel,
+} from "../types.js";
 
 export interface ReviewMemoryOperation {
   action: "add" | "replace" | "remove";
@@ -27,7 +36,13 @@ export interface ApplyReviewOperationsResult {
 export interface DirectReviewResult {
   ok: boolean;
   appliedCount: number;
-  fallbackReason?: "no_model" | "no_auth" | "aborted" | "parse_error" | "provider_error" | "empty";
+  fallbackReason?:
+    | "no_model"
+    | "no_auth"
+    | "aborted"
+    | "parse_error"
+    | "provider_error"
+    | "no_content";
   error?: string;
 }
 
@@ -55,19 +70,28 @@ export interface RunDirectMemoryCompletionOptions {
 /** Shared transport gate: review/flush/consolidation/correction all default to
  * the in-process direct completion path and fall back to a `pi -p` subprocess
  * only on failure, unless the user forces `reviewTransport: "subprocess"`. */
-export function usesDirectTransport(config: Pick<MemoryConfig, "reviewTransport">): boolean {
+export function usesDirectTransport(
+  config: Pick<MemoryConfig, "reviewTransport">,
+): boolean {
   return (config.reviewTransport ?? "direct") === "direct";
 }
 
-type ReviewLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride">;
+type ReviewLlmConfig = Pick<
+  MemoryConfig,
+  "llmModelOverride" | "llmThinkingOverride"
+>;
 
-function findExactModelReferenceMatch(modelReference: string, availableModels: Model<Api>[]): Model<Api> | undefined {
+function findExactModelReferenceMatch(
+  modelReference: string,
+  availableModels: Model<Api>[],
+): Model<Api> | undefined {
   const trimmedReference = modelReference.trim();
   if (!trimmedReference) return undefined;
 
   const normalizedReference = trimmedReference.toLowerCase();
   const canonicalMatches = availableModels.filter(
-    (model) => `${model.provider}/${model.id}`.toLowerCase() === normalizedReference,
+    (model) =>
+      `${model.provider}/${model.id}`.toLowerCase() === normalizedReference,
   );
   if (canonicalMatches.length === 1) return canonicalMatches[0];
   if (canonicalMatches.length > 1) return undefined;
@@ -78,14 +102,17 @@ function findExactModelReferenceMatch(modelReference: string, availableModels: M
     const modelId = trimmedReference.substring(slashIndex + 1).trim();
     if (provider && modelId) {
       const providerMatches = availableModels.filter(
-        (model) => model.provider.toLowerCase() === provider.toLowerCase()
-          && model.id.toLowerCase() === modelId.toLowerCase(),
+        (model) =>
+          model.provider.toLowerCase() === provider.toLowerCase() &&
+          model.id.toLowerCase() === modelId.toLowerCase(),
       );
       if (providerMatches.length === 1) return providerMatches[0];
     }
   }
 
-  const idMatches = availableModels.filter((model) => model.id.toLowerCase() === normalizedReference);
+  const idMatches = availableModels.filter(
+    (model) => model.id.toLowerCase() === normalizedReference,
+  );
   return idMatches.length === 1 ? idMatches[0] : undefined;
 }
 
@@ -132,7 +159,10 @@ export function resolveReviewModel(
 ): Model<Api> | undefined {
   const override = normalizedModelOverride(config);
   if (override) {
-    const matched = findExactModelReferenceMatch(override, modelRegistry.getAll());
+    const matched = findExactModelReferenceMatch(
+      override,
+      modelRegistry.getAll(),
+    );
     if (matched) return matched;
   }
   return ctxModel;
@@ -142,15 +172,18 @@ export function resolveReviewModel(
  * Provider responses that mean "this key is no longer good", as opposed to a
  * transport hiccup or a model error worth falling back to a subprocess for.
  */
-const AUTH_REJECTION_PATTERN = new RegExp([
-  String.raw`\b(401|403)\b`,
-  "unauthorized",
-  "forbidden",
-  String.raw`invalid[\s_-]*api[\s_-]*key`,
-  String.raw`authentication[\s_-]*(failed|error)`,
-  String.raw`(invalid|expired|revoked)[\s_-]*(access[\s_-]*)?(token|key|credential)`,
-  String.raw`(token|key|credential)[\s_-]*(is[\s_-]*|has[\s_-]*been[\s_-]*)?(invalid|expired|revoked)`,
-].join("|"), "i");
+const AUTH_REJECTION_PATTERN = new RegExp(
+  [
+    String.raw`\b(401|403)\b`,
+    "unauthorized",
+    "forbidden",
+    String.raw`invalid[\s_-]*api[\s_-]*key`,
+    String.raw`authentication[\s_-]*(failed|error)`,
+    String.raw`(invalid|expired|revoked)[\s_-]*(access[\s_-]*)?(token|key|credential)`,
+    String.raw`(token|key|credential)[\s_-]*(is[\s_-]*|has[\s_-]*been[\s_-]*)?(invalid|expired|revoked)`,
+  ].join("|"),
+  "i",
+);
 
 export function isAuthRejection(message: string): boolean {
   return AUTH_REJECTION_PATTERN.test(message);
@@ -163,7 +196,12 @@ export function isAuthRejection(message: string): boolean {
  * shape against the real registry at the call below, so drift is a build error.
  */
 export type ResolvedRequestAuth =
-  | { ok: true; apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }
+  | {
+      ok: true;
+      apiKey?: string;
+      headers?: Record<string, string>;
+      env?: Record<string, string>;
+    }
   | { ok: false; error: string };
 
 /**
@@ -178,7 +216,7 @@ export async function resolveRequestAuth(
   return modelRegistry.getApiKeyAndHeaders(model);
 }
 
-function extractJsonPayload(text: string): unknown {
+function extractJsonPayload(text: string): object | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
 
@@ -211,23 +249,36 @@ function extractJsonPayload(text: string): unknown {
 }
 
 function isMemoryCategory(value: unknown): value is MemoryCategory {
-  return value === "failure"
-    || value === "correction"
-    || value === "insight"
-    || value === "preference"
-    || value === "convention"
-    || value === "tool-quirk";
+  return (
+    value === "failure" ||
+    value === "correction" ||
+    value === "insight" ||
+    value === "preference" ||
+    value === "convention" ||
+    value === "tool-quirk"
+  );
 }
 
-function isReviewTarget(value: unknown): value is ReviewMemoryOperation["target"] {
-  return value === "memory" || value === "user" || value === "project" || value === "failure";
+function isReviewTarget(
+  value: unknown,
+): value is ReviewMemoryOperation["target"] {
+  return (
+    value === "memory" ||
+    value === "user" ||
+    value === "project" ||
+    value === "failure"
+  );
 }
 
-function isReviewAction(value: unknown): value is ReviewMemoryOperation["action"] {
+function isReviewAction(
+  value: unknown,
+): value is ReviewMemoryOperation["action"] {
   return value === "add" || value === "replace" || value === "remove";
 }
 
-export function parseReviewOperations(text: string): ReviewMemoryOperation[] | null {
+export function parseReviewOperations(
+  text: string,
+): ReviewMemoryOperation[] | null {
   if (/nothing to save/i.test(text) && !text.includes("{")) {
     return [];
   }
@@ -253,7 +304,8 @@ export function parseReviewOperations(text: string): ReviewMemoryOperation[] | n
     if (typeof op.content === "string") operation.content = op.content;
     if (typeof op.old_text === "string") operation.old_text = op.old_text;
     if (isMemoryCategory(op.category)) operation.category = op.category;
-    if (typeof op.failure_reason === "string") operation.failure_reason = op.failure_reason;
+    if (typeof op.failure_reason === "string")
+      operation.failure_reason = op.failure_reason;
     parsed.push(operation);
   }
 
@@ -281,7 +333,10 @@ export async function applyReviewOperations(
     }
 
     const target = operations[0]?.target;
-    if (!target || operations.some((operation) => operation.target !== target)) {
+    if (
+      !target ||
+      operations.some((operation) => operation.target !== target)
+    ) {
       return {
         appliedCount: 0,
         skippedCount: operations.length,
@@ -309,11 +364,18 @@ export async function applyReviewOperations(
       action: operation.action,
       content: operation.content,
       oldText: operation.old_text,
-      category: target === "failure" ? operation.category ?? "failure" : operation.category,
+      category:
+        target === "failure"
+          ? (operation.category ?? "failure")
+          : operation.category,
       failureReason: operation.failure_reason,
-      project: target === "failure" ? projectName ?? undefined : undefined,
+      project: target === "failure" ? (projectName ?? undefined) : undefined,
     }));
-    const result = await activeStore.applyMutationPlan(memoryTarget, mutationOperations, { requireShrink: true });
+    const result = await activeStore.applyMutationPlan(
+      memoryTarget,
+      mutationOperations,
+      { requireShrink: true },
+    );
     return result.success
       ? { appliedCount: operations.length, skippedCount: 0 }
       : {
@@ -333,7 +395,12 @@ export async function applyReviewOperations(
     }
 
     const rawTarget = op.target;
-    const memoryTarget = rawTarget === "project" ? "memory" : rawTarget === "failure" ? "failure" : rawTarget;
+    const memoryTarget =
+      rawTarget === "project"
+        ? "memory"
+        : rawTarget === "failure"
+          ? "failure"
+          : rawTarget;
     const activeStore = rawTarget === "project" ? projectStore! : store;
 
     let result: MemoryResult;
@@ -370,7 +437,11 @@ export async function applyReviewOperations(
           skippedCount++;
           continue;
         }
-        result = await activeStore.replace(memoryTarget, op.old_text, op.content);
+        result = await activeStore.replace(
+          memoryTarget,
+          op.old_text,
+          op.content,
+        );
         if (result.success) {
           appliedCount++;
         } else {
@@ -395,7 +466,6 @@ export async function applyReviewOperations(
         skippedCount++;
         continue;
     }
-
   }
 
   return { appliedCount, skippedCount };
@@ -404,19 +474,14 @@ export async function applyReviewOperations(
 function responseText(content: unknown): string {
   if (!Array.isArray(content)) return "";
 
-  const text = content
-    .filter((block): block is { type: "text"; text: string } => (
-      !!block && typeof block === "object" && (block as { type?: string }).type === "text"
-    ))
-    .map((block) => block.text)
-    .join("\n");
-  if (text.trim()) return text;
-
   return content
-    .filter((block): block is { type: "thinking"; thinking: string } => (
-      !!block && typeof block === "object" && (block as { type?: string }).type === "thinking"
-    ))
-    .map((block) => block.thinking)
+    .filter(
+      (block): block is { type: "text"; text: string } =>
+        !!block &&
+        typeof block === "object" &&
+        (block as { type?: string }).type === "text",
+    )
+    .map((block) => block.text)
     .join("\n");
 }
 
@@ -430,7 +495,11 @@ export async function runDirectMemoryCompletion(
   deps: { completeSimple?: typeof completeSimple } = {},
 ): Promise<DirectReviewResult> {
   const complete = deps.completeSimple ?? completeSimple;
-  const model = resolveReviewModel(ctx.model, ctx.modelRegistry, options.config);
+  const model = resolveReviewModel(
+    ctx.model,
+    ctx.modelRegistry,
+    options.config,
+  );
   if (!model) {
     return { ok: false, appliedCount: 0, fallbackReason: "no_model" };
   }
@@ -444,13 +513,19 @@ export async function runDirectMemoryCompletion(
       error: auth.ok ? `No API key for ${model.provider}` : auth.error,
     };
   }
-  let requestAuth = { apiKey: auth.apiKey, headers: auth.headers, env: auth.env };
+  let requestAuth = {
+    apiKey: auth.apiKey,
+    headers: auth.headers,
+    env: auth.env,
+  };
 
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? 120000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   if (options.signal) {
-    options.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    options.signal.addEventListener("abort", () => controller.abort(), {
+      once: true,
+    });
   }
 
   const thinking = effectiveThinkingOverride(options.config, options.context);
@@ -471,7 +546,12 @@ export async function runDirectMemoryCompletion(
       response = await complete(
         model,
         request,
-        buildDirectReviewCompletionOptions(model, requestAuth, thinking, controller.signal),
+        buildDirectReviewCompletionOptions(
+          model,
+          requestAuth,
+          thinking,
+          controller.signal,
+        ),
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -482,13 +562,27 @@ export async function runDirectMemoryCompletion(
       // key; otherwise this is a real auth problem and the subprocess
       // fallback should handle it (#139).
       const rotated = await resolveRequestAuth(ctx.modelRegistry, model);
-      if (!rotated.ok || !rotated.apiKey || rotated.apiKey === requestAuth.apiKey) throw err;
+      if (
+        !rotated.ok ||
+        !rotated.apiKey ||
+        rotated.apiKey === requestAuth.apiKey
+      )
+        throw err;
 
-      requestAuth = { apiKey: rotated.apiKey, headers: rotated.headers, env: rotated.env };
+      requestAuth = {
+        apiKey: rotated.apiKey,
+        headers: rotated.headers,
+        env: rotated.env,
+      };
       response = await complete(
         model,
         request,
-        buildDirectReviewCompletionOptions(model, requestAuth, thinking, controller.signal),
+        buildDirectReviewCompletionOptions(
+          model,
+          requestAuth,
+          thinking,
+          controller.signal,
+        ),
       );
     }
 
@@ -498,14 +592,16 @@ export async function runDirectMemoryCompletion(
 
     const text = responseText(response.content);
     if (!text.trim()) {
-      return { ok: true, appliedCount: 0, fallbackReason: "empty" };
+      // Missing final content is a failure that the subprocess fallback can
+      // retry; an explicit {"operations":[]} below stays a deliberate no-op.
+      return { ok: false, appliedCount: 0, fallbackReason: "no_content" };
     }
     const operations = parseReviewOperations(text);
     if (operations === null) {
       return { ok: false, appliedCount: 0, fallbackReason: "parse_error" };
     }
     if (operations.length === 0) {
-      return { ok: true, appliedCount: 0, fallbackReason: "empty" };
+      return { ok: true, appliedCount: 0 };
     }
 
     const applied = await applyReviewOperations(

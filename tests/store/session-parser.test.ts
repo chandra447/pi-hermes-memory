@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { parseSessionFile, getSessionFiles, decodeProjectDir } from '../../src/store/session-parser.js';
+import { parseSessionFile, getSessionFiles } from '../../src/store/session-parser.js';
 
 describe('session-parser', () => {
   let tmpDir: string;
@@ -270,13 +270,4 @@ describe('session-parser', () => {
     });
   });
 
-  describe('decodeProjectDir', () => {
-    it('should decode project name from directory format', () => {
-      assert.strictEqual(decodeProjectDir('--Users-chandrateja-Documents-pi-hermes-memory--'), 'memory');
-    });
-
-    it('should handle simple directory names', () => {
-      assert.strictEqual(decodeProjectDir('my-project'), 'project');
-    });
-  });
 });

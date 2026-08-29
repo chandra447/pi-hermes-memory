@@ -13,7 +13,10 @@ import {
   runDirectMemoryCompletion,
 } from "../../src/handlers/review-memory-ops.js";
 import { DatabaseManager } from "../../src/store/db.js";
-import { getMemories, reconcileMarkdownMemoryScope } from "../../src/store/sqlite-memory-store.js";
+import {
+  getMemories,
+  reconcileMarkdownMemoryScope,
+} from "../../src/store/sqlite-memory-store.js";
 
 function mockModel(reasoning: boolean): Model<Api> {
   return {
@@ -40,7 +43,9 @@ describe("buildDirectReviewCompletionOptions", () => {
 
     assert.strictEqual(options.apiKey, "sk-test");
     assert.deepStrictEqual(options.headers, { "X-Test": "1" });
-    assert.deepStrictEqual(options.env, { CUSTOM_BASE_URL: "https://proxy.example" });
+    assert.deepStrictEqual(options.env, {
+      CUSTOM_BASE_URL: "https://proxy.example",
+    });
     assert.strictEqual(options.reasoning, "minimal");
     assert.strictEqual(options.signal, signal);
   });
@@ -76,12 +81,23 @@ describe("provider auth resolution", () => {
       getAll: () => [mockModel(false)],
       getAvailable: () => [mockModel(false)],
     };
-    return { get authCalls() { return authCalls; }, modelRegistry };
+    return {
+      get authCalls() {
+        return authCalls;
+      },
+      modelRegistry,
+    };
   }
 
-  function completionStub(behaviour: (apiKey: string | undefined, attempt: number) => unknown) {
+  function completionStub(
+    behaviour: (apiKey: string | undefined, attempt: number) => unknown,
+  ) {
     const usedKeys: Array<string | undefined> = [];
-    const complete = async (_model: unknown, _request: unknown, options: { apiKey?: string }) => {
+    const complete = async (
+      _model: unknown,
+      _request: unknown,
+      options: { apiKey?: string },
+    ) => {
       usedKeys.push(options.apiKey);
       const outcome = behaviour(options.apiKey, usedKeys.length);
       if (outcome instanceof Error) throw outcome;
@@ -104,7 +120,10 @@ describe("provider auth resolution", () => {
     const { usedKeys, complete } = completionStub(() => emptyOperations);
 
     const result = await runDirectMemoryCompletion(
-      { model: mockModel(false), modelRegistry: registry.modelRegistry } as never,
+      {
+        model: mockModel(false),
+        modelRegistry: registry.modelRegistry,
+      } as never,
       null as never,
       null,
       directOptions(),
@@ -119,7 +138,10 @@ describe("provider auth resolution", () => {
   });
 
   it("re-resolves credentials after a provider auth rejection", async () => {
-    const { modelRegistry } = registryWithAuthResponses("revoked-key", "rotated-key");
+    const { modelRegistry } = registryWithAuthResponses(
+      "revoked-key",
+      "rotated-key",
+    );
     const { usedKeys, complete } = completionStub((_key, attempt) => {
       if (attempt > 1) return emptyOperations;
       return new Error("HTTP 401 Unauthorized: invalid api key");
@@ -141,7 +163,9 @@ describe("provider auth resolution", () => {
 
   it("does not retry when the refreshed key is the same one the provider rejected", async () => {
     const { modelRegistry } = registryWithAuthResponses("only-key");
-    const { usedKeys, complete } = completionStub(() => new Error("HTTP 401 Unauthorized"));
+    const { usedKeys, complete } = completionStub(
+      () => new Error("HTTP 401 Unauthorized"),
+    );
 
     const result = await runDirectMemoryCompletion(
       { model: mockModel(false), modelRegistry } as never,
@@ -155,7 +179,11 @@ describe("provider auth resolution", () => {
 
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.fallbackReason, "provider_error");
-    assert.strictEqual(usedKeys.length, 1, "an unchanged key means a real auth problem, not a rotation race");
+    assert.strictEqual(
+      usedKeys.length,
+      1,
+      "an unchanged key means a real auth problem, not a rotation race",
+    );
   });
 
   it("classifies provider auth rejections without swallowing other failures", () => {
@@ -206,14 +234,17 @@ describe("direct completion output", () => {
     return {
       model: mockModel(true),
       modelRegistry: {
-        getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test-key" }),
+        getApiKeyAndHeaders: async () => ({
+          ok: true as const,
+          apiKey: "test-key",
+        }),
         getAll: () => [mockModel(true)],
         getAvailable: () => [mockModel(true)],
       },
     } as never;
   }
 
-  it("falls back to thinking blocks when content text is empty", async () => {
+  it("treats a thinking-only response as missing final content", async () => {
     const store = makeStore();
     await store.loadFromDisk();
 
@@ -221,7 +252,11 @@ describe("direct completion output", () => {
       makeContext(),
       store,
       null,
-      { userPrompt: "review", systemPrompt: "return JSON", config: { llmThinkingOverride: "low" } },
+      {
+        userPrompt: "review",
+        systemPrompt: "return JSON",
+        config: { llmThinkingOverride: "low" },
+      },
       null,
       null,
       {
@@ -229,16 +264,29 @@ describe("direct completion output", () => {
           stopReason: "stop",
           content: [
             { type: "text", text: "" },
-            { type: "thinking", thinking: JSON.stringify({
-              operations: [{ action: "add", target: "memory", content: "thinking output" }],
-            }) },
+            {
+              type: "thinking",
+              thinking: JSON.stringify({
+                operations: [
+                  {
+                    action: "add",
+                    target: "memory",
+                    content: "thinking output",
+                  },
+                ],
+              }),
+            },
           ],
         })) as never,
       },
     );
 
-    assert.deepStrictEqual(result, { ok: true, appliedCount: 1 });
-    assert.ok(store.getMemoryEntries().some((entry) => entry.includes("thinking output")));
+    assert.deepStrictEqual(result, {
+      ok: false,
+      appliedCount: 0,
+      fallbackReason: "no_content",
+    });
+    assert.deepStrictEqual(store.getMemoryEntries(), []);
   });
 
   it("does not force thinking off for a model override", async () => {
@@ -258,14 +306,21 @@ describe("direct completion output", () => {
       null,
       null,
       {
-        completeSimple: (async (_model: unknown, _request: unknown, options: unknown) => {
+        completeSimple: (async (
+          _model: unknown,
+          _request: unknown,
+          options: unknown,
+        ) => {
           completionOptions = options;
-          return { stopReason: "stop", content: [{ type: "text", text: '{"operations":[]}' }] };
+          return {
+            stopReason: "stop",
+            content: [{ type: "text", text: '{"operations":[]}' }],
+          };
         }) as never,
       },
     );
 
-    assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty" });
+    assert.deepStrictEqual(result, { ok: true, appliedCount: 0 });
     assert.strictEqual(completionOptions.reasoning, undefined);
   });
 
@@ -285,7 +340,11 @@ describe("direct completion output", () => {
         context: {
           systemPrompt: "parent system",
           messages: [
-            { role: "user", content: [{ type: "text", text: "parent user" }], timestamp: 1 },
+            {
+              role: "user",
+              content: [{ type: "text", text: "parent user" }],
+              timestamp: 1,
+            },
             {
               role: "assistant",
               content: [{ type: "text", text: "parent assistant" }],
@@ -304,15 +363,22 @@ describe("direct completion output", () => {
       null,
       null,
       {
-        completeSimple: (async (_model: unknown, receivedRequest: unknown, options: unknown) => {
+        completeSimple: (async (
+          _model: unknown,
+          receivedRequest: unknown,
+          options: unknown,
+        ) => {
           request = receivedRequest;
           completionOptions = options;
-          return { stopReason: "stop", content: [{ type: "text", text: '{"operations":[]}' }] };
+          return {
+            stopReason: "stop",
+            content: [{ type: "text", text: '{"operations":[]}' }],
+          };
         }) as never,
       },
     );
 
-    assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty" });
+    assert.deepStrictEqual(result, { ok: true, appliedCount: 0 });
     assert.strictEqual(request.systemPrompt, "parent system");
     assert.deepStrictEqual(
       request.messages.map((message: any) => message.content?.[0]?.text),
@@ -321,7 +387,7 @@ describe("direct completion output", () => {
     assert.strictEqual(completionOptions.reasoning, "high");
   });
 
-  it("classifies a response with no text or thinking as empty", async () => {
+  it("classifies a response with no final text as no_content", async () => {
     const store = makeStore();
     await store.loadFromDisk();
 
@@ -333,21 +399,28 @@ describe("direct completion output", () => {
       null,
       null,
       {
-        completeSimple: (async () => ({ stopReason: "stop", content: [] })) as never,
+        completeSimple: (async () => ({
+          stopReason: "stop",
+          content: [],
+        })) as never,
       },
     );
 
-    assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty" });
+    assert.deepStrictEqual(result, {
+      ok: false,
+      appliedCount: 0,
+      fallbackReason: "no_content",
+    });
   });
 });
 
 describe("parseReviewOperations", () => {
   it("parses valid JSON operations", () => {
-    const parsed = parseReviewOperations(JSON.stringify({
-      operations: [
-        { action: "add", target: "memory", content: "uses pnpm" },
-      ],
-    }));
+    const parsed = parseReviewOperations(
+      JSON.stringify({
+        operations: [{ action: "add", target: "memory", content: "uses pnpm" }],
+      }),
+    );
 
     assert.deepStrictEqual(parsed, [
       { action: "add", target: "memory", content: "uses pnpm" },
@@ -363,7 +436,9 @@ describe("parseReviewOperations", () => {
   });
 
   it("extracts JSON from fenced blocks", () => {
-    const parsed = parseReviewOperations("```json\n{\"operations\":[{\"action\":\"add\",\"target\":\"user\",\"content\":\"prefers dark mode\"}]}\n```");
+    const parsed = parseReviewOperations(
+      '```json\n{"operations":[{"action":"add","target":"user","content":"prefers dark mode"}]}\n```',
+    );
     assert.deepStrictEqual(parsed, [
       { action: "add", target: "user", content: "prefers dark mode" },
     ]);
@@ -396,7 +471,11 @@ describe("applyReviewOperations", () => {
 
     assert.strictEqual(result.appliedCount, 1);
     assert.strictEqual(result.skippedCount, 0);
-    assert.ok(store.getMemoryEntries().some((entry) => entry.includes("prefers biome over eslint")));
+    assert.ok(
+      store
+        .getMemoryEntries()
+        .some((entry) => entry.includes("prefers biome over eslint")),
+    );
   });
 
   it("skips project operations when project store is unavailable", async () => {
@@ -456,13 +535,23 @@ describe("applyReviewOperations", () => {
       autoConsolidate: true,
     });
     await store.loadFromDisk();
-    await store.add("user", "Name: Cataldo\nOS: Arch Linux\nPreference: concise replies");
+    await store.add(
+      "user",
+      "Name: Cataldo\nOS: Arch Linux\nPreference: concise replies",
+    );
     const beforeDisk = await fs.readFile(path.join(tmpDir, "USER.md"), "utf8");
 
     const result = await applyReviewOperations(
       store,
       null,
-      [{ action: "replace", target: "user", old_text: "Name: Cataldo", content: "Name: Aldo" }],
+      [
+        {
+          action: "replace",
+          target: "user",
+          old_text: "Name: Cataldo",
+          content: "Name: Aldo",
+        },
+      ],
       null,
       null,
       { requireAtomicShrink: true, expectedTarget: "user" },
@@ -473,7 +562,10 @@ describe("applyReviewOperations", () => {
       { appliedCount: 0, skippedCount: 1 },
     );
     assert.match(result.error ?? "", /Refusing replace/);
-    assert.strictEqual(await fs.readFile(path.join(tmpDir, "USER.md"), "utf8"), beforeDisk);
+    assert.strictEqual(
+      await fs.readFile(path.join(tmpDir, "USER.md"), "utf8"),
+      beforeDisk,
+    );
   });
 
   it("rejects mixed and unexpected atomic targets before mutation", async () => {
@@ -512,13 +604,17 @@ describe("applyReviewOperations", () => {
     );
     assert.match(mixed.error ?? "", /exactly one target/);
     assert.deepStrictEqual(
-      { appliedCount: unexpected.appliedCount, skippedCount: unexpected.skippedCount },
+      {
+        appliedCount: unexpected.appliedCount,
+        skippedCount: unexpected.skippedCount,
+      },
       { appliedCount: 0, skippedCount: 1 },
     );
     assert.match(unexpected.error ?? "", /targeted 'memory', expected 'user'/);
-    assert.deepStrictEqual(store.getMemoryEntries().map((entry) => entry.replace(/\s*<!--.*$/, "")), [
-      "global source entry",
-    ]);
+    assert.deepStrictEqual(
+      store.getMemoryEntries().map((entry) => entry.replace(/\s*<!--.*$/, "")),
+      ["global source entry"],
+    );
   });
 
   it("rejects an empty atomic plan and an unavailable atomic project store", async () => {
@@ -553,7 +649,10 @@ describe("applyReviewOperations", () => {
     );
     assert.match(empty.error ?? "", /requires at least one operation/i);
     assert.deepStrictEqual(
-      { appliedCount: unavailable.appliedCount, skippedCount: unavailable.skippedCount },
+      {
+        appliedCount: unavailable.appliedCount,
+        skippedCount: unavailable.skippedCount,
+      },
       { appliedCount: 0, skippedCount: 1 },
     );
     assert.match(unavailable.error ?? "", /project memory is unavailable/i);
@@ -577,7 +676,10 @@ describe("applyReviewOperations", () => {
     });
     await Promise.all([store.loadFromDisk(), projectStore.loadFromDisk()]);
     await store.add("memory", "global source stays intact");
-    await projectStore.add("memory", "project source has a long implementation detail");
+    await projectStore.add(
+      "memory",
+      "project source has a long implementation detail",
+    );
 
     const result = await applyReviewOperations(
       store,
@@ -592,13 +694,20 @@ describe("applyReviewOperations", () => {
     );
 
     assert.deepStrictEqual(result, { appliedCount: 2, skippedCount: 0 });
-    assert.deepStrictEqual(store.getMemoryEntries().map((entry) => entry.replace(/\s*<!--.*$/, "")), [
-      "global source stays intact",
-    ]);
-    assert.deepStrictEqual(projectStore.getMemoryEntries().map((entry) => entry.replace(/\s*<!--.*$/, "")), [
-      "project rule",
-    ]);
-    assert.doesNotMatch(projectStore.getRawEntriesForSync("memory")[0] ?? "", /project64=/);
+    assert.deepStrictEqual(
+      store.getMemoryEntries().map((entry) => entry.replace(/\s*<!--.*$/, "")),
+      ["global source stays intact"],
+    );
+    assert.deepStrictEqual(
+      projectStore
+        .getMemoryEntries()
+        .map((entry) => entry.replace(/\s*<!--.*$/, "")),
+      ["project rule"],
+    );
+    assert.doesNotMatch(
+      projectStore.getRawEntriesForSync("memory")[0] ?? "",
+      /project64=/,
+    );
   });
 
   it("defaults failure formatting and preserves project attribution in atomic plans", async () => {
@@ -610,16 +719,23 @@ describe("applyReviewOperations", () => {
       autoConsolidate: true,
     });
     await store.loadFromDisk();
-    await store.addFailure("obsolete failure detail that is intentionally long", {
-      category: "failure",
-      project: "project-a",
-    });
+    await store.addFailure(
+      "obsolete failure detail that is intentionally long",
+      {
+        category: "failure",
+        project: "project-a",
+      },
+    );
 
     const result = await applyReviewOperations(
       store,
       null,
       [
-        { action: "remove", target: "failure", old_text: "obsolete failure detail" },
+        {
+          action: "remove",
+          target: "failure",
+          old_text: "obsolete failure detail",
+        },
         {
           action: "add",
           target: "failure",
@@ -636,7 +752,10 @@ describe("applyReviewOperations", () => {
     assert.deepStrictEqual(store.getFailureEntries(), [
       "[failure] concise lesson — Failed: tool used stale state",
     ]);
-    assert.match(store.getRawEntriesForSync("failure")[0] ?? "", /project64=cHJvamVjdC1h/);
+    assert.match(
+      store.getRawEntriesForSync("failure")[0] ?? "",
+      /project64=cHJvamVjdC1h/,
+    );
   });
 
   it("attributes ordinary non-atomic failures to the current project", async () => {
@@ -650,7 +769,12 @@ describe("applyReviewOperations", () => {
     await store.loadFromDisk();
     const dbManager = new DatabaseManager(path.join(tmpDir, "db"));
     store.setMutationObserver((target, entries) => {
-      reconcileMarkdownMemoryScope(dbManager, entries, target, target === "failure" ? "project-a" : null);
+      reconcileMarkdownMemoryScope(
+        dbManager,
+        entries,
+        target,
+        target === "failure" ? "project-a" : null,
+      );
       return null;
     });
 
@@ -658,13 +782,15 @@ describe("applyReviewOperations", () => {
       const result = await applyReviewOperations(
         store,
         null,
-        [{
-          action: "add",
-          target: "failure",
-          content: "ordinary scoped lesson",
-          category: "correction",
-          failure_reason: "user corrected the command",
-        }],
+        [
+          {
+            action: "add",
+            target: "failure",
+            content: "ordinary scoped lesson",
+            category: "correction",
+            failure_reason: "user corrected the command",
+          },
+        ],
         dbManager,
         "project-a",
       );
@@ -673,9 +799,15 @@ describe("applyReviewOperations", () => {
       assert.deepStrictEqual(store.getFailureEntries(), [
         "[correction] ordinary scoped lesson — Failed: user corrected the command",
       ]);
-      const memories = getMemories(dbManager, { target: "failure", project: "project-a" });
+      const memories = getMemories(dbManager, {
+        target: "failure",
+        project: "project-a",
+      });
       assert.strictEqual(memories.length, 1);
-      assert.strictEqual(getMemories(dbManager, { target: "failure", project: null }).length, 0);
+      assert.strictEqual(
+        getMemories(dbManager, { target: "failure", project: null }).length,
+        0,
+      );
       assert.strictEqual(memories[0].category, "correction");
       assert.match(memories[0].content, /ordinary scoped lesson/);
     } finally {
@@ -695,21 +827,30 @@ describe("applyReviewOperations", () => {
     const beforeEntries = store.getMemoryEntries();
     const modelRegistry = {
       authStorage: { reload: () => undefined },
-      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test-key" }),
+      getApiKeyAndHeaders: async () => ({
+        ok: true as const,
+        apiKey: "test-key",
+      }),
       getAll: () => [mockModel(false)],
       getAvailable: () => [mockModel(false)],
     };
     const complete = async () => ({
       stopReason: "stop",
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          operations: [
-            { action: "remove", target: "memory", old_text: "keep this" },
-            { action: "remove", target: "memory", old_text: "missing later entry" },
-          ],
-        }),
-      }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            operations: [
+              { action: "remove", target: "memory", old_text: "keep this" },
+              {
+                action: "remove",
+                target: "memory",
+                old_text: "missing later entry",
+              },
+            ],
+          }),
+        },
+      ],
     });
 
     const result = await runDirectMemoryCompletion(
@@ -761,9 +902,18 @@ describe("applyReviewOperations", () => {
     });
 
     try {
-      const result = await applyReviewOperations(store, null, [
-        { action: "add", target: "memory", content: "observer owns reconciliation" },
-      ], dbManager);
+      const result = await applyReviewOperations(
+        store,
+        null,
+        [
+          {
+            action: "add",
+            target: "memory",
+            content: "observer owns reconciliation",
+          },
+        ],
+        dbManager,
+      );
 
       assert.strictEqual(result.appliedCount, 1);
     } finally {

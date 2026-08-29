@@ -9,7 +9,6 @@ import {
   indexAllSessions,
   indexChangedSessions,
   getSessionStats,
-  countSessionFiles,
   needsBackfill,
   touchBackfillTimestamp,
   LAST_SESSION_BACKFILL_KEY,
@@ -502,15 +501,6 @@ describe('session-indexer', () => {
       ];
       fs.writeFileSync(path.join(projDir, `${sessionId}.jsonl`), lines.join('\n'));
     }
-
-    it('countSessionFiles counts JSONL files in session project directories', () => {
-      const sessionsDir = path.join(tmpDir, 'sessions');
-      writeJsonlSession(sessionsDir, 'project-a', 's1');
-      writeJsonlSession(sessionsDir, 'project-b', 's2');
-      fs.writeFileSync(path.join(sessionsDir, 'project-b', 'notes.txt'), 'not a session');
-
-      assert.strictEqual(countSessionFiles(sessionsDir), 2);
-    });
 
     it('needsBackfill is true when session file count exceeds indexed sessions', () => {
       const sessionsDir = path.join(tmpDir, 'sessions');

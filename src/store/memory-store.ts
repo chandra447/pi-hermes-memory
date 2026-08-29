@@ -36,7 +36,8 @@ import type {
   MemoryOverflowStrategy,
 } from "../types.js";
 import { AGENT_ROOT } from "../paths.js";
-import { canonicalMarkdownIdentity, withMarkdownMutationLock } from "./markdown-mutation-lock.js";
+import { withMarkdownMutationLock } from "./markdown-mutation-lock.js";
+import { canonicalStoragePath } from "./canonical-storage-path.js";
 
 const MAX_EXTERNAL_WRITE_RETRIES = 2;
 const RECOVERY_ACTIVE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -98,7 +99,7 @@ export class MemoryStore {
   private async resolveStoragePath(target: "memory" | "user" | "failure"): Promise<string> {
     const cached = this.storagePaths[target];
     if (cached) return cached;
-    const resolved = await canonicalMarkdownIdentity(this.pathFor(target));
+    const resolved = await canonicalStoragePath(this.pathFor(target));
     this.storagePaths[target] = resolved;
     return resolved;
   }

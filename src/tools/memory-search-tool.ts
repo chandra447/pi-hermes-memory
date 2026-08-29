@@ -1,11 +1,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { DatabaseManager } from '../store/db.js';
-import { searchMemories, getMemoryStats } from '../store/sqlite-memory-store.js';
-import type { MemoryCategory } from '../types.js';
-import { createSharedToolResultRenderer } from './shared-output-view.js';
-import { searchResultView } from './tool-result-views.js';
+import { DatabaseManager } from "../store/db.js";
+import {
+  searchMemories,
+  getMemoryStats,
+} from "../store/sqlite-memory-store.js";
+import type { MemoryCategory } from "../types.js";
+import { createSharedToolResultRenderer } from "./shared-output-view.js";
+import { searchResultView } from "./tool-result-views.js";
 
 interface SearchResult {
   success: boolean;
@@ -14,7 +17,10 @@ interface SearchResult {
   output?: string;
 }
 
-function mutationTarget(entry: { target: "memory" | "user" | "failure"; project: string | null }): "memory" | "user" | "failure" | "project" {
+function mutationTarget(entry: {
+  target: "memory" | "user" | "failure";
+  project: string | null;
+}): "memory" | "user" | "failure" | "project" {
   // A project name scopes ordinary memory entries, but project-attributed
   // failures still live in (and must be mutated through) the failure store.
   return entry.target === "memory" && entry.project ? "project" : entry.target;
@@ -24,10 +30,13 @@ function scopeLabel(project: string | null): string {
   return project ? `project:${encodeURIComponent(project)}` : "global";
 }
 
-export function registerMemorySearchTool(pi: ExtensionAPI, dbManager: DatabaseManager): void {
+export function registerMemorySearchTool(
+  pi: ExtensionAPI,
+  dbManager: DatabaseManager,
+): void {
   pi.registerTool({
-    name: 'memory_search',
-    label: 'Memory Search',
+    name: "memory_search",
+    label: "Memory Search",
     description: `Search extended memory store for relevant entries. Use this when you need context beyond what's in the system prompt — the extended store has unlimited capacity and is searchable.
 
 Use cases:
@@ -37,21 +46,57 @@ Use cases:
 - Search for past failures: "memory_search('auth', category='failure')"
 
 Returns matching memory entries with their mutation target, scope, and dates. The displayed target is the value required by memory_replace and memory_remove.`,
-    promptSnippet: 'Search extended memory store (unlimited capacity)',
+    promptSnippet: "Search extended memory store (unlimited capacity)",
     promptGuidelines: [
-      'Use memory_search when you need context beyond what is in the system prompt.',
-      'Use memory_search to find project-specific memories or user preferences.',
-      'Use memory_search with category filter to find specific types of memories (failure, correction, insight, etc.).',
+      "Use memory_search when you need context beyond what is in the system prompt.",
+      "Use memory_search to find project-specific memories or user preferences.",
+      "Use memory_search with category filter to find specific types of memories (failure, correction, insight, etc.).",
     ],
     renderResult: createSharedToolResultRenderer(searchResultView),
     parameters: Type.Object({
-      query: Type.String({ description: 'Search query. Use natural language or specific terms.' }),
-      project: Type.Optional(Type.String({ description: 'Filter by project name. Pass null for global memories only.' })),
-      target: Type.Optional(StringEnum(['memory', 'user', 'failure'] as const, { description: 'Filter by target type (memory, user, or failure).' })),
-      category: Type.Optional(StringEnum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk'] as const, { description: 'Filter by memory category.' })),
-      limit: Type.Optional(Type.Number({ description: 'Maximum results to return (default: 10, max: 20).' })),
+      query: Type.String({
+        description: "Search query. Use natural language or specific terms.",
+      }),
+      project: Type.Optional(
+        Type.String({
+          description:
+            "Filter by project name. Pass null for global memories only.",
+        }),
+      ),
+      target: Type.Optional(
+        StringEnum(["memory", "user", "failure"] as const, {
+          description: "Filter by target type (memory, user, or failure).",
+        }),
+      ),
+      category: Type.Optional(
+        StringEnum(
+          [
+            "failure",
+            "correction",
+            "insight",
+            "preference",
+            "convention",
+            "tool-quirk",
+          ] as const,
+          { description: "Filter by memory category." },
+        ),
+      ),
+      limit: Type.Optional(
+        Type.Number({
+          description: "Maximum results to return (default: 10, max: 20).",
+        }),
+      ),
     }),
-    execute: async (_id: string, args: { query: string; project?: string; target?: string; category?: string; limit?: number }) => {
+    execute: async (
+      _id: string,
+      args: {
+        query: string;
+        project?: string;
+        target?: string;
+        category?: string;
+        limit?: number;
+      },
+    ) => {
       const query = args.query;
       const project = args.project;
       const target = args.target;
@@ -59,21 +104,45 @@ Returns matching memory entries with their mutation target, scope, and dates. Th
       const limit = Math.min(args.limit || 10, 20);
 
       if (!query || query.trim().length === 0) {
-        const result: SearchResult = { success: false, message: 'query is required' };
-        return { content: [{ type: 'text' as const, text: result.message! }], details: result };
+        const result: SearchResult = {
+          success: false,
+          message: "query is required",
+        };
+        return {
+          content: [{ type: "text" as const, text: result.message! }],
+          details: result,
+        };
       }
 
-      const stats = getMemoryStats(dbManager);
+      const stats = dbManager.withCorruptionRecovery(() =>
+        getMemoryStats(dbManager),
+      );
       if (stats.total === 0) {
-        const result: SearchResult = { success: false, message: 'No memories in extended store yet. Use memory_add to store memories.' };
-        return { content: [{ type: 'text' as const, text: result.message! }], details: result };
+        const result: SearchResult = {
+          success: false,
+          message:
+            "No memories in extended store yet. Use memory_add to store memories.",
+        };
+        return {
+          content: [{ type: "text" as const, text: result.message! }],
+          details: result,
+        };
       }
 
-      const results = searchMemories(dbManager, query, { project, target, category, limit });
+      const results = dbManager.withCorruptionRecovery(() =>
+        searchMemories(dbManager, query, { project, target, category, limit }),
+      );
 
       if (results.length === 0) {
-        const result: SearchResult = { success: true, count: 0, message: `No memories found matching "${query}". Try a different search term or broader query.` };
-        return { content: [{ type: 'text' as const, text: result.message! }], details: result };
+        const result: SearchResult = {
+          success: true,
+          count: 0,
+          message: `No memories found matching "${query}". Try a different search term or broader query.`,
+        };
+        return {
+          content: [{ type: "text" as const, text: result.message! }],
+          details: result,
+        };
       }
 
       let output = `Found ${results.length} memories matching "${query}":\n\n`;
@@ -82,14 +151,26 @@ Returns matching memory entries with their mutation target, scope, and dates. Th
         const target = mutationTarget(entry);
         const projectLabel = `scope=${scopeLabel(entry.project)}`;
         const mutationTargetLabel = `[target=${target}]`;
-        const targetLabel = entry.target === 'user' ? '👤' : entry.target === 'failure' ? '⚠️' : '🧠';
-        const categoryLabel = entry.category ? ` [${entry.category}]` : '';
+        const targetLabel =
+          entry.target === "user"
+            ? "👤"
+            : entry.target === "failure"
+              ? "⚠️"
+              : "🧠";
+        const categoryLabel = entry.category ? ` [${entry.category}]` : "";
         output += `${targetLabel} ${projectLabel} ${mutationTargetLabel}${categoryLabel} ${entry.content}\n`;
         output += `   Created: ${entry.created} | Last used: ${entry.lastReferenced}\n\n`;
       }
 
-      const finalResult: SearchResult = { success: true, count: results.length, output: output.trim() };
-      return { content: [{ type: 'text' as const, text: output.trim() }], details: finalResult };
+      const finalResult: SearchResult = {
+        success: true,
+        count: results.length,
+        output: output.trim(),
+      };
+      return {
+        content: [{ type: "text" as const, text: output.trim() }],
+        details: finalResult,
+      };
     },
   });
 }

@@ -26,6 +26,10 @@ import { getMessageText } from "../types.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
+import {
+  appendPromptConversationSection,
+  buildMemoryPromptSections,
+} from "./message-parts.js";
 
 /**
  * Extract the directive part from a correction message.
@@ -164,10 +168,9 @@ export function setupCorrectionDetector(
     correctionInProgress = true;
 
     try {
-      // Build conversation snapshot
+      // Only include last few exchanges (correction context is recent)
       const entries = ctx.sessionManager.getBranch();
       const parts: string[] = [];
-
       for (const entry of entries) {
         if (entry.type !== "message") continue;
         const msg = entry.message;
@@ -176,8 +179,6 @@ export function setupCorrectionDetector(
         const prefix = msg.role === "user" ? "[USER]" : "[ASSISTANT]";
         parts.push(`${prefix}: ${text}`);
       }
-
-      // Only include last few exchanges (correction context is recent)
       const recentParts = parts.slice(-6);
 
       const activeProjectStore = resolveProjectStore(projectStore);
@@ -185,27 +186,10 @@ export function setupCorrectionDetector(
       const currentMemory = store.getMemoryEntries().join(ENTRY_DELIMITER);
       const currentUser = store.getUserEntries().join(ENTRY_DELIMITER);
       const currentProject = activeProjectStore ? activeProjectStore.getMemoryEntries().join(ENTRY_DELIMITER) : null;
-
-      const promptBody = [
-        "--- Current Memory ---",
-        currentMemory || "(empty)",
-        "",
-        "--- Current User Profile ---",
-        currentUser || "(empty)",
-      ];
-
-      if (currentProject !== null) {
-        promptBody.push(
-          "",
-          "--- Current Project Memory ---",
-          currentProject || "(empty)",
-        );
-      }
-
-      promptBody.push(
-        "",
-        "--- Recent Conversation ---",
-        recentParts.join("\n\n"),
+      const promptBody = appendPromptConversationSection(
+        buildMemoryPromptSections(currentMemory, currentUser, currentProject),
+        recentParts,
+        "Recent Conversation",
       );
 
       let savedViaLlm = false;

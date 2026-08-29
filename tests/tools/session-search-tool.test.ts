@@ -15,7 +15,9 @@ afterEach(() => {
 });
 
 function makeSessionsDir(): string {
-  ROOT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "pi-session-search-tool-test-"));
+  ROOT_DIR = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-session-search-tool-test-"),
+  );
   return ROOT_DIR;
 }
 
@@ -23,7 +25,9 @@ describe("registerSessionSearchTool", () => {
   it("registers the legacy query schema by default", () => {
     let captured: any;
     const mockPi = {
-      registerTool: (def: any) => { captured = def; },
+      registerTool: (def: any) => {
+        captured = def;
+      },
     } as any;
 
     registerSessionSearchTool(mockPi, {} as any);
@@ -39,7 +43,9 @@ describe("registerSessionSearchTool", () => {
   it("clamps negative and fractional legacy limits before querying", async () => {
     let captured: any;
     const mockPi = {
-      registerTool: (def: any) => { captured = def; },
+      registerTool: (def: any) => {
+        captured = def;
+      },
     } as any;
     const memoryDir = makeSessionsDir();
     const dbManager = new DatabaseManager(memoryDir);
@@ -81,7 +87,9 @@ describe("registerSessionSearchTool", () => {
   it("clamps non-finite snippetChars values instead of propagating NaN", async () => {
     let captured: any;
     const mockPi = {
-      registerTool: (def: any) => { captured = def; },
+      registerTool: (def: any) => {
+        captured = def;
+      },
     } as any;
     const memoryDir = makeSessionsDir();
     const dbManager = new DatabaseManager(memoryDir);
@@ -93,12 +101,14 @@ describe("registerSessionSearchTool", () => {
         cwd: "/work/nan-snippet",
         startedAt: "2026-07-11T00:00:00.000Z",
         endedAt: null,
-        messages: [{
-          id: "nan-snippet-message",
-          role: "assistant",
-          content: `needle ${"a".repeat(500)}`,
-          timestamp: "2026-07-11T00:01:00.000Z",
-        }],
+        messages: [
+          {
+            id: "nan-snippet-message",
+            role: "assistant",
+            content: `needle ${"a".repeat(500)}`,
+            timestamp: "2026-07-11T00:01:00.000Z",
+          },
+        ],
       });
       registerSessionSearchTool(mockPi, dbManager);
 
@@ -128,7 +138,9 @@ describe("registerSessionSearchTool", () => {
   it("bounds oversized legacy results and reports truncation without duplicating output in details", async () => {
     let captured: any;
     const mockPi = {
-      registerTool: (def: any) => { captured = def; },
+      registerTool: (def: any) => {
+        captured = def;
+      },
     } as any;
     const memoryDir = makeSessionsDir();
     const dbManager = new DatabaseManager(memoryDir);
@@ -162,10 +174,15 @@ describe("registerSessionSearchTool", () => {
       );
       registerSessionSearchTool(mockPi, dbManager);
 
-      const result = await captured.execute("tc-oversized", { query: "needle" });
+      const result = await captured.execute("tc-oversized", {
+        query: "needle",
+      });
       const output = result.content[0].text as string;
 
-      assert.ok(output.length <= 50 * 1024, `expected <= 50 KiB, got ${output.length}`);
+      assert.ok(
+        output.length <= 50 * 1024,
+        `expected <= 50 KiB, got ${output.length}`,
+      );
       assert.match(output, /truncated/);
       assert.match(output, /6000007 chars total/);
       assert.strictEqual(result.details.truncatedCount, 1);
@@ -180,7 +197,9 @@ describe("registerSessionSearchTool", () => {
   it("offers a bounded snippetChars override for legacy searches", async () => {
     let captured: any;
     const mockPi = {
-      registerTool: (def: any) => { captured = def; },
+      registerTool: (def: any) => {
+        captured = def;
+      },
     } as any;
     const memoryDir = makeSessionsDir();
     const dbManager = new DatabaseManager(memoryDir);
@@ -192,12 +211,14 @@ describe("registerSessionSearchTool", () => {
         cwd: "/work/bounded",
         startedAt: "2026-07-11T00:00:00.000Z",
         endedAt: null,
-        messages: [{
-          id: "bounded-override-message",
-          role: "assistant",
-          content: `needle ${"y".repeat(10_000)}`,
-          timestamp: "2026-07-11T00:01:00.000Z",
-        }],
+        messages: [
+          {
+            id: "bounded-override-message",
+            role: "assistant",
+            content: `needle ${"y".repeat(10_000)}`,
+            timestamp: "2026-07-11T00:01:00.000Z",
+          },
+        ],
       });
       registerSessionSearchTool(mockPi, dbManager);
 
@@ -219,7 +240,9 @@ describe("registerSessionSearchTool", () => {
   it("enforces a hard 50 KiB ceiling across many large legacy results", async () => {
     let captured: any;
     const mockPi = {
-      registerTool: (def: any) => { captured = def; },
+      registerTool: (def: any) => {
+        captured = def;
+      },
     } as any;
     const memoryDir = makeSessionsDir();
     const dbManager = new DatabaseManager(memoryDir);
@@ -247,7 +270,10 @@ describe("registerSessionSearchTool", () => {
       });
       const output = result.content[0].text as string;
 
-      assert.ok(output.length <= 50 * 1024, `expected <= 50 KiB, got ${output.length}`);
+      assert.ok(
+        output.length <= 50 * 1024,
+        `expected <= 50 KiB, got ${output.length}`,
+      );
       assert.strictEqual(result.details.outputTruncated, true);
       assert.match(output, /output truncated/);
       assert.match(output, /refine the query or lower the result limit/);
@@ -259,7 +285,9 @@ describe("registerSessionSearchTool", () => {
   it("bounds the zero-result response without echoing an oversized query", async () => {
     let captured: any;
     const mockPi = {
-      registerTool: (def: any) => { captured = def; },
+      registerTool: (def: any) => {
+        captured = def;
+      },
     } as any;
     const memoryDir = makeSessionsDir();
     const dbManager = new DatabaseManager(memoryDir);
@@ -271,12 +299,14 @@ describe("registerSessionSearchTool", () => {
         cwd: "/work/zero-result",
         startedAt: "2026-07-11T00:00:00.000Z",
         endedAt: null,
-        messages: [{
-          id: "zero-result-message",
-          role: "assistant",
-          content: "indexed haystack",
-          timestamp: "2026-07-11T00:01:00.000Z",
-        }],
+        messages: [
+          {
+            id: "zero-result-message",
+            role: "assistant",
+            content: "indexed haystack",
+            timestamp: "2026-07-11T00:01:00.000Z",
+          },
+        ],
       });
       registerSessionSearchTool(mockPi, dbManager);
       const query = `${" ".repeat(60_000)}missing`;
@@ -285,7 +315,10 @@ describe("registerSessionSearchTool", () => {
       const output = result.content[0].text as string;
 
       assert.strictEqual(result.details.count, 0);
-      assert.ok(output.length <= 50 * 1024, `expected <= 50 KiB, got ${output.length}`);
+      assert.ok(
+        output.length <= 50 * 1024,
+        `expected <= 50 KiB, got ${output.length}`,
+      );
       assert.strictEqual(output.includes(query), false);
       assert.ok(JSON.stringify(result.details).length < 1_000);
     } finally {
@@ -296,19 +329,29 @@ describe("registerSessionSearchTool", () => {
   it("registers and executes the anchor markdown-only schema when configured", async () => {
     let captured: any;
     const mockPi = {
-      registerTool: (def: any) => { captured = def; },
+      registerTool: (def: any) => {
+        captured = def;
+      },
     } as any;
     const sessionsDir = makeSessionsDir();
     const filePath = path.join(sessionsDir, "session.jsonl");
-    fs.writeFileSync(filePath, `${JSON.stringify({
-      type: "message",
-      timestamp: "2026-05-15T10:00:00.000Z",
-      sessionId: "session-1",
-      cwd: "/work/project",
-      message: { role: "user", content: "needle" },
-    })}\n`);
+    fs.writeFileSync(
+      filePath,
+      `${JSON.stringify({
+        type: "message",
+        timestamp: "2026-05-15T10:00:00.000Z",
+        sessionId: "session-1",
+        cwd: "/work/project",
+        message: { role: "user", content: "needle" },
+      })}\n`,
+    );
 
-    registerSessionSearchTool(mockPi, {} as any, { variant: "anchors" }, { sessionsDir });
+    registerSessionSearchTool(
+      mockPi,
+      {} as any,
+      { variant: "anchors" },
+      { sessionsDir },
+    );
 
     const schema = JSON.stringify(captured.parameters);
     assert.strictEqual(captured.name, "session_search");
@@ -317,29 +360,122 @@ describe("registerSessionSearchTool", () => {
     assert.match(captured.description, /all terms must match/);
     assert.match(captured.description, /any requires at least one listed term/);
     assert.match(captured.description, /exclude removes matching ranges/);
-    assert.match(captured.description, /Output is plain text: count, optional message/);
-    assert.match(captured.description, /path:startLine-endLine with a short reason/);
+    assert.match(
+      captured.description,
+      /Output is plain text: count, optional message/,
+    );
+    assert.match(
+      captured.description,
+      /path:startLine-endLine with a short reason/,
+    );
     assert.match(captured.description, /Example:\nfrom: 2026-05-14/);
-    assert.match(captured.promptGuidelines.join("\n"), /Use all for required terms/);
+    assert.match(
+      captured.promptGuidelines.join("\n"),
+      /Use all for required terms/,
+    );
 
     const empty = await captured.execute("tc-1", { markdown: "" });
     assert.strictEqual(empty.details.success, false);
     assert.strictEqual(empty.details.message, "markdown is required");
 
-    const result = await captured.execute("tc-2", { markdown: "any:\n- needle" });
+    const result = await captured.execute("tc-2", {
+      markdown: "any:\n- needle",
+    });
     assert.strictEqual(result.details.success, true);
     assert.strictEqual(result.details.count, 1);
-    assert.deepStrictEqual(result.details.ranges.map((range: any) => ({
-      path: range.path,
-      startLine: range.startLine,
-      endLine: range.endLine,
-      reason: range.reason,
-    })), [{ path: filePath, startLine: 1, endLine: 1, reason: "matched any: needle" }]);
+    assert.deepStrictEqual(
+      result.details.ranges.map((range: any) => ({
+        path: range.path,
+        startLine: range.startLine,
+        endLine: range.endLine,
+        reason: range.reason,
+      })),
+      [
+        {
+          path: filePath,
+          startLine: 1,
+          endLine: 1,
+          reason: "matched any: needle",
+        },
+      ],
+    );
     assert.strictEqual(result.details.output, result.content[0].text);
     assert.match(result.content[0].text, /^count: 1\nanchors:\n-/);
-    assert.match(result.content[0].text, new RegExp(`${filePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:1-1 — matched any: needle`));
+    assert.match(
+      result.content[0].text,
+      new RegExp(
+        `${filePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:1-1 — matched any: needle`,
+      ),
+    );
     assert.doesNotMatch(result.content[0].text, /"ranges"/);
     assert.doesNotMatch(result.content[0].text, /"startLine"/);
     assert.doesNotMatch(result.content[0].text, /"sessionId"/);
+  });
+
+  it("recovers from a corrupt database during a session search read", async () => {
+    let captured: any;
+    const mockPi = {
+      registerTool: (def: any) => {
+        captured = def;
+      },
+    } as any;
+    const memoryDir = makeSessionsDir();
+    const dbManager = new DatabaseManager(memoryDir);
+
+    try {
+      indexSession(dbManager, {
+        id: "corruption-recovery-session",
+        project: "corruption-project",
+        cwd: "/work/corruption",
+        startedAt: "2026-07-11T00:00:00.000Z",
+        endedAt: null,
+        messages: [
+          {
+            id: "corruption-message-1",
+            role: "user",
+            content: "how do I configure auth",
+            timestamp: "2026-07-11T00:01:00.000Z",
+          },
+        ],
+      });
+
+      const dbPath = path.join(memoryDir, "sessions.db");
+      dbManager.close();
+
+      // Corrupt the leaf page of the messages table: open() succeeds (header
+      // intact), but the stats/search reads fail with SQLITE_CORRUPT — exactly
+      // the operation-time read gap this test covers.
+      const probe = new DatabaseManager(memoryDir);
+      const row = probe
+        .getDb()
+        .prepare(
+          "SELECT pageno FROM dbstat WHERE name = 'messages' AND pagetype = 'leaf' ORDER BY pageno DESC LIMIT 1",
+        )
+        .get() as { pageno: number } | undefined;
+      probe.close();
+      if (!row) throw new Error("dbstat found no leaf page for messages table");
+      const pageOffset = (row.pageno - 1) * 4096;
+      const fd = fs.openSync(dbPath, "r+");
+      const buf = Buffer.alloc(4096);
+      fs.readSync(fd, buf, 0, 4096, pageOffset + 16);
+      buf[0] = 0;
+      fs.writeSync(fd, buf, 0, 4096, pageOffset);
+      fs.closeSync(fd);
+
+      const dbManager2 = new DatabaseManager(memoryDir);
+      registerSessionSearchTool(mockPi, dbManager2);
+
+      const result = await captured.execute("tc-1", { query: "auth" });
+      // After read-time recovery rebuilds the database, the index is empty:
+      // either the "no sessions yet" or the "no results" message must appear.
+      assert.match(result.content[0].text, /No sessions|No results/);
+      dbManager2.close();
+    } finally {
+      try {
+        fs.rmSync(memoryDir, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
+    }
   });
 });

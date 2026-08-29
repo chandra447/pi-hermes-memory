@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { scanContent, scanSecrets } from "../../src/store/content-scanner.js";
+import { scanContent } from "../../src/store/content-scanner.js";
 
 /**
  * Build a secret-looking test string from parts so it won't trigger
@@ -366,23 +366,5 @@ describe("scanContent — secret detection", () => {
   it("allows reference to .env file without exposing key values", () => {
     const result = scanContent("use .env for local configuration, example.env for defaults");
     assert.strictEqual(result, null);
-  });
-});
-
-describe("scanSecrets", () => {
-  it("returns empty array for safe text", () => {
-    const result = scanSecrets("user prefers dark mode");
-    assert.deepEqual(result, []);
-  });
-
-  it("returns detected secret IDs for dangerous text", () => {
-    const result = scanSecrets(`my key is ${secret("sk-ant-api03-", "abc123def456ghi789jkl012mno345pqr678stu901vwx234yz")}`);
-    assert.ok(result.includes("anthropic_api_key"));
-  });
-
-  it("returns multiple IDs when multiple patterns match", () => {
-    const result = scanSecrets(`${secret("sk-ant-api03-", "abc123def456ghi789jkl012mno345pqr678stu901vwx234yz")} and ${secret("ghp_", "abcdef1234567890abcdef1234567890abcdef")}`);
-    assert.ok(result.includes("anthropic_api_key"));
-    assert.ok(result.includes("github_personal_token"));
   });
 });

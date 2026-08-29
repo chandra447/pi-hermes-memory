@@ -8,8 +8,6 @@ import {
   addMemory,
   searchMemories,
   getMemories,
-  removeMemory,
-  touchMemory,
   getMemoryStats,
   syncMemoryEntry,
   replaceSyncedMemories,
@@ -486,37 +484,6 @@ describe('sqlite-memory-store', () => {
       const results = getMemories(dbManager, { target: 'user' });
       assert.strictEqual(results.length, 1);
       assert.strictEqual(results[0].content, 'user preference');
-    });
-  });
-
-  describe('removeMemory', () => {
-    it('should remove a memory by id', () => {
-      const entry = addMemory(dbManager, 'to be removed');
-      const removed = removeMemory(dbManager, entry.id);
-      assert.strictEqual(removed, true);
-
-      const all = getMemories(dbManager);
-      assert.strictEqual(all.length, 0);
-    });
-
-    it('should return false for non-existent id', () => {
-      const removed = removeMemory(dbManager, 99999);
-      assert.strictEqual(removed, false);
-    });
-  });
-
-  describe('touchMemory', () => {
-    it('should update last_referenced date', () => {
-      const entry = addMemory(dbManager, 'old memory');
-      // Manually set an old date
-      const db = dbManager.getDb();
-      db.prepare('UPDATE memories SET last_referenced = ? WHERE id = ?').run('2020-01-01', entry.id);
-
-      touchMemory(dbManager, entry.id);
-
-      const updated = db.prepare('SELECT last_referenced FROM memories WHERE id = ?').get(entry.id) as { last_referenced: string };
-      const today = new Date().toISOString().split('T')[0];
-      assert.strictEqual(updated.last_referenced, today);
     });
   });
 

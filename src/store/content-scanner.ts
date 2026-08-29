@@ -84,18 +84,3 @@ export function scanContent(content: string): string | null {
 
   return null;
 }
-
-/**
- * Scan content for secrets only (no threat patterns).
- * Returns an array of matched secret IDs, or empty array if none found.
- * Useful for non-blocking warnings (e.g., pre-fill checks in interviews).
- */
-export function scanSecrets(content: string): string[] {
-  const found: string[] = [];
-  for (const { pattern, id } of SECRET_PATTERNS) {
-    if (pattern.test(content)) {
-      found.push(id);
-    }
-  }
-  return found;
-}

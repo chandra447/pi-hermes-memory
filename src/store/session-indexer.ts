@@ -1,7 +1,13 @@
 import fs from 'node:fs';
 import { DEFAULT_MAX_MESSAGE_CONTENT_LENGTH } from '../constants.js';
 import { DatabaseManager } from './db.js';
-import { parseSessionFile, getSessionFiles, type ParsedSession } from './session-parser.js';
+import {
+  extractTextContent,
+  extractToolCalls,
+  parseSessionFile,
+  getSessionFiles,
+  type ParsedSession,
+} from './session-parser.js';
 
 export const LAST_SESSION_BACKFILL_KEY = 'last_session_backfill';
 export const SESSION_BACKFILL_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -138,44 +144,6 @@ type SessionMessageEntryLike = {
     content?: unknown;
   };
 };
-
-function extractTextContent(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== 'object') continue;
-    const b = block as Record<string, unknown>;
-
-    switch (b.type) {
-      case 'text':
-        if (typeof b.text === 'string') parts.push(b.text);
-        break;
-      case 'tool_result':
-        // Tool results can contain unbounded file or command output. Tool
-        // calls are indexed separately, so retaining their output adds bloat
-        // without improving session search.
-        break;
-    }
-  }
-
-  return parts.join('\n').trim();
-}
-
-function extractToolCalls(content: unknown): string[] | undefined {
-  if (!Array.isArray(content)) return undefined;
-
-  const toolNames: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== 'object') continue;
-    const b = block as Record<string, unknown>;
-    if ((b.type === 'toolCall' || b.type === 'tool_use') && typeof b.name === 'string') {
-      toolNames.push(b.name);
-    }
-  }
-  return toolNames.length > 0 ? toolNames : undefined;
-}
 
 function parseMessageEntry(entry: unknown): ParsedSession['messages'][number] | null {
   if (!entry || typeof entry !== 'object') return null;
@@ -415,13 +383,6 @@ export function indexChangedSessions(
   }
 
   return result;
-}
-
-/**
- * Cheaply count session JSONL files in the same scope indexAllSessions scans.
- */
-export function countSessionFiles(sessionsDir: string): number {
-  return getSessionFiles(sessionsDir).length;
 }
 
 function getLastBackfillTimestamp(dbManager: DatabaseManager): string | null {
