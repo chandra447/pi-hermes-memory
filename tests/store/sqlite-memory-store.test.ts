@@ -400,6 +400,17 @@ describe('sqlite-memory-store', () => {
       assert.ok(results.some((result) => result.content.includes('设备清单')));
     });
 
+    it('applies target "project" in the CJK literal fallback path', () => {
+      addMemory(dbManager, '项目约定使用 pnpm', 'memory', 'project-a');
+      addMemory(dbManager, '项目全局笔记');
+
+      const results = searchMemories(dbManager, '项目', { target: 'project' });
+
+      assert.ok(results.length > 0);
+      assert.ok(results.every((r) => r.project === 'project-a'));
+      assert.ok(results.every((r) => r.target === 'memory'));
+    });
+
 
     it('should match multi-word queries without requiring an exact phrase', () => {
       const results = searchMemories(dbManager, 'gpu issue');

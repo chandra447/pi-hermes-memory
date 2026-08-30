@@ -131,10 +131,7 @@ function mapRow(row: {
 function buildScopeConditions(params: unknown[], target?: string, project?: string | null, category?: MemoryCategory | null): string[] {
   const conditions: string[] = [];
 
-  if (target === 'project') {
-    conditions.push("target = 'memory'");
-    conditions.push('project IS NOT NULL');
-  } else if (target) {
+  if (target) {
     conditions.push('target = ?');
     params.push(target);
   }
@@ -155,6 +152,21 @@ function buildScopeConditions(params: unknown[], target?: string, project?: stri
       conditions.push('category = ?');
       params.push(category);
     }
+  }
+
+  return conditions;
+}
+
+/** Maps memory_search target filters onto SQLite columns (search paths only). */
+function buildSearchTargetConditions(params: unknown[], target: string | undefined, tablePrefix: string): string[] {
+  const conditions: string[] = [];
+
+  if (target === 'project') {
+    conditions.push(`${tablePrefix}.target = 'memory'`);
+    conditions.push(`${tablePrefix}.project IS NOT NULL`);
+  } else if (target) {
+    conditions.push(`${tablePrefix}.target = ?`);
+    params.push(target);
   }
 
   return conditions;
@@ -730,13 +742,7 @@ export function searchMemories(
       }
     }
 
-    if (target === 'project') {
-      conditions.push("m.target = 'memory'");
-      conditions.push('m.project IS NOT NULL');
-    } else if (target) {
-      conditions.push('m.target = ?');
-      params.push(target);
-    }
+    conditions.push(...buildSearchTargetConditions(params, target, 'm'));
 
     if (category) {
       conditions.push('m.category = ?');
@@ -792,10 +798,8 @@ export function searchMemories(
         params.push(project);
       }
     }
-    if (target) {
-      conditions.push('m.target = ?');
-      params.push(target);
-    }
+    conditions.push(...buildSearchTargetConditions(params, target, 'm'));
+
     if (category) {
       conditions.push('m.category = ?');
       params.push(category);
