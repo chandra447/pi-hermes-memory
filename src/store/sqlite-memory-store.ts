@@ -131,7 +131,10 @@ function mapRow(row: {
 function buildScopeConditions(params: unknown[], target?: string, project?: string | null, category?: MemoryCategory | null): string[] {
   const conditions: string[] = [];
 
-  if (target) {
+  if (target === 'project') {
+    conditions.push("target = 'memory'");
+    conditions.push('project IS NOT NULL');
+  } else if (target) {
     conditions.push('target = ?');
     params.push(target);
   }
@@ -727,7 +730,10 @@ export function searchMemories(
       }
     }
 
-    if (target) {
+    if (target === 'project') {
+      conditions.push("m.target = 'memory'");
+      conditions.push('m.project IS NOT NULL');
+    } else if (target) {
       conditions.push('m.target = ?');
       params.push(target);
     }

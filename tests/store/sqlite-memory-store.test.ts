@@ -344,6 +344,36 @@ describe('sqlite-memory-store', () => {
       assert.ok(results.length > 0);
       assert.ok(results.some(r => r.content.includes('Prisma')));
     });
+
+    it('returns only project-attributed memories for target "project"', () => {
+      const results = searchMemories(dbManager, 'Prisma', { target: 'project' });
+
+      assert.ok(results.length > 0);
+      assert.ok(results.every((r) => r.project === 'project-a'));
+      assert.ok(results.every((r) => r.target === 'memory'));
+    });
+
+    it('keeps target "memory" matching both global and project-attributed memories', () => {
+      const global = searchMemories(dbManager, 'pnpm', { target: 'memory' });
+      const project = searchMemories(dbManager, 'Prisma', { target: 'memory' });
+
+      assert.ok(global.some((r) => r.project === null));
+      assert.ok(project.length > 0);
+      assert.ok(project.every((r) => r.project === 'project-a'));
+    });
+
+    it('combines target "project" with an explicit project filter', () => {
+      addMemory(dbManager, 'uses Bun with PostgreSQL', 'memory', 'project-b');
+
+      const named = searchMemories(dbManager, 'PostgreSQL', { target: 'project', project: 'project-b' });
+      const anyProject = searchMemories(dbManager, 'PostgreSQL', { target: 'project' });
+      const globalOnly = searchMemories(dbManager, 'PostgreSQL', { target: 'project', project: null });
+
+      assert.ok(named.length > 0);
+      assert.ok(named.every((r) => r.project === 'project-b'));
+      assert.ok(anyProject.some((r) => r.project === 'project-a'));
+      assert.strictEqual(globalOnly.length, 0);
+    });
     it('finds pure CJK substrings with the trigram tokenizer', () => {
       addMemory(dbManager, '设备清单包含 NAS 和备份策略');
 

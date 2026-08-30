@@ -36,6 +36,8 @@ Use cases:
 - Find user preferences: "What are the user's testing preferences?"
 - Search for past failures: "memory_search('auth', category='failure')"
 
+target="project" returns only project-attributed memory entries (the ones labeled [target=project]); combine with project to search a named project.
+
 Returns matching memory entries with their mutation target, scope, and dates. The displayed target is the value required by memory_replace and memory_remove.`,
     promptSnippet: 'Search extended memory store (unlimited capacity)',
     promptGuidelines: [
@@ -47,11 +49,11 @@ Returns matching memory entries with their mutation target, scope, and dates. Th
     parameters: Type.Object({
       query: Type.String({ description: 'Search query. Use natural language or specific terms.' }),
       project: Type.Optional(Type.String({ description: 'Filter by project name. Pass null for global memories only.' })),
-      target: Type.Optional(StringEnum(['memory', 'user', 'failure'] as const, { description: 'Filter by target type (memory, user, or failure).' })),
+      target: Type.Optional(StringEnum(['memory', 'user', 'failure', 'project'] as const, { description: 'Filter by target type: memory, user, failure, or project-attributed memories.' })),
       category: Type.Optional(StringEnum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk'] as const, { description: 'Filter by memory category.' })),
       limit: Type.Optional(Type.Number({ description: 'Maximum results to return (default: 10, max: 20).' })),
     }),
-    execute: async (_id: string, args: { query: string; project?: string; target?: string; category?: string; limit?: number }) => {
+    execute: async (_id: string, args: { query: string; project?: string; target?: 'memory' | 'user' | 'failure' | 'project'; category?: string; limit?: number }) => {
       const query = args.query;
       const project = args.project;
       const target = args.target;

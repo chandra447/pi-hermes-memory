@@ -66,6 +66,28 @@ describe('registerMemorySearchTool', () => {
     dbManager.close();
   });
 
+  it('accepts target "project" as a filter and shows the schema value', async () => {
+    const dbManager = makeDbManager();
+    addMemory(dbManager, 'project deployment convention', 'memory', 'project-a');
+    addMemory(dbManager, 'global deployment convention');
+    addMemory(dbManager, 'project failure deployment lesson', 'failure', 'project-a');
+
+    let captured: any;
+    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, dbManager);
+
+    assert.ok(captured.parameters.properties.target.enum.includes('project'));
+
+    const result = await captured.execute('tc-1', { query: 'deployment', target: 'project' });
+    const text = result.content[0].text;
+
+    assert.strictEqual(result.details.success, true);
+    assert.strictEqual(result.details.count, 1);
+    assert.match(text, /scope=project:project-a \[target=project\]/);
+    assert.doesNotMatch(text, /scope=global/);
+
+    dbManager.close();
+  });
+
   it('keeps copied results reversible when a project name contains brackets', async () => {
     const dbManager = makeDbManager();
     addMemory(dbManager, 'literal project entry', 'memory', 'foo] bar');
