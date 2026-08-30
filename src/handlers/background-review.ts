@@ -122,7 +122,6 @@ const SESSION_REVIEW_SHUTDOWN_GRACE_MS = 1000;
 function awaitUpTo(promise: Promise<void>, ms: number): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
-    timer.unref();
     promise.then(
       () => {
         clearTimeout(timer);
