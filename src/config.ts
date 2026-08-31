@@ -157,6 +157,28 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         const trimmed = parsed.llmModelOverride.trim();
         if (trimmed.length > 0) config.llmModelOverride = trimmed;
       }
+      // Support array form for primary override too (e.g. llmModelOverride: ["a/b","c/d"]) — first entry is primary, rest are fallbacks
+      if (Array.isArray(parsed.llmModelOverride) && parsed.llmModelOverride.every((v: unknown) => typeof v === "string")) {
+        const cleaned = (parsed.llmModelOverride as string[]).map((s) => s.trim()).filter(Boolean);
+        if (cleaned.length > 0) {
+          config.llmModelOverride = cleaned[0];
+          const fallbacks = cleaned.slice(1);
+          if (fallbacks.length > 0) config.llmFallbackModels = fallbacks;
+        }
+      }
+      if (isStringArray(parsed.llmFallbackModels)) {
+        const cleaned = (parsed.llmFallbackModels as string[]).map((s) => s.trim()).filter(Boolean);
+        if (cleaned.length > 0) config.llmFallbackModels = [...new Set(cleaned)];
+      }
+      // Backward-compat alias: llmModelFallbacks / fallbackModels
+      if (isStringArray((parsed as Record<string, unknown>).llmModelFallbacks)) {
+        const cleaned = ((parsed as Record<string, unknown>).llmModelFallbacks as string[]).map((s: string) => s.trim()).filter(Boolean);
+        if (cleaned.length > 0) config.llmFallbackModels = [...new Set([...(config.llmFallbackModels ?? []), ...cleaned])];
+      }
+      if (isStringArray((parsed as Record<string, unknown>).fallbackModels)) {
+        const cleaned = ((parsed as Record<string, unknown>).fallbackModels as string[]).map((s: string) => s.trim()).filter(Boolean);
+        if (cleaned.length > 0) config.llmFallbackModels = [...new Set([...(config.llmFallbackModels ?? []), ...cleaned])];
+      }
       if (isThinkingLevel(parsed.llmThinkingOverride)) config.llmThinkingOverride = parsed.llmThinkingOverride;
       if (isStringArray(parsed.childExtensionPaths)) {
         const childExtensionPaths = [...new Set<string>(
