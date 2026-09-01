@@ -88,6 +88,10 @@ export interface MemoryConfig {
   autoConsolidationWarnOnFailure: boolean;
   /** Inject pinned STANDING.md instructions into every session. Default: true */
   standingInstructionsEnabled: boolean;
+  /** Opt in to bounded Pi-local active recall. Default: false */
+  activeRecallEnabled?: boolean;
+  /** Opt in to WCM as an additional active-recall source. Default: false */
+  activeRecallWcmEnabled?: boolean;
 }
 
 export type MemoryCategory =

@@ -526,6 +526,8 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `memoryPolicyStyle` | `full` | Policy text used in `policy-only` mode: `full` preserves the default v0.7 policy; `compact` uses shorter built-in guidance; `custom` uses `memoryPolicyCustomText`; `none` injects no policy text |
 | `memoryPolicyCustomText` | unset | Custom policy text used when `memoryPolicyStyle` is `custom`; blank or missing text falls back to `compact` |
 | `standingInstructionsEnabled` | `true` | Inject `STANDING.md` (pinned via `/memory-pin`) into every session, in every memory mode |
+| `activeRecallEnabled` | `false` | Read-only pilot: before a session starts, search the user prompt in Pi's local SQLite memory and inject at most three source-labeled leads. Lookup failures leave startup unchanged; this never writes memory. |
+| `activeRecallWcmEnabled` | `false` | Separate opt-in for WCM recall. When both recall switches are true, non-secret bounded queries go to `~/.local/bin/wcm search` (generic assignment values are redacted); scanner-detected secret-bearing prompts do not query WCM, and secret-bearing WCM results are discarded. Up to three WCM leads are added. |
 | `memoryCharLimit` | `5000` | Max characters in MEMORY.md |
 | `userCharLimit` | `5000` | Max characters in USER.md |
 | `projectCharLimit` | `5000` | Max characters in project-scoped MEMORY.md |
