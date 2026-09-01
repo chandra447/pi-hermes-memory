@@ -41,6 +41,27 @@ describe("loadConfig", () => {
     assert.strictEqual(config.llmModelOverride, undefined);
     assert.strictEqual(config.llmThinkingOverride, undefined);
     assert.strictEqual(config.standingInstructionsEnabled, true);
+    assert.strictEqual(config.activeRecallEnabled, false);
+    assert.strictEqual(config.activeRecallWcmEnabled, false);
+  });
+
+  it("honors boolean active-recall flags and ignores non-booleans", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      activeRecallEnabled: true,
+      activeRecallWcmEnabled: true,
+    }));
+    const enabled = loadConfig(TEST_CONFIG_PATH);
+    assert.strictEqual(enabled.activeRecallEnabled, true);
+    assert.strictEqual(enabled.activeRecallWcmEnabled, true);
+
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      activeRecallEnabled: "true",
+      activeRecallWcmEnabled: 1,
+    }));
+    const ignored = loadConfig(TEST_CONFIG_PATH);
+    assert.strictEqual(ignored.activeRecallEnabled, false);
+    assert.strictEqual(ignored.activeRecallWcmEnabled, false);
   });
 
   it("honors a configured consolidationTimeoutMs, warning only when it is below the default", () => {

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Opt-in active recall**: `activeRecallEnabled` (default `false`) searches Pi local SQLite memory against the user prompt at `before_agent_start` and injects at most three source-labeled leads. `activeRecallWcmEnabled` (default `false`) is a separate opt-in for bounded WCM search. Lookup failures leave startup unchanged; this path never writes memory.
+
 - **Opt-in memory lifecycle timings**: `PI_TIMING=1` now reports startup synchronization and loading, backfill and live-index callbacks, shutdown flush/index/wait/close, and database open/integrity-check/checkpoint durations. Normal runs produce no timing output.
 
 ### Fixed

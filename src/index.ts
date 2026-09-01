@@ -28,6 +28,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
 import { DatabaseManager } from "./store/db.js";
+import { searchMemories } from "./store/sqlite-memory-store.js";
 import { indexSession, upsertSessionFileMetadata, pruneEphemeralReviewSessions } from "./store/session-indexer.js";
 import { runRecoveryMaintenance } from "./store/recovery-maintenance.js";
 import { scheduleSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-backfill.js";
@@ -54,6 +55,7 @@ import { StandingInstructions } from "./store/standing-instructions.js";
 import { STANDING_FILE } from "./constants.js";
 import { loadConfig } from "./config.js";
 import { shouldWarnAutoConsolidationFailure } from "./auto-consolidation-warning.js";
+import { recallActiveMemory, searchWcmMemories } from "./handlers/active-recall.js";
 import { detectProject, detectProjectSkills } from "./project.js";
 import { buildPromptContext } from "./prompt-context.js";
 import { migrateLegacyProjectMemoryDirs } from "./project-memory-migration.js";
@@ -246,10 +248,18 @@ export default function (pi: ExtensionAPI) {
   // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
   pi.on("before_agent_start", async (event, _ctx) => {
     const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectNameRef(), standingStore);
+    const activeRecall = await recallActiveMemory({
+      enabled: config.activeRecallEnabled === true,
+      wcmEnabled: config.activeRecallWcmEnabled === true,
+      prompt: event.prompt,
+      searchLocal: (query, limit) => searchMemories(dbManager, query, { limit }),
+      searchWcm: searchWcmMemories,
+    });
+    const appendedContext = [promptContext, activeRecall].filter(Boolean).join("\n\n");
 
-    if (promptContext) {
+    if (appendedContext) {
       return {
-        systemPrompt: event.systemPrompt + "\n\n" + promptContext,
+        systemPrompt: event.systemPrompt + "\n\n" + appendedContext,
       };
     }
   });
