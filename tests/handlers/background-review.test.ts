@@ -800,6 +800,30 @@ describe("setupBackgroundReview", () => {
     });
   });
 
+  it("does not cancel a subprocess review when the interactive turn is interrupted", async () => {
+    const pi = createMockPi();
+    let childOptions: Record<string, unknown> | undefined;
+    setup(pi, { ...defaultConfig, reviewTransport: "direct" } as MemoryConfig, {
+      runDirectReview: async () => ({ ok: false, appliedCount: 0, fallbackReason: "no_auth" }),
+      execChildPrompt: async (_pi, _prompt, _config, options) => {
+        childOptions = options;
+        return { code: 0, stdout: "Nothing to save", stderr: "" };
+      },
+    });
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    const signal = new AbortController().signal;
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(makeBranch(10), { signal });
+    }
+    await reviewSettledSignal.promise;
+
+    assert.ok(childOptions, "subprocess fallback should run");
+    assert.equal(childOptions.signal, undefined);
+  });
+
   it("surfaces one actionable diagnostic when direct and subprocess review both fail", async () => {
     const pi = createMockPi({ code: 1, stdout: "", stderr: "No API key for local-llama/local-9b" });
     setupWithDirectDeps(pi, {

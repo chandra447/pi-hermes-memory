@@ -118,12 +118,13 @@ async function runSubprocessReview(
   prompt: string,
   config: MemoryConfig,
   execChild: typeof execChildPrompt,
-  ctx: Pick<ExtensionContext, "cwd" | "model" | "signal">,
+  ctx: Pick<ExtensionContext, "cwd" | "model">,
 ): Promise<{ code: number; stdout?: string; stderr?: string }> {
+  // Reviews are deliberately detached from the interactive agent turn. Esc
+  // should stop the agent without discarding the low-priority persistence work.
   return execChild(pi, prompt, config, {
     cwd: ctx.cwd,
     model: resolveChildPiModel(ctx.model),
-    signal: ctx.signal,
     timeoutMs: 120000,
   });
 }
