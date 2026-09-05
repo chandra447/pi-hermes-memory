@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Opt-in memory lifecycle timings**: `PI_TIMING=1` now reports startup synchronization and loading, backfill and live-index callbacks, shutdown flush/index/wait/close, and database open/integrity-check/checkpoint durations. Normal runs produce no timing output.
 
+- **Opt-in SQLite session retention** ([#183](https://github.com/chandra447/pi-hermes-memory/issues/183)): new `sessionRetentionDays` setting (default `0`, disabled). When set to a positive value, sessions whose JSONL source file has not been updated within the window are pruned from SQLite at startup — rows only, the JSONL files themselves are never deleted — and both the deferred backfill and `/memory-index-sessions` skip files outside the window, so pruned sessions stay pruned instead of being re-indexed on every startup. With the default `0`, pruning is fully disabled and startup keeps the legacy count-only backfill preflight.
+
+### Changed
+
+- **Natural-language search now filters common stop words** ([#184](https://github.com/chandra447/pi-hermes-memory/pull/184)): session and memory searches drop function words (`the`, `is`, `what`, …) before FTS5 matching, improving precision for natural-language queries. Intent-bearing words (`can`, `need`, `off`, `like`, `get`, …) are deliberately kept. A query made up entirely of stop words no longer returns an empty result — it degrades to a scoped literal substring search over the original terms.
+
+### Fixed
+
+- **FTS5 index errors during markdown sync are surfaced instead of hidden** ([#184](https://github.com/chandra447/pi-hermes-memory/pull/184)): when the FTS5 search index is broken, memory writes still succeed in Markdown, but the tool result and `/memory-sync-markdown` now report the degraded search state together with the repair command instead of showing a silent zero-count success. Genuine database corruption is unaffected by the fallback and now recovers through the markdown sync path too: reconciliation runs inside `DatabaseManager.withCorruptionRecovery()`, so a corrupt `sessions.db` is quarantined, rebuilt, and the sync retried instead of failing every memory write.
+
 ### Fixed
 
 - **`memory_search` accepts `target: "project"`** ([#212](https://github.com/chandra447/pi-hermes-memory/issues/212)): the tool schema only declared `memory`/`user`/`failure` as `target` filter values, while `memory_add` writes with `target: "project"` and search results label those very entries `[target=project]` (the value `memory_replace` / `memory_remove` then require) — so filtering by the mutation target shown in the results failed schema validation ("Validation failed for tool") before the handler ever ran, and the only workaround (`project: "<name>"`) required knowing the project name up front. `target: "project"` now passes validation and resolves to `target = 'memory' AND project IS NOT NULL`, exactly the entries whose displayed mutation target is `project`; project-attributed failures remain labeled `[target=failure]` and are not matched. The injected memory-policy guidance now lists the fourth accepted value.
@@ -20,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Snapshot retention converges for dormant memory stores** ([#202](https://github.com/chandra447/pi-hermes-memory/issues/202)): retention caps for `.recovery-*` / `.retired-*` sidecar files only ran inside `saveToDisk()`, so a project store that stopped being written kept its snapshots past the count, age, and byte limits forever (one reported store held 171 recovery snapshots against a cap of 32). Each `session_start` now sweeps the global store and every discovered project store with the identical per-file policy under the same mutation lock; enumeration skips symlinks, hidden directories, and nested paths.
 
 - **Reload no longer waits for an unnecessary LLM memory flush**: Pi preserves the current session during `/reload`, but the shutdown handler ignored `event.reason` and awaited direct completion plus possible subprocess fallback after six user turns. Reload now skips both transports; quit and session-replacement reasons keep the existing flush policy.
+
+- **`memory_search` ranks by relevance instead of recency** ([#118](https://github.com/chandra447/pi-hermes-memory/pull/118)): FTS5 matches were ordered by `last_referenced DESC` alone, so a long note that mentions a query term once outranked a short memory that is entirely about it, purely because it had been touched more recently. The match now joins `memory_fts` and orders by `bm25(memory_fts)` ascending with `last_referenced DESC` as the tie-break, so the densest match wins and recency only decides between equally relevant rows. Result *sets* are unchanged; only their order is.
 
 ## [0.9.4] - 2026-08-08
 

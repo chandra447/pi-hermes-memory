@@ -179,6 +179,89 @@ describe('sqlite-memory-store', () => {
       assert.deepStrictEqual(getMemories(dbManager, { project: 'spoofed-project' }), []);
     });
 
+    it('reports a degraded result (not a swallowed success) on FTS5 index errors', () => {
+      // A genuine FTS5 search-index error must not look like a successful
+      // zero-row sync: the result carries degraded + reason so the caller can
+      // surface /memory-sync-markdown repair guidance.
+      const failingDb = {
+        prepare: (sql: string) => ({
+          get: () => undefined,
+          all: () => [],
+          run: () => {
+            throw new Error('fts5: table memory_fts is corrupted');
+          },
+        }),
+      } as never;
+      const stubDbManager = {
+        getDb: () => failingDb,
+        withCorruptionRecovery: <T>(operation: () => T): T => operation(),
+      } as unknown as DatabaseManager;
+
+      const result = reconcileMarkdownMemoryScope(
+        stubDbManager,
+        ['degraded reconcile test entry'],
+        'memory',
+        null,
+      );
+      assert.equal(result.degraded, true);
+      assert.match(result.degradedReason ?? '', /fts5/);
+      assert.equal(result.inserted, 0);
+    });
+
+    it('propagates degraded from failure scopes (first reason wins)', () => {
+      // When multiple failure scopes are degraded, the aggregate result must
+      // be degraded with the first reason (not the last) so the user sees the
+      // original failure, not a later duplicate.
+      let callCount = 0;
+      const failingDb = {
+        prepare: (sql: string) => ({
+          get: () => undefined,
+          all: () => [],
+          run: () => {
+            callCount++;
+            throw new Error(`fts5: error #${callCount}`);
+          },
+        }),
+      } as never;
+      const stubDbManager = {
+        getDb: () => failingDb,
+        withCorruptionRecovery: <T>(operation: () => T): T => operation(),
+      } as unknown as DatabaseManager;
+
+      const result = reconcileMarkdownFailureScopes(
+        stubDbManager,
+        [
+          'failure entry one — Project: project-a <!-- created=2026-01-01 -->',
+          'failure entry two — Project: project-b <!-- created=2026-01-01 -->',
+        ],
+      );
+      assert.equal(result.degraded, true);
+      assert.match(result.degradedReason ?? '', /fts5: error #1/);
+    });
+
+    it('still propagates corruption errors instead of degrading (recovery must run)', () => {
+      // Corruption signals are NOT FTS5 errors: they must escape so
+      // DatabaseManager quarantines + rebuilds, never a degraded zero-result.
+      const failingDb = {
+        prepare: () => ({
+          get: () => undefined,
+          all: () => [],
+          run: () => {
+            throw new Error('database disk image is malformed');
+          },
+        }),
+      } as never;
+      const stubDbManager = {
+        getDb: () => failingDb,
+        withCorruptionRecovery: <T>(operation: () => T): T => operation(),
+      } as unknown as DatabaseManager;
+
+      assert.throws(
+        () => reconcileMarkdownMemoryScope(stubDbManager, ['corruption test entry'], 'memory', null),
+        /malformed/,
+      );
+    });
+
     it('prunes only absent rows in the exact target and project scope', () => {
       addMemory(dbManager, 'kept global memory', 'memory', null);
       addMemory(dbManager, 'orphaned global memory', 'memory', null);
@@ -331,6 +414,18 @@ describe('sqlite-memory-store', () => {
       addMemory(dbManager, 'exact phrase memory search example');
       addMemory(dbManager, 'name: Chandrateja', 'user');
       addMemory(dbManager, 'timezone: AEST', 'user');
+    });
+
+    it('degrades an all-stop-word query to the LIKE fallback instead of []', () => {
+      // "the" is a stop word and "and"/"or" connectors, so FTS5 normalization
+      // leaves nothing to match. The query must fall through to the scoped
+      // literal fallback (which still searches the raw terms) rather than
+      // hard-return an empty result set.
+      addMemory(dbManager, 'the build passes after restart');
+
+      const results = searchMemories(dbManager, 'the and or');
+      assert.ok(results.length > 0, 'all-stop-word query must reach the LIKE fallback, not []');
+      assert.ok(results.some(r => r.content.includes('the')));
     });
 
     it('should find memories by keyword', () => {
@@ -496,6 +591,45 @@ describe('sqlite-memory-store', () => {
     it('should return empty for malformed operator queries', () => {
       const results = searchMemories(dbManager, 'AND OR NOT');
       assert.strictEqual(results.length, 0);
+    });
+
+    it('ranks a dense old match above a fresher, more diluted one (BM25 before recency)', () => {
+      addMemory(dbManager, 'deploy target is the staging cluster');
+      addMemory(
+        dbManager,
+        'unrelated retrospective notes that mention deploy once among a great many other words about hiring, budgets, roadmaps, vendor calls, office moves and quarterly planning for the staging of a conference'
+      );
+      const db = dbManager.getDb();
+      db.prepare("UPDATE memories SET last_referenced = '2025-01-01' WHERE content LIKE 'deploy target%'").run();
+      db.prepare("UPDATE memories SET last_referenced = '2026-08-30' WHERE content LIKE 'unrelated retrospective%'").run();
+
+      const results = searchMemories(dbManager, 'deploy staging');
+
+      // Both rows match; recency ordering would put the long fresh note first.
+      assert.strictEqual(results.length, 2);
+      assert.ok(results[0].content.startsWith('deploy target is the staging cluster'));
+    });
+
+    it('still broadens a two-term natural-language query through the OR fallback', () => {
+      // Neither "dark" nor "chocolate" co-occur, so the implicit-AND query
+      // misses and only the OR fallback can recover this row. The existing
+      // fallback test uses three terms; this pins the two-term case.
+      addMemory(dbManager, 'user prefers dark mode UI theme', 'user');
+
+      const results = searchMemories(dbManager, 'dark chocolate', { target: 'user' });
+
+      assert.ok(results.some((r) => r.content.includes('dark mode')));
+    });
+
+    it('recovers a natural-language query whose raw FTS5 form fails to parse', () => {
+      // "DO NOT USE FIND /" passes through as raw FTS5 syntax and throws;
+      // runSearch must catch that and let the natural-language retry run.
+      addMemory(dbManager, 'Never search whole filesystem from root. Do not run find /.', 'user');
+
+      assert.doesNotThrow(() => searchMemories(dbManager, 'DO NOT USE FIND /', { target: 'user' }));
+      const results = searchMemories(dbManager, 'DO NOT USE FIND /', { target: 'user' });
+
+      assert.ok(results.some((r) => r.content.includes('find /')));
     });
   });
 

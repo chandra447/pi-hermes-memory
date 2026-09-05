@@ -14,6 +14,8 @@ import {
 } from "../../src/handlers/review-memory-ops.js";
 import { DatabaseManager } from "../../src/store/db.js";
 import { getMemories, reconcileMarkdownMemoryScope } from "../../src/store/sqlite-memory-store.js";
+import { acquireMarkdownMutationLock } from "../../src/store/markdown-mutation-lock.js";
+import { MEMORY_FILE } from "../../src/constants.js";
 
 function mockModel(reasoning: boolean): Model<Api> {
   return {
@@ -90,6 +92,19 @@ describe("provider auth resolution", () => {
     return { usedKeys, complete };
   }
 
+  function registryWithHeaderAuth(...headers: Array<Record<string, string | null>>) {
+    let authCalls = 0;
+    return {
+      getApiKeyAndHeaders: async () => ({
+        ok: true as const,
+        headers: headers[Math.min(authCalls++, headers.length - 1)],
+      }),
+      getAll: () => [mockModel(false)],
+      getAvailable: () => [mockModel(false)],
+      get authCalls() { return authCalls; },
+    };
+  }
+
   const emptyOperations = {
     stopReason: "stop",
     content: [{ type: "text", text: JSON.stringify({ operations: [] }) }],
@@ -97,6 +112,18 @@ describe("provider auth resolution", () => {
 
   function directOptions() {
     return { userPrompt: "u", systemPrompt: "s", config: {} };
+  }
+
+  async function runReview(modelRegistry: unknown, complete: unknown) {
+    return runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry } as never,
+      null as never,
+      null,
+      directOptions(),
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
   }
 
   it("resolves credentials through the public registry API", async () => {
@@ -117,6 +144,44 @@ describe("provider auth resolution", () => {
     assert.strictEqual(registry.authCalls, 1);
     assert.deepStrictEqual(usedKeys, ["current-key"]);
   });
+
+  it("runs direct review with header-only OAuth request auth", async () => {
+    const headers = {
+      Authorization: "Bearer kimi-oauth-token",
+      "User-Agent": "pi-coding-agent",
+      "X-Drop": null,
+    };
+    const usedHeaders: Array<Record<string, string | null> | undefined> = [];
+    const complete = async (_model: unknown, _request: unknown, options: { headers?: Record<string, string | null> }) => {
+      usedHeaders.push(options.headers);
+      return emptyOperations;
+    };
+
+    const result = await runReview(registryWithHeaderAuth(headers), complete);
+
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(usedHeaders, [headers]);
+  });
+
+  for (const { name, headers } of [
+    { name: "empty headers", headers: {} },
+    { name: "User-Agent-only headers", headers: { "User-Agent": "pi-coding-agent" } },
+    { name: "null credential headers", headers: { Authorization: null, "x-api-key": null } },
+  ]) {
+    it(`rejects ${name} as missing request authentication`, async () => {
+      let completionCalls = 0;
+      const complete = async () => {
+        completionCalls++;
+        return emptyOperations;
+      };
+
+      const result = await runReview(registryWithHeaderAuth(headers), complete);
+
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.fallbackReason, "no_auth");
+      assert.strictEqual(completionCalls, 0);
+    });
+  }
 
   it("re-resolves credentials after a provider auth rejection", async () => {
     const { modelRegistry } = registryWithAuthResponses("revoked-key", "rotated-key");
@@ -139,6 +204,35 @@ describe("provider auth resolution", () => {
     assert.deepStrictEqual(usedKeys, ["revoked-key", "rotated-key"]);
   });
 
+  it("re-resolves rotated header-only OAuth credentials after rejection", async () => {
+    const usedHeaders: Array<Record<string, string> | undefined> = [];
+    const complete = async (_model: unknown, _request: unknown, options: { headers?: Record<string, string> }) => {
+      usedHeaders.push(options.headers);
+      if (usedHeaders.length === 1) throw new Error("HTTP 401 Unauthorized: token expired");
+      return emptyOperations;
+    };
+    const modelRegistry = registryWithHeaderAuth(
+      { Authorization: "Bearer stale-token" },
+      { Authorization: "Bearer fresh-token" },
+    );
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry } as never,
+      null as never,
+      null,
+      directOptions(),
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(usedHeaders, [
+      { Authorization: "Bearer stale-token" },
+      { Authorization: "Bearer fresh-token" },
+    ]);
+  });
+
   it("does not retry when the refreshed key is the same one the provider rejected", async () => {
     const { modelRegistry } = registryWithAuthResponses("only-key");
     const { usedKeys, complete } = completionStub(() => new Error("HTTP 401 Unauthorized"));
@@ -156,6 +250,129 @@ describe("provider auth resolution", () => {
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.fallbackReason, "provider_error");
     assert.strictEqual(usedKeys.length, 1, "an unchanged key means a real auth problem, not a rotation race");
+  });
+
+  it("does not retry an unchanged header-only OAuth credential", async () => {
+    let completionCalls = 0;
+    const complete = async () => {
+      completionCalls++;
+      throw new Error("HTTP 401 Unauthorized");
+    };
+    const modelRegistry = registryWithHeaderAuth({ Authorization: "Bearer unchanged-token" });
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry } as never,
+      null as never,
+      null,
+      directOptions(),
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.fallbackReason, "provider_error");
+    assert.strictEqual(completionCalls, 1);
+  });
+
+  it("rotates header-only auth after an error assistant 401 response", async () => {
+    const usedHeaders: Array<Record<string, string | null> | undefined> = [];
+    const complete = async (_model: unknown, _request: unknown, options: { headers?: Record<string, string | null> }) => {
+      usedHeaders.push(options.headers);
+      if (usedHeaders.length === 1) {
+        return { stopReason: "error", errorMessage: "HTTP 401 Unauthorized: token expired" };
+      }
+      return emptyOperations;
+    };
+    const modelRegistry = registryWithHeaderAuth(
+      { Authorization: "Bearer stale-token" },
+      { Authorization: "Bearer fresh-token" },
+    );
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry } as never,
+      null as never,
+      null,
+      directOptions(),
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(usedHeaders, [
+      { Authorization: "Bearer stale-token" },
+      { Authorization: "Bearer fresh-token" },
+    ]);
+  });
+
+  it("does not retry when only the credential header name casing changed", async () => {
+    let completionCalls = 0;
+    const complete = async () => {
+      completionCalls++;
+      throw new Error("HTTP 401 Unauthorized");
+    };
+    const modelRegistry = registryWithHeaderAuth(
+      { Authorization: "Bearer same-token" },
+      { authorization: "Bearer same-token" },
+    );
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry } as never,
+      null as never,
+      null,
+      directOptions(),
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.fallbackReason, "provider_error");
+    assert.strictEqual(completionCalls, 1);
+  });
+
+  it("retries once when a duplicate-case credential header value changes", async () => {
+    const stale = { Authorization: "Bearer stale", authorization: "Bearer shared" };
+    const fresh = { Authorization: "Bearer fresh", authorization: "Bearer shared" };
+    const usedHeaders: Array<Record<string, string | null> | undefined> = [];
+    const complete = async (_model: unknown, _request: unknown, options: { headers?: Record<string, string | null> }) => {
+      usedHeaders.push(options.headers);
+      if (usedHeaders.length === 1) {
+        return { stopReason: "error", errorMessage: "HTTP 401 Unauthorized: token expired" };
+      }
+      return emptyOperations;
+    };
+    const modelRegistry = registryWithHeaderAuth(stale, fresh);
+
+    const result = await runReview(modelRegistry, complete);
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(modelRegistry.authCalls, 2);
+    assert.deepStrictEqual(usedHeaders, [stale, fresh]);
+  });
+
+  it("returns provider_error after a second auth failure without a third completion", async () => {
+    let completionCalls = 0;
+    const complete = async () => {
+      completionCalls++;
+      if (completionCalls <= 2) {
+        return { stopReason: "error", errorMessage: "HTTP 401 Unauthorized" };
+      }
+      return emptyOperations;
+    };
+    const modelRegistry = registryWithHeaderAuth(
+      { Authorization: "Bearer stale-token" },
+      { Authorization: "Bearer still-bad-token" },
+      { Authorization: "Bearer should-not-be-used" },
+    );
+
+    const result = await runReview(modelRegistry, complete);
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.fallbackReason, "provider_error");
+    assert.strictEqual(completionCalls, 2);
+    assert.strictEqual(modelRegistry.authCalls, 2);
   });
 
   it("classifies provider auth rejections without swallowing other failures", () => {
@@ -573,6 +790,160 @@ describe("applyReviewOperations", () => {
     assert.strictEqual(result.appliedCount, 0);
     assert.match(result.error ?? "", /No entry matched 'missing later entry'/);
     assert.deepStrictEqual(store.getMemoryEntries(), beforeEntries);
+  });
+
+  it("skips auth, provider, and store work when the external signal is already aborted", async () => {
+    let authCalls = 0;
+    let completeCalls = 0;
+    let mutated = false;
+    const controller = new AbortController();
+    controller.abort();
+    const store = {
+      add: async () => {
+        mutated = true;
+        return { success: true };
+      },
+    };
+    const modelRegistry = {
+      getApiKeyAndHeaders: async () => {
+        authCalls++;
+        return { ok: true as const, apiKey: "test-key" };
+      },
+      getAll: () => [mockModel(false)],
+      getAvailable: () => [mockModel(false)],
+    };
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry } as never,
+      store as never,
+      null,
+      {
+        userPrompt: "u",
+        systemPrompt: "s",
+        config: {},
+        signal: controller.signal,
+      },
+      null,
+      null,
+      {
+        completeSimple: (async () => {
+          completeCalls++;
+          return {
+            stopReason: "stop",
+            content: [{ type: "text", text: JSON.stringify({ operations: [{ action: "add", target: "memory", content: "late" }] }) }],
+          };
+        }) as never,
+      },
+    );
+
+    assert.deepStrictEqual(result, { ok: false, appliedCount: 0, fallbackReason: "aborted" });
+    assert.equal(authCalls, 0);
+    assert.equal(completeCalls, 0);
+    assert.equal(mutated, false);
+  });
+
+  it("does not apply operations when the provider ignores abort and returns success", async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+    const controller = new AbortController();
+    const modelRegistry = {
+      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test-key" }),
+      getAll: () => [mockModel(false)],
+      getAvailable: () => [mockModel(false)],
+    };
+    const complete = async () => {
+      controller.abort();
+      return {
+        stopReason: "stop",
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            operations: [{ action: "add", target: "memory", content: "should not persist after cancel" }],
+          }),
+        }],
+      };
+    };
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(false), modelRegistry } as never,
+      store,
+      null,
+      {
+        userPrompt: "u",
+        systemPrompt: "s",
+        config: {},
+        signal: controller.signal,
+      },
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    assert.deepStrictEqual(result, { ok: false, appliedCount: 0, fallbackReason: "aborted" });
+    assert.equal(store.getMemoryEntries().some((entry) => entry.includes("should not persist after cancel")), false);
+  });
+
+  it("does not write after abort while waiting for the markdown mutation lock", async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+    const controller = new AbortController();
+    const modelRegistry = {
+      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test-key" }),
+      getAll: () => [mockModel(false)],
+      getAvailable: () => [mockModel(false)],
+    };
+    const completeEntered = Promise.withResolvers<void>();
+    const continueComplete = Promise.withResolvers<void>();
+    const complete = async () => {
+      completeEntered.resolve();
+      await continueComplete.promise;
+      return {
+        stopReason: "stop",
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            operations: [{ action: "add", target: "memory", content: "late-after-shutdown" }],
+          }),
+        }],
+      };
+    };
+    const lease = await acquireMarkdownMutationLock(path.join(tmpDir, MEMORY_FILE));
+    try {
+      const completion = runDirectMemoryCompletion(
+        { model: mockModel(false), modelRegistry } as never,
+        store,
+        null,
+        {
+          userPrompt: "u",
+          systemPrompt: "s",
+          config: {},
+          signal: controller.signal,
+        },
+        null,
+        null,
+        { completeSimple: complete as never },
+      );
+      await completeEntered.promise;
+      continueComplete.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      controller.abort();
+      lease.release();
+      const result = await completion;
+      assert.deepStrictEqual(result, { ok: false, appliedCount: 0, fallbackReason: "aborted" });
+      assert.equal(store.getMemoryEntries().some((entry) => entry.includes("late-after-shutdown")), false);
+    } finally {
+      lease.release();
+    }
   });
 
   it("uses the in-lock mutation observer as the sole SQLite reconciliation path", async () => {
