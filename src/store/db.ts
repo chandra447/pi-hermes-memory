@@ -164,6 +164,7 @@ export class DatabaseManager {
   private lastRecovery: DatabaseRecoveryResult | null = null;
   private openGuard: (() => void) | null = null;
   private pendingOpenIntegrityScan: Promise<void> | null = null;
+  private quickCheckOnOpen = true;
   private activeRecoveryLease: { coordinator: AtomicLockCoordinator; key: string; token: string } | null = null;
 
   constructor(memoryDir: string, recoveryOptions: DatabaseRecoveryOptions = {}) {
@@ -180,6 +181,10 @@ export class DatabaseManager {
 
   setOpenGuard(guard: (() => void) | null): void {
     this.openGuard = guard;
+  }
+
+  setQuickCheckOnOpen(enabled: boolean): void {
+    this.quickCheckOnOpen = enabled;
   }
 
   /**
@@ -304,6 +309,7 @@ export class DatabaseManager {
    * at operation time.
    */
   private scheduleOpenIntegrityScan(db: DatabaseLike): void {
+    if (!this.quickCheckOnOpen) return;
     if (this.pendingOpenIntegrityScan) return;
     const scan = new Promise<void>((resolve) => {
       setTimeout(() => {
