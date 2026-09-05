@@ -109,6 +109,18 @@ describe("loadConfig", () => {
     assert.strictEqual(config.reviewEnabled, true);
   });
 
+  it("merges array-form override tails with explicit llmFallbackModels", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      llmModelOverride: ["p1/m1", "p2/m2"],
+      llmFallbackModels: ["p3/m3"],
+    }));
+    const config = loadConfig(TEST_CONFIG_PATH);
+    assert.strictEqual(config.llmModelOverride, "p1/m1");
+    assert.deepStrictEqual(config.llmFallbackModels, ["p2/m2", "p3/m3"]);
+  });
+
+
   it("parses sessionRetentionDays as opt-in, accepting explicit 0 to disable", () => {
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
 

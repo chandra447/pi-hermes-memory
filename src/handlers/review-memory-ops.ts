@@ -35,7 +35,7 @@ export interface DirectReviewResult {
 export interface RunDirectMemoryCompletionOptions {
   userPrompt: string;
   systemPrompt: string;
-  config: Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride">;
+  config: Pick<MemoryConfig, "llmModelOverride" | "llmFallbackModels" | "llmThinkingOverride">;
   timeoutMs?: number;
   signal?: AbortSignal;
   requireAtomicShrink?: boolean;
@@ -519,6 +519,10 @@ export async function runDirectMemoryCompletion(
   let lastResult: DirectReviewResult | undefined;
   for (let mi = 0; mi < models.length; mi++) {
     const model = models[mi]!;
+    // A caller abort (user cancel, shutdown bound) ends the whole chain: the
+    // next iteration's listener would never fire for an already-aborted
+    // signal, so continuing would burn a full timeout per remaining model.
+    if (options.signal?.aborted) return aborted();
     const auth = await resolveRequestAuth(ctx.modelRegistry, model);
     if (options.signal?.aborted) return aborted();
     if (!auth.ok || !hasRequestAuth(auth)) {
@@ -583,7 +587,11 @@ export async function runDirectMemoryCompletion(
         response = await completeOnce();
       }
 
-      if (response.stopReason === "aborted" || controller.signal.aborted || options.signal?.aborted) {
+      if (options.signal?.aborted) {
+        clearTimeout(timeout);
+        return aborted();
+      }
+      if (response.stopReason === "aborted" || controller.signal.aborted) {
         lastResult = { ok: false, appliedCount: 0, fallbackReason: "aborted" };
         if (mi < models.length - 1) { clearTimeout(timeout); continue; }
         return lastResult;
@@ -632,7 +640,11 @@ export async function runDirectMemoryCompletion(
       clearTimeout(timeout);
       return { ok: true, appliedCount: applied.appliedCount };
     } catch (err) {
-      if (controller.signal.aborted || options.signal?.aborted) {
+      if (options.signal?.aborted) {
+        clearTimeout(timeout);
+        return aborted();
+      }
+      if (controller.signal.aborted) {
         lastResult = { ok: false, appliedCount: 0, fallbackReason: "aborted" };
       } else {
         lastResult = {

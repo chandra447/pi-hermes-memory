@@ -176,7 +176,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       }
       if (isStringArray(parsed.llmFallbackModels)) {
         const cleaned = (parsed.llmFallbackModels as string[]).map((s) => s.trim()).filter(Boolean);
-        if (cleaned.length > 0) config.llmFallbackModels = [...new Set(cleaned)];
+        if (cleaned.length > 0) config.llmFallbackModels = [...new Set([...(config.llmFallbackModels ?? []), ...cleaned])];
       }
       // Backward-compat alias: llmModelFallbacks / fallbackModels
       if (isStringArray((parsed as Record<string, unknown>).llmModelFallbacks)) {
