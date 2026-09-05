@@ -40,6 +40,7 @@ import { canonicalMarkdownIdentity, withMarkdownMutationLock } from "./markdown-
 
 const MAX_EXTERNAL_WRITE_RETRIES = 2;
 const RECOVERY_ACTIVE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+const RECOVERY_SNAPSHOT_MIN_INTERVAL_MS = 60 * 60 * 1000;
 const RECOVERY_MAX_COUNT = 32;
 const RECOVERY_MAX_BYTES = 64 * 1024 * 1024;
 const RETIRED_RECOVERY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -925,6 +926,15 @@ export class MemoryStore {
           }
           throw error;
         }
+      } else if (await this.shouldReuseRecoverySnapshot(filePath)) {
+        try {
+          await fs.rename(tmpPath, filePath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            throw new ExternalMemoryWriteConflict();
+          }
+          throw error;
+        }
       } else {
         const recoveryPath = this.recoveryPathFor(filePath);
         const publishedIdentity = await this.fileIdentity(tmpPath);
@@ -1057,6 +1067,37 @@ export class MemoryStore {
       path.dirname(filePath),
       `.${path.basename(filePath)}.recovery-${Date.now()}-${randomUUID()}`,
     );
+  }
+
+  private async shouldReuseRecoverySnapshot(filePath: string): Promise<boolean> {
+    const directory = path.dirname(filePath);
+    const escapedName = path.basename(filePath).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const uuidPattern = "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+    const recoveryPattern = new RegExp(`^\\.${escapedName}\\.recovery-\\d+-${uuidPattern}$`, "i");
+    try {
+      const names = await fs.readdir(directory);
+      const mtimes = await Promise.all(
+        names
+          .filter((name) => recoveryPattern.test(name))
+          .map(async (name) => {
+            try {
+              const state = await fs.lstat(path.join(directory, name));
+              return state.isFile() ? state.mtimeMs : null;
+            } catch {
+              return null;
+            }
+          }),
+      );
+      let newestMtimeMs: number | null = null;
+      for (const mtimeMs of mtimes) {
+        if (mtimeMs !== null && (newestMtimeMs === null || mtimeMs > newestMtimeMs)) {
+          newestMtimeMs = mtimeMs;
+        }
+      }
+      return newestMtimeMs !== null && Date.now() - newestMtimeMs < RECOVERY_SNAPSHOT_MIN_INTERVAL_MS;
+    } catch {
+      return false;
+    }
   }
 
   private retiredRecoveryPathFor(filePath: string): string {
