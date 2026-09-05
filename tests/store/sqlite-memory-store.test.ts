@@ -497,6 +497,45 @@ describe('sqlite-memory-store', () => {
       const results = searchMemories(dbManager, 'AND OR NOT');
       assert.strictEqual(results.length, 0);
     });
+
+    it('ranks a dense old match above a fresher, more diluted one (BM25 before recency)', () => {
+      addMemory(dbManager, 'deploy target is the staging cluster');
+      addMemory(
+        dbManager,
+        'unrelated retrospective notes that mention deploy once among a great many other words about hiring, budgets, roadmaps, vendor calls, office moves and quarterly planning for the staging of a conference'
+      );
+      const db = dbManager.getDb();
+      db.prepare("UPDATE memories SET last_referenced = '2025-01-01' WHERE content LIKE 'deploy target%'").run();
+      db.prepare("UPDATE memories SET last_referenced = '2026-08-30' WHERE content LIKE 'unrelated retrospective%'").run();
+
+      const results = searchMemories(dbManager, 'deploy staging');
+
+      // Both rows match; recency ordering would put the long fresh note first.
+      assert.strictEqual(results.length, 2);
+      assert.ok(results[0].content.startsWith('deploy target is the staging cluster'));
+    });
+
+    it('still broadens a two-term natural-language query through the OR fallback', () => {
+      // Neither "dark" nor "chocolate" co-occur, so the implicit-AND query
+      // misses and only the OR fallback can recover this row. The existing
+      // fallback test uses three terms; this pins the two-term case.
+      addMemory(dbManager, 'user prefers dark mode UI theme', 'user');
+
+      const results = searchMemories(dbManager, 'dark chocolate', { target: 'user' });
+
+      assert.ok(results.some((r) => r.content.includes('dark mode')));
+    });
+
+    it('recovers a natural-language query whose raw FTS5 form fails to parse', () => {
+      // "DO NOT USE FIND /" passes through as raw FTS5 syntax and throws;
+      // runSearch must catch that and let the natural-language retry run.
+      addMemory(dbManager, 'Never search whole filesystem from root. Do not run find /.', 'user');
+
+      assert.doesNotThrow(() => searchMemories(dbManager, 'DO NOT USE FIND /', { target: 'user' }));
+      const results = searchMemories(dbManager, 'DO NOT USE FIND /', { target: 'user' });
+
+      assert.ok(results.some((r) => r.content.includes('find /')));
+    });
   });
 
   describe('getMemories', () => {

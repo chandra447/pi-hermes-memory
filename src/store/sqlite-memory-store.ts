@@ -22,6 +22,13 @@ const MEMORY_SELECT_COLUMNS = `
   last_referenced
 `;
 
+// The BM25-ranked search joins memory_fts, which also has a `content` column,
+// so that one query needs the same list qualified with the `memories` alias.
+const MEMORY_SELECT_COLUMNS_M = MEMORY_SELECT_COLUMNS
+  .split(',')
+  .map((column) => `m.${column.trim()}`)
+  .join(',\n        ');
+
 const FAILURE_CATEGORY_SET = new Set<MemoryCategory>([
   'failure',
   'correction',
@@ -718,7 +725,7 @@ export function searchMemories(
   const conditions: string[] = [];
   const params: unknown[] = [];
 
-  // FTS5 match via subquery with escaped query
+  // FTS5 match via JOIN with BM25 ranking
   const normalizedQuery = normalizeFts5Query(query);
   if (normalizedQuery.length === 0) {
     return [];
@@ -730,7 +737,7 @@ export function searchMemories(
     const conditions: string[] = [];
     const params: unknown[] = [];
 
-    conditions.push('m.id IN (SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?)');
+    conditions.push('memory_fts MATCH ?');
     params.push(matchQuery);
 
     if (project !== undefined) {
@@ -752,10 +759,13 @@ export function searchMemories(
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const sql = `
-      SELECT ${MEMORY_SELECT_COLUMNS}
+      SELECT
+        ${MEMORY_SELECT_COLUMNS_M},
+        bm25(memory_fts) AS rank_score
       FROM memories m
+      JOIN memory_fts ON memory_fts.rowid = m.id
       ${whereClause}
-      ORDER BY m.last_referenced DESC
+      ORDER BY rank_score ASC, m.last_referenced DESC
       LIMIT ?
     `;
 
@@ -771,6 +781,7 @@ export function searchMemories(
         corrected_to: string | null;
         created: string;
         last_referenced: string;
+        rank_score: number;
       }>;
 
       return rows.map(mapRow);

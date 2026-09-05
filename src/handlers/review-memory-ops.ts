@@ -93,7 +93,7 @@ type ReviewModelRegistry = ExtensionContext["modelRegistry"];
 /** Derived from the installed SDK so headers/baseUrl track ProviderHeaders instead of a local mirror. */
 export type ResolvedRequestAuth = Awaited<ReturnType<ReviewModelRegistry["getApiKeyAndHeaders"]>>;
 
-type DirectReviewAuth = Omit<Extract<ResolvedRequestAuth, { ok: true }>, "ok"> & { apiKey: string };
+type DirectReviewAuth = Omit<Extract<ResolvedRequestAuth, { ok: true }>, "ok">;
 
 export function buildDirectReviewCompletionOptions(
   model: Model<Api>,
@@ -142,6 +142,54 @@ const AUTH_REJECTION_PATTERN = new RegExp([
 
 export function isAuthRejection(message: string): boolean {
   return AUTH_REJECTION_PATTERN.test(message);
+}
+
+const CREDENTIAL_HEADER_NAMES = new Set(["authorization", "x-api-key", "cf-aig-authorization"]);
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasRequestAuth(auth: DirectReviewAuth): boolean {
+  if (isNonEmptyString(auth.apiKey)) return true;
+  return Object.entries(auth.headers ?? {}).some(
+    ([key, value]) => CREDENTIAL_HEADER_NAMES.has(key.toLowerCase()) && isNonEmptyString(value),
+  );
+}
+
+function sameStringRecord(
+  left: Record<string, string> | undefined,
+  right: Record<string, string> | undefined,
+): boolean {
+  const leftEntries = Object.entries(left ?? {});
+  const rightKeys = Object.keys(right ?? {});
+  return leftEntries.length === rightKeys.length
+    && leftEntries.every(([key, value]) => right?.[key] === value);
+}
+
+function headerPairs(headers: DirectReviewAuth["headers"]): Array<[string, string | null]> {
+  return Object.entries(headers ?? {}).map(([key, value]) => [key.toLowerCase(), value]);
+}
+
+function sameHeaders(
+  left: DirectReviewAuth["headers"],
+  right: DirectReviewAuth["headers"],
+): boolean {
+  const remaining = headerPairs(right);
+  const leftPairs = headerPairs(left);
+  if (leftPairs.length !== remaining.length) return false;
+  for (const [key, value] of leftPairs) {
+    const index = remaining.findIndex((pair) => pair[0] === key && pair[1] === value);
+    if (index === -1) return false;
+    remaining.splice(index, 1);
+  }
+  return true;
+}
+
+function sameRequestAuth(left: DirectReviewAuth, right: DirectReviewAuth): boolean {
+  return left.apiKey === right.apiKey
+    && sameHeaders(left.headers, right.headers)
+    && sameStringRecord(left.env, right.env);
 }
 
 /**
@@ -429,12 +477,12 @@ export async function runDirectMemoryCompletion(
 
   const auth = await resolveRequestAuth(ctx.modelRegistry, model);
   if (options.signal?.aborted) return aborted();
-  if (!auth.ok || !auth.apiKey) {
+  if (!auth.ok || !hasRequestAuth(auth)) {
     return {
       ok: false,
       appliedCount: 0,
       fallbackReason: "no_auth",
-      error: auth.ok ? `No API key for ${model.provider}` : auth.error,
+      error: auth.ok ? `No request authentication for ${model.provider}` : auth.error,
     };
   }
   let requestAuth: DirectReviewAuth = { apiKey: auth.apiKey, headers: auth.headers, env: auth.env };
@@ -457,31 +505,36 @@ export async function runDirectMemoryCompletion(
 
   const request = { systemPrompt: options.systemPrompt, messages: [userMessage] };
 
+  const completeOnce = async () => {
+    const response = await complete(
+      model,
+      request,
+      buildDirectReviewCompletionOptions(model, requestAuth, thinking, controller.signal),
+    );
+    if (response.stopReason === "error" && isAuthRejection(response.errorMessage ?? "")) {
+      throw new Error(response.errorMessage ?? "error");
+    }
+    return response;
+  };
+
   try {
     let response;
     try {
-      response = await complete(
-        model,
-        request,
-        buildDirectReviewCompletionOptions(model, requestAuth, thinking, controller.signal),
-      );
+      response = await completeOnce();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (controller.signal.aborted || !isAuthRejection(message)) throw err;
 
-      // The provider rejected the key mid-flight. A rotation tool may have
-      // re-resolve through Pi and retry once only if it returns a different
-      // key; otherwise this is a real auth problem and the subprocess
-      // fallback should handle it (#139).
+      // Thrown failures and error assistant responses share this path. API keys
+      // and OAuth headers can both rotate, so re-resolve through Pi and retry
+      // once only when the effective request auth actually changed; otherwise
+      // this is a real auth problem and the subprocess fallback should handle
+      // it (#139).
       const rotated = await resolveRequestAuth(ctx.modelRegistry, model);
-      if (!rotated.ok || !rotated.apiKey || rotated.apiKey === requestAuth.apiKey) throw err;
+      if (!rotated.ok || !hasRequestAuth(rotated) || sameRequestAuth(rotated, requestAuth)) throw err;
 
       requestAuth = { apiKey: rotated.apiKey, headers: rotated.headers, env: rotated.env };
-      response = await complete(
-        model,
-        request,
-        buildDirectReviewCompletionOptions(model, requestAuth, thinking, controller.signal),
-      );
+      response = await completeOnce();
     }
 
     if (response.stopReason === "aborted" || controller.signal.aborted || options.signal?.aborted) {
