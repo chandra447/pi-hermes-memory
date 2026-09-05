@@ -117,6 +117,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
     await removeFile(memoryPath);
     await removeFile(userPath);
     await removeFile(failurePath);
+    const artifactNames = (await fs.readdir(MEMORY_DIR))
+      .filter((name) => name.includes(".recovery-") || name.includes(".retired-") || name.includes(".conflict-"));
+    await Promise.all(artifactNames.map((name) => removeFile(path.join(MEMORY_DIR, name))));
     await new Promise((r) => setTimeout(r, 50));
   }
 
@@ -1835,6 +1838,39 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const raw = await readRaw(memoryPath);
       assert.match(raw, /retained entry/);
       assert.match(raw, /later add/);
+    });
+
+    it("reuses one recent recovery snapshot during rapid successive writes", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} recovery seed`);
+
+      for (let index = 0; index < 10; index++) {
+        await store.add("memory", `${TEST_MARKER} rapid overwrite ${index}`);
+      }
+
+      const recoveryFiles = (await fs.readdir(MEMORY_DIR))
+        .filter((name) => name.startsWith(`.${MEMORY_FILE}.recovery-`));
+      assert.ok(recoveryFiles.length <= 2);
+    });
+
+    it("takes a new recovery snapshot after the reuse interval", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} recovery seed`);
+      await store.add("memory", `${TEST_MARKER} first overwrite`);
+
+      const initialRecoveryFiles = (await fs.readdir(MEMORY_DIR))
+        .filter((name) => name.startsWith(`.${MEMORY_FILE}.recovery-`));
+      assert.equal(initialRecoveryFiles.length, 1);
+      const old = new Date(Date.now() - 60 * 60 * 1000 - 1_000);
+      await fs.utimes(path.join(MEMORY_DIR, initialRecoveryFiles[0]), old, old);
+
+      await store.add("memory", `${TEST_MARKER} overwrite after interval`);
+
+      const recoveryFiles = (await fs.readdir(MEMORY_DIR))
+        .filter((name) => name.startsWith(`.${MEMORY_FILE}.recovery-`));
+      assert.equal(recoveryFiles.length, 2);
     });
 
     it("prunes expired recovery files but retains recently active ones", async () => {
