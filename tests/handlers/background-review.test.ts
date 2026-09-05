@@ -771,7 +771,7 @@ describe("setupBackgroundReview", () => {
     assert.strictEqual(directCalls.length, 1, "direct review should be attempted first");
     assert.strictEqual(execCalls.length, 1, "subprocess should run as fallback");
   });
-  it("inherits the active session model and execution context for subprocess fallback", async () => {
+  it("inherits the active session model and cwd without coupling fallback to the agent run signal", async () => {
     const pi = createMockPi();
     setupWithDirectDeps(pi, { ok: false, appliedCount: 0, fallbackReason: "no_auth" }, {
       ...defaultConfig,
@@ -781,14 +781,15 @@ describe("setupBackgroundReview", () => {
     fireMessageEnd("user");
     fireMessageEnd("user");
     fireMessageEnd("user");
-    const signal = new AbortController().signal;
+    const controller = new AbortController();
     for (let i = 0; i < 10; i++) {
       fireTurnEnd(makeBranch(10), {
         cwd: "/tmp/local-session",
         model: { provider: "local-llama", id: "local-9b" },
-        signal,
+        signal: controller.signal,
       });
     }
+    controller.abort();
     await reviewSettledSignal.promise;
 
     assert.deepStrictEqual(logicalChildArgs(0).slice(0, 5), [
@@ -917,6 +918,161 @@ describe("setupBackgroundReview", () => {
     assert.doesNotMatch(directPrompt, /save using memory_add/i);
     assert.ok(subprocessPrompt.includes("uses pnpm"));
     assert.ok(directPrompt.includes("monorepo layout"));
+  });
+
+  it("does not forward the turn abort signal to the child review", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const childGate = Promise.withResolvers<void>();
+    const pi = createMockPi();
+    setup(pi, defaultConfig, {
+      execChildPrompt: async (_api, _prompt, _config, options) => {
+        capturedSignal = options.signal;
+        await childGate.promise;
+        return { code: 0, stdout: "Saved memory", stderr: "" };
+      },
+    });
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    const turnAbort = new AbortController();
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(makeBranch(10), { signal: turnAbort.signal });
+    }
+    await settle(5);
+
+    assert.ok(capturedSignal, "child review must receive a session signal");
+    assert.notStrictEqual(capturedSignal, turnAbort.signal);
+    turnAbort.abort();
+    await settle(5);
+    assert.equal(capturedSignal.aborted, false, "turn abort must not cancel session review");
+
+    childGate.resolve();
+    await reviewSettledSignal.promise;
+  });
+
+  it("session_shutdown aborts the child signal, waits for review, and stays silent", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const childGate = Promise.withResolvers<void>();
+    let childStarted = 0;
+    const pi = createMockPi();
+    setup(pi, defaultConfig, {
+      execChildPrompt: async (_api, _prompt, _config, options) => {
+        childStarted++;
+        capturedSignal = options.signal;
+        await childGate.promise;
+        return { code: 0, stdout: "Saved memory", stderr: "" };
+      },
+    });
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd();
+    }
+    await settle(5);
+    assert.ok(capturedSignal);
+    assert.equal(capturedSignal.aborted, false);
+
+    const shutdownHandlers = handlers["session_shutdown"];
+    assert.ok(shutdownHandlers?.length, "session_shutdown handler must be registered");
+    const first = shutdownHandlers[0]({}, makeCtx());
+    const second = shutdownHandlers[0]({}, makeCtx());
+    assert.strictEqual(first, second, "repeated session_shutdown must reuse the same promise");
+    assert.equal(capturedSignal.aborted, true);
+
+    let shutdownDone = false;
+    void Promise.resolve(first).then(() => {
+      shutdownDone = true;
+    });
+    await settle(5);
+    assert.equal(shutdownDone, false, "shutdown must wait for the in-flight review");
+
+    childGate.resolve();
+    await first;
+    await reviewSettledSignal.promise;
+    assert.equal(shutdownDone, true);
+    assert.equal(
+      notifyCalls.some((n) => n.msg.includes("Memory auto-reviewed") || n.level === "warning"),
+      false,
+      "cancelled review must not notify success or failure",
+    );
+
+    resetReviewSettledSignal();
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd();
+    }
+    await settle(10);
+    assert.equal(childStarted, 1, "cancelled session must not start another review");
+  });
+
+  it("does not start fallback after session cancellation", async () => {
+    const directGate = Promise.withResolvers<void>();
+    let childStarted = 0;
+    const pi = createMockPi();
+    setup(pi, { ...defaultConfig, reviewTransport: "direct" } as MemoryConfig, {
+      runDirectReview: async () => {
+        await directGate.promise;
+        return { ok: true, appliedCount: 1 };
+      },
+      execChildPrompt: async () => {
+        childStarted++;
+        return { code: 0, stdout: "Saved memory", stderr: "" };
+      },
+    });
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd();
+    }
+    await settle(5);
+
+    const shutdown = handlers["session_shutdown"][0]({}, makeCtx());
+    directGate.resolve();
+    await shutdown;
+    await reviewSettledSignal.promise;
+
+    assert.equal(childStarted, 0, "cancelled session must not start subprocess fallback");
+    assert.equal(
+      notifyCalls.some((n) => n.msg.includes("Memory auto-reviewed") || n.level === "warning"),
+      false,
+    );
+  });
+
+  it("session_shutdown resolves after the grace bound when review ignores abort", async () => {
+    let started = false;
+    const pi = createMockPi();
+    setup(pi, { ...defaultConfig, reviewTransport: "direct" } as MemoryConfig, {
+      shutdownGraceMs: 20,
+      runDirectReview: async () => {
+        started = true;
+        await new Promise(() => {});
+        return { ok: true, appliedCount: 1 };
+      },
+    });
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd();
+    }
+    await settle(5);
+    assert.equal(started, true);
+
+    const first = handlers["session_shutdown"][0]({}, makeCtx());
+    const second = handlers["session_shutdown"][0]({}, makeCtx());
+    assert.strictEqual(first, second);
+    const startedAt = Date.now();
+    await first;
+    assert.ok(Date.now() - startedAt < 200, "shutdown must not wait for a review that ignores abort");
+    assert.equal(
+      notifyCalls.some((n) => n.msg.includes("Memory auto-reviewed") || n.level === "warning"),
+      false,
+    );
   });
 
   it("falls back gracefully if getBranch throws", async () => {

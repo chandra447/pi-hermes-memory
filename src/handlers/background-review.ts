@@ -31,9 +31,11 @@ export interface BackgroundReviewDeps {
   runDirectReview?: typeof runDirectMemoryCompletion;
   execChildPrompt?: typeof execChildPrompt;
   /** Test-only hook: called once runReview() has fully settled (after the
-   * fire-and-forget review work completes and reviewInProgress resets),
+   * fire-and-forget review work completes and activeReview clears),
    * since production callers never await runReview() directly. */
   onReviewSettled?: () => void;
+  /** Test-only override for session_shutdown's wait bound. */
+  shutdownGraceMs?: number;
 }
 
 export interface ReviewPromptInput {
@@ -113,17 +115,40 @@ function diagnosticDetail(value: unknown): string {
   return detail.replace(/\s+/g, " ").slice(0, 300);
 }
 
+/** Shutdown wait only. Review still uses its own 120s timeout; 1s covers abort
+ * listener + cancel-file write without hanging Pi's awaited session_shutdown. */
+const SESSION_REVIEW_SHUTDOWN_GRACE_MS = 1000;
+
+function awaitUpTo(promise: Promise<void>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    promise.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    );
+  });
+}
+
 async function runSubprocessReview(
   pi: ExtensionAPI,
   prompt: string,
   config: MemoryConfig,
   execChild: typeof execChildPrompt,
-  ctx: Pick<ExtensionContext, "cwd" | "model" | "signal">,
+  ctx: Pick<ExtensionContext, "cwd" | "model">,
+  signal: AbortSignal,
 ): Promise<{ code: number; stdout?: string; stderr?: string }> {
   return execChild(pi, prompt, config, {
     cwd: ctx.cwd,
     model: resolveChildPiModel(ctx.model),
-    signal: ctx.signal,
+    // Session-scoped signal only. The turn signal belongs to the interactive
+    // agent run; forwarding it cancels unrelated review on a later user abort.
+    signal,
     timeoutMs: 120000,
   });
 }
@@ -140,11 +165,27 @@ export function setupBackgroundReview(
   const runDirectReview = options.deps?.runDirectReview ?? runDirectMemoryCompletion;
   const execChild = options.deps?.execChildPrompt ?? execChildPrompt;
   const onReviewSettled = options.deps?.onReviewSettled;
+  const shutdownGraceMs = options.deps?.shutdownGraceMs ?? SESSION_REVIEW_SHUTDOWN_GRACE_MS;
 
   let turnsSinceReview = 0;
   let toolCallsSinceReview = 0;
   let userTurnCount = 0;
-  let reviewInProgress = false;
+  let activeReview: Promise<void> | undefined;
+  const sessionAbort = new AbortController();
+  let shutdownPromise: Promise<void> | undefined;
+
+  const sessionCancelled = () => sessionAbort.signal.aborted;
+
+  const shutdownReview = (): Promise<void> => {
+    shutdownPromise ??= (async () => {
+      sessionAbort.abort();
+      const inFlight = activeReview;
+      if (inFlight) await awaitUpTo(inFlight, shutdownGraceMs);
+    })();
+    return shutdownPromise;
+  };
+
+  pi.on("session_shutdown", () => shutdownReview());
 
   pi.on("message_end", async (event, _ctx) => {
     if (event.message.role === "user") {
@@ -156,7 +197,8 @@ export function setupBackgroundReview(
     turnsSinceReview++;
 
     if (!config.reviewEnabled) return;
-    if (reviewInProgress) return;
+    if (sessionCancelled()) return;
+    if (activeReview) return;
 
     try {
       const msg = event.message;
@@ -179,49 +221,52 @@ export function setupBackgroundReview(
 
     if (!turnThresholdMet && !toolCallThresholdMet) return;
     if (userTurnCount < 3) return;
+    if (sessionCancelled()) return;
 
     turnsSinceReview = 0;
     toolCallsSinceReview = 0;
-    reviewInProgress = true;
-
-    let allParts: string[] = [];
-    try {
-      const entries = ctx.sessionManager.getBranch();
-      allParts = collectMessageParts(entries);
-    } catch {
-      reviewInProgress = false;
-      return;
-    }
-    if (allParts.length < 4) {
-      reviewInProgress = false;
-      return;
-    }
-
-    const parts = applyRecentMessageLimit(allParts, config.reviewRecentMessages);
-    const activeProjectStore = resolveProjectStore(projectStore);
-    const activeProjectName = resolveProjectName(projectName);
-    const promptInput: ReviewPromptInput = {
-      parts,
-      currentMemory: store.getMemoryEntries().join("\n§\n"),
-      currentUser: store.getUserEntries().join("\n§\n"),
-      currentProject: activeProjectStore ? activeProjectStore.getMemoryEntries().join("\n§\n") : null,
-    };
-
-    const subprocessPrompt = buildSubprocessReviewPrompt(promptInput);
-    const directPrompt = buildDirectReviewUserPrompt(promptInput);
-
-    const finishReview = () => {
-      reviewInProgress = false;
-      onReviewSettled?.();
-    };
 
     const notifyIfSaved = (saved: boolean) => {
+      if (sessionCancelled()) return;
       if (saved) {
         ctx.ui.notify("💾 Memory auto-reviewed and updated", "info");
       }
     };
 
+    const notifyTransportFailure = (directFailure: string, subprocessDetail: unknown) => {
+      if (sessionCancelled()) return;
+      ctx.ui.notify(
+        `Memory auto-review failed in both transports. Direct: ${diagnosticDetail(directFailure)}. `
+          + `Subprocess: ${diagnosticDetail(subprocessDetail)}. Check the active model/provider or set llmModelOverride.`,
+        "warning",
+      );
+    };
+
     const runReview = async (): Promise<void> => {
+      if (sessionCancelled()) return;
+
+      let allParts: string[] = [];
+      try {
+        const entries = ctx.sessionManager.getBranch();
+        allParts = collectMessageParts(entries);
+      } catch {
+        return;
+      }
+      if (allParts.length < 4) return;
+      if (sessionCancelled()) return;
+
+      const parts = applyRecentMessageLimit(allParts, config.reviewRecentMessages);
+      const activeProjectStore = resolveProjectStore(projectStore);
+      const activeProjectName = resolveProjectName(projectName);
+      const promptInput: ReviewPromptInput = {
+        parts,
+        currentMemory: store.getMemoryEntries().join("\n§\n"),
+        currentUser: store.getUserEntries().join("\n§\n"),
+        currentProject: activeProjectStore ? activeProjectStore.getMemoryEntries().join("\n§\n") : null,
+      };
+      const subprocessPrompt = buildSubprocessReviewPrompt(promptInput);
+      const directPrompt = buildDirectReviewUserPrompt(promptInput);
+
       let directFailure: string | undefined;
 
       if (usesDirectTransport(config)) {
@@ -239,17 +284,20 @@ export function setupBackgroundReview(
               ].join("\n"),
               config,
               timeoutMs: 120000,
+              signal: sessionAbort.signal,
             },
             dbManager,
             activeProjectName,
           );
+
+          if (sessionCancelled()) return;
 
           if (directResult.ok) {
             notifyIfSaved(shouldNotifyDirect(directResult));
             return;
           }
 
-          if (directResult.fallbackReason === "empty") {
+          if (directResult.fallbackReason === "empty" || directResult.fallbackReason === "aborted") {
             return;
           }
           directFailure = [
@@ -257,41 +305,51 @@ export function setupBackgroundReview(
             directResult.error,
           ].filter(Boolean).join(": ");
         } catch (error) {
+          if (sessionCancelled()) return;
           directFailure = diagnosticDetail(error);
         }
       }
 
+      if (sessionCancelled()) return;
+
       let subprocessResult: { code: number; stdout?: string; stderr?: string };
       try {
-        subprocessResult = await runSubprocessReview(pi, subprocessPrompt, config, execChild, ctx);
+        subprocessResult = await runSubprocessReview(
+          pi,
+          subprocessPrompt,
+          config,
+          execChild,
+          ctx,
+          sessionAbort.signal,
+        );
       } catch (error) {
         if (directFailure) {
-          ctx.ui.notify(
-            `Memory auto-review failed in both transports. Direct: ${diagnosticDetail(directFailure)}. `
-              + `Subprocess: ${diagnosticDetail(error)}. Check the active model/provider or set llmModelOverride.`,
-            "warning",
-          );
+          notifyTransportFailure(directFailure, error);
         }
         return;
       }
+
+      if (sessionCancelled()) return;
 
       if (subprocessResult.code === 0) {
         notifyIfSaved(shouldNotifySubprocess(subprocessResult.stdout));
       } else if (directFailure) {
         const subprocessDetail = subprocessResult.stderr?.trim() || subprocessResult.stdout?.trim()
           || `exit code ${subprocessResult.code}`;
-        ctx.ui.notify(
-          `Memory auto-review failed in both transports. Direct: ${diagnosticDetail(directFailure)}. `
-            + `Subprocess: ${diagnosticDetail(subprocessDetail)}. Check the active model/provider or set llmModelOverride.`,
-          "warning",
-        );
+        notifyTransportFailure(directFailure, subprocessDetail);
       }
     };
 
-    runReview()
+    // Occupy the in-flight slot before runReview's synchronous preamble so a
+    // nested turn_end cannot start a second review.
+    activeReview = Promise.resolve()
+      .then(() => runReview())
       .catch(() => {
         // Best-effort only; transport failures are diagnosed after both paths settle.
       })
-      .finally(finishReview);
+      .finally(() => {
+        activeReview = undefined;
+        onReviewSettled?.();
+      });
   });
 }

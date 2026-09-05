@@ -22,6 +22,7 @@ export interface ApplyReviewOperationsResult {
   appliedCount: number;
   skippedCount: number;
   error?: string;
+  aborted?: boolean;
 }
 
 export interface DirectReviewResult {
@@ -294,6 +295,7 @@ export async function applyReviewOperations(
   options: {
     requireAtomicShrink?: boolean;
     expectedTarget?: ReviewMemoryOperation["target"];
+    signal?: AbortSignal;
   } = {},
 ): Promise<ApplyReviewOperationsResult> {
   if (options.requireAtomicShrink) {
@@ -328,6 +330,9 @@ export async function applyReviewOperations(
       };
     }
 
+    if (options.signal?.aborted) {
+      return { appliedCount: 0, skippedCount: operations.length, aborted: true };
+    }
     const activeStore = target === "project" ? projectStore! : store;
     const memoryTarget = target === "project" ? "memory" : target;
     const mutationOperations = operations.map((operation) => ({
@@ -338,7 +343,13 @@ export async function applyReviewOperations(
       failureReason: operation.failure_reason,
       project: target === "failure" ? projectName ?? undefined : undefined,
     }));
-    const result = await activeStore.applyMutationPlan(memoryTarget, mutationOperations, { requireShrink: true });
+    const result = await activeStore.applyMutationPlan(memoryTarget, mutationOperations, {
+      requireShrink: true,
+      signal: options.signal,
+    });
+    if (options.signal?.aborted && !result.success) {
+      return { appliedCount: 0, skippedCount: operations.length, aborted: true };
+    }
     return result.success
       ? { appliedCount: operations.length, skippedCount: 0 }
       : {
@@ -351,7 +362,12 @@ export async function applyReviewOperations(
   let appliedCount = 0;
   let skippedCount = 0;
 
-  for (const op of operations) {
+  for (let i = 0; i < operations.length; i++) {
+    if (options.signal?.aborted) {
+      skippedCount += operations.length - i;
+      return { appliedCount, skippedCount, aborted: appliedCount === 0 };
+    }
+    const op = operations[i];
     if (op.target === "project" && !projectStore) {
       skippedCount++;
       continue;
@@ -374,6 +390,7 @@ export async function applyReviewOperations(
             category,
             failureReason: op.failure_reason,
             project: projectName ?? undefined,
+            signal: options.signal,
           });
           if (result.success) {
             appliedCount++;
@@ -381,7 +398,7 @@ export async function applyReviewOperations(
             skippedCount++;
           }
         } else {
-          result = await activeStore.add(memoryTarget, op.content);
+          result = await activeStore.add(memoryTarget, op.content, options.signal);
           if (result.success) {
             appliedCount++;
           } else {
@@ -395,7 +412,7 @@ export async function applyReviewOperations(
           skippedCount++;
           continue;
         }
-        result = await activeStore.replace(memoryTarget, op.old_text, op.content);
+        result = await activeStore.replace(memoryTarget, op.old_text, op.content, options.signal);
         if (result.success) {
           appliedCount++;
         } else {
@@ -408,7 +425,7 @@ export async function applyReviewOperations(
           skippedCount++;
           continue;
         }
-        result = await activeStore.remove(memoryTarget, op.old_text);
+        result = await activeStore.remove(memoryTarget, op.old_text, options.signal);
         if (result.success) {
           appliedCount++;
         } else {
@@ -421,6 +438,10 @@ export async function applyReviewOperations(
         continue;
     }
 
+    if (options.signal?.aborted) {
+      skippedCount += operations.length - i - 1;
+      return { appliedCount, skippedCount, aborted: appliedCount === 0 };
+    }
   }
 
   return { appliedCount, skippedCount };
@@ -446,12 +467,16 @@ export async function runDirectMemoryCompletion(
   deps: { completeSimple?: typeof completeSimple } = {},
 ): Promise<DirectReviewResult> {
   const complete = deps.completeSimple ?? completeSimple;
+  const aborted = (): DirectReviewResult => ({ ok: false, appliedCount: 0, fallbackReason: "aborted" });
+  if (options.signal?.aborted) return aborted();
+
   const model = resolveReviewModel(ctx.model, ctx.modelRegistry, options.config);
   if (!model) {
     return { ok: false, appliedCount: 0, fallbackReason: "no_model" };
   }
 
   const auth = await resolveRequestAuth(ctx.modelRegistry, model);
+  if (options.signal?.aborted) return aborted();
   if (!auth.ok || !hasRequestAuth(auth)) {
     return {
       ok: false,
@@ -465,8 +490,10 @@ export async function runDirectMemoryCompletion(
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? 120000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const onExternalAbort = () => controller.abort();
   if (options.signal) {
-    options.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    options.signal.addEventListener("abort", onExternalAbort, { once: true });
+    if (options.signal.aborted) controller.abort();
   }
 
   const thinking = effectiveThinkingOverride(options.config);
@@ -510,8 +537,8 @@ export async function runDirectMemoryCompletion(
       response = await completeOnce();
     }
 
-    if (response.stopReason === "aborted") {
-      return { ok: false, appliedCount: 0, fallbackReason: "aborted" };
+    if (response.stopReason === "aborted" || controller.signal.aborted || options.signal?.aborted) {
+      return aborted();
     }
 
     const text = responseText(response.content);
@@ -521,6 +548,9 @@ export async function runDirectMemoryCompletion(
     }
     if (operations.length === 0) {
       return { ok: true, appliedCount: 0, fallbackReason: "empty" };
+    }
+    if (controller.signal.aborted || options.signal?.aborted) {
+      return aborted();
     }
 
     const applied = await applyReviewOperations(
@@ -532,8 +562,12 @@ export async function runDirectMemoryCompletion(
       {
         requireAtomicShrink: options.requireAtomicShrink,
         expectedTarget: options.expectedTarget,
+        signal: options.signal,
       },
     );
+    if (applied.aborted && applied.appliedCount === 0) {
+      return aborted();
+    }
     if (applied.error) {
       return {
         ok: false,
@@ -544,8 +578,8 @@ export async function runDirectMemoryCompletion(
     }
     return { ok: true, appliedCount: applied.appliedCount };
   } catch (err) {
-    if (controller.signal.aborted) {
-      return { ok: false, appliedCount: 0, fallbackReason: "aborted" };
+    if (controller.signal.aborted || options.signal?.aborted) {
+      return aborted();
     }
     return {
       ok: false,
@@ -555,5 +589,6 @@ export async function runDirectMemoryCompletion(
     };
   } finally {
     clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", onExternalAbort);
   }
 }
