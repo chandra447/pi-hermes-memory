@@ -184,6 +184,48 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.ok(result.error!.includes("chars"));
     });
 
+    it("bypasses the Markdown cap for memory, user, failure, and project stores in policy-only mode", async () => {
+      const config = makeConfig({
+        memoryMode: "policy-only",
+        memoryCharLimit: 1,
+        userCharLimit: 1,
+        projectCharLimit: 1,
+        memoryOverflowStrategy: "auto-consolidate",
+        autoConsolidate: true,
+      });
+      const store = new MemoryStore(config);
+      const projectStore = new MemoryStore({
+        ...config,
+        memoryDir: path.join(MEMORY_DIR, "project"),
+      });
+      let consolidatorCalls = 0;
+      const consolidator = async () => {
+        consolidatorCalls++;
+        return { consolidated: true };
+      };
+      store.setConsolidator(consolidator);
+      projectStore.setConsolidator(consolidator);
+      await store.loadFromDisk();
+      await projectStore.loadFromDisk();
+
+      const results = await Promise.all([
+        store.add("memory", `${TEST_MARKER} policy-only memory ${"x".repeat(100)}`),
+        store.add("user", `${TEST_MARKER} policy-only user ${"x".repeat(100)}`),
+        store.addFailure(`${TEST_MARKER} policy-only failure ${"x".repeat(100)}`, { category: "failure" }),
+        projectStore.add("memory", `${TEST_MARKER} policy-only project ${"x".repeat(100)}`),
+      ]);
+
+      for (const result of results) {
+        assert.equal(result.success, true, result.error);
+      }
+      assert.equal(consolidatorCalls, 0);
+      assert.equal(store.getRawEntriesForSync("memory").length, 1);
+      assert.equal(store.getRawEntriesForSync("user").length, 1);
+      assert.equal(store.getRawEntriesForSync("failure").length, 1);
+      assert.equal(projectStore.getRawEntriesForSync("memory").length, 1);
+    });
+
+
     it("rejects without consolidation when memoryOverflowStrategy is reject", async () => {
       let consolidatorCalled = false;
       const store = new MemoryStore(makeConfig({
@@ -603,6 +645,45 @@ describe("MemoryStore", { concurrency: 1 }, () => {
   // ─── replace() tests ───
 
   describe("replace()", () => {
+    it("bypasses the Markdown cap for replacements in policy-only mode", async () => {
+      const config = makeConfig({
+        memoryMode: "policy-only",
+        memoryCharLimit: 1,
+        userCharLimit: 1,
+        projectCharLimit: 1,
+      });
+      const store = new MemoryStore(config);
+      const projectStore = new MemoryStore({
+        ...config,
+        memoryDir: path.join(MEMORY_DIR, "project-replace"),
+      });
+      let consolidatorCalls = 0;
+      const consolidator = async () => {
+        consolidatorCalls++;
+        return { consolidated: true };
+      };
+      store.setConsolidator(consolidator);
+      projectStore.setConsolidator(consolidator);
+      await store.loadFromDisk();
+      await projectStore.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} replace memory seed`);
+      await store.add("user", `${TEST_MARKER} replace user seed`);
+      await store.addFailure(`${TEST_MARKER} replace failure seed`, { category: "failure" });
+      await projectStore.add("memory", `${TEST_MARKER} replace project seed`);
+
+      const replacement = `${TEST_MARKER} ${"x".repeat(100)}`;
+      const results = await Promise.all([
+        store.replace("memory", "replace memory seed", replacement),
+        store.replace("user", "replace user seed", replacement),
+        store.replace("failure", "replace failure seed", replacement),
+        projectStore.replace("memory", "replace project seed", replacement),
+      ]);
+
+      for (const result of results) {
+        assert.equal(result.success, true, result.error);
+      }
+      assert.equal(consolidatorCalls, 0);
+    });
     it("updates entry in file", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
@@ -1317,6 +1398,52 @@ describe("MemoryStore", { concurrency: 1 }, () => {
         assert.match(result.error ?? "", /did not shrink/);
         assert.equal(await readRaw(memoryPath), beforeDisk);
       }
+    });
+    it("bypasses the Markdown cap for batch mutations in policy-only mode", async () => {
+      const config = makeConfig({
+        memoryMode: "policy-only",
+        memoryCharLimit: 1,
+        userCharLimit: 1,
+        projectCharLimit: 1,
+      });
+      const store = new MemoryStore(config);
+      const projectStore = new MemoryStore({
+        ...config,
+        memoryDir: path.join(MEMORY_DIR, "project-batch"),
+      });
+      let consolidatorCalls = 0;
+      const consolidator = async () => {
+        consolidatorCalls++;
+        return { consolidated: true };
+      };
+      store.setConsolidator(consolidator);
+      projectStore.setConsolidator(consolidator);
+      await store.loadFromDisk();
+      await projectStore.loadFromDisk();
+
+      const results = await Promise.all([
+        store.applyMutationPlan("memory", [
+          { action: "add", content: `${TEST_MARKER} batch memory ${"x".repeat(100)}` },
+          { action: "add", content: `${TEST_MARKER} batch memory second ${"x".repeat(100)}` },
+        ]),
+        store.applyMutationPlan("user", [
+          { action: "add", content: `${TEST_MARKER} batch user ${"x".repeat(100)}` },
+          { action: "add", content: `${TEST_MARKER} batch user second ${"x".repeat(100)}` },
+        ]),
+        store.applyMutationPlan("failure", [
+          { action: "add", content: `${TEST_MARKER} batch failure ${"x".repeat(100)}`, category: "failure" },
+          { action: "add", content: `${TEST_MARKER} batch failure second ${"x".repeat(100)}`, category: "failure" },
+        ]),
+        projectStore.applyMutationPlan("memory", [
+          { action: "add", content: `${TEST_MARKER} batch project ${"x".repeat(100)}` },
+          { action: "add", content: `${TEST_MARKER} batch project second ${"x".repeat(100)}` },
+        ]),
+      ]);
+
+      for (const result of results) {
+        assert.equal(result.success, true, result.error);
+      }
+      assert.equal(consolidatorCalls, 0);
     });
   });
 

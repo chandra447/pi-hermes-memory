@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **FTS5 index errors during markdown sync are surfaced instead of hidden** ([#184](https://github.com/chandra447/pi-hermes-memory/pull/184)): when the FTS5 search index is broken, memory writes still succeed in Markdown, but the tool result and `/memory-sync-markdown` now report the degraded search state together with the repair command instead of showing a silent zero-count success. Genuine database corruption is unaffected by the fallback and now recovers through the markdown sync path too: reconciliation runs inside `DatabaseManager.withCorruptionRecovery()`, so a corrupt `sessions.db` is quarantined, rebuilt, and the sync retried instead of failing every memory write.
+- **Policy-only memory writes bypass the Markdown character cap** ([#218](https://github.com/chandra447/pi-hermes-memory/issues/218)): SQLite is the query authority in policy-only mode, so adds, replacements, and atomic mutation plans can exceed the Markdown export limit without triggering automatic consolidation. Legacy-inject mode keeps its existing caps, grace windows, auto-consolidation, failure limits, and FIFO eviction.
 
 - **SQLite open integrity scans can be disabled** ([#194](https://github.com/chandra447/pi-hermes-memory/issues/194)): set `quickCheckOnOpen` to `false` to skip the asynchronous startup `PRAGMA quick_check`; operation-time corruption recovery remains enabled.
 

@@ -61,11 +61,11 @@ No manual action is needed. Launch Pi once after upgrade to let migration/normal
 | 📚 **Procedural Skills** | The agent saves *how* it solved problems as reusable docs |
 | ⚡ **Background Learning** | Every 10 turns (or 15 tool calls) the agent reviews and saves |
 | 🔧 **Correction Detection** | When you correct the agent, it saves immediately |
-| 🔄 **Auto-Consolidation** | When memory hits capacity, auto-merges instead of erroring |
+| 🔄 **Auto-Consolidation** | When legacy-inject memory hits capacity, auto-merges instead of erroring |
 | 🛡️ **Secret Scanning** | API keys, tokens, SSH keys blocked from persistence |
 | 📊 **Memory Aging** | Entries carry timestamps — consolidation knows what's stale |
 | 🏗️ **Two-Tier Memory** | Global + per-project memory, both searchable |
-| 💾 **Extended Store** | Unlimited searchable memories beyond core 5,000-char limit |
+| 💾 **Extended Store** | Policy-only memories remain searchable in SQLite beyond the Markdown export cap |
 | 🎓 **Onboarding** | `/memory-interview` pre-fills your profile on first session |
 
 ## How It Works
@@ -379,14 +379,14 @@ When you correct the agent, it saves immediately — no waiting for the backgrou
 
 ### Auto-Consolidation
 
-When memory, user profile, or failure memory hits its character limit, the extension automatically consolidates instead of returning an error:
+In `legacy-inject` mode, when memory, user profile, or failure memory hits its character limit, the extension automatically consolidates instead of returning an error:
 
 1. Spawns a one-shot `pi.exec()` process with a consolidation prompt
-2. The child agent merges related entries, removes outdated ones, keeps the most important facts
-3. Parent reloads from disk and retries the original save
-4. If consolidation fails, falls back to the original error
+2. The child agent merges related entries, removes outdated ones, and keeps the most important facts
+3. The parent reloads from disk and retries the original save
+4. If consolidation fails, the original error returns
 
-You can also trigger this manually with `/memory-consolidate`.
+In `policy-only` mode, SQLite is the query authority, so adds, replacements, and atomic mutation plans can exceed the Markdown export cap without automatic consolidation. You can still trigger consolidation manually with `/memory-consolidate`.
 
 ### Tool-Call-Aware Review
 
@@ -528,9 +528,9 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `memoryPolicyStyle` | `full` | Policy text used in `policy-only` mode: `full` preserves the default v0.7 policy; `compact` uses shorter built-in guidance; `custom` uses `memoryPolicyCustomText`; `none` injects no policy text |
 | `memoryPolicyCustomText` | unset | Custom policy text used when `memoryPolicyStyle` is `custom`; blank or missing text falls back to `compact` |
 | `standingInstructionsEnabled` | `true` | Inject `STANDING.md` (pinned via `/memory-pin`) into every session, in every memory mode |
-| `memoryCharLimit` | `5000` | Max characters in MEMORY.md |
-| `userCharLimit` | `5000` | Max characters in USER.md |
-| `projectCharLimit` | `5000` | Max characters in project-scoped MEMORY.md |
+| `memoryCharLimit` | `5000` | Max characters in MEMORY.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
+| `userCharLimit` | `5000` | Max characters in USER.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
+| `projectCharLimit` | `5000` | Max characters in project-scoped MEMORY.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
 | `memoryDir` | `~/.pi/agent/pi-hermes-memory` | Custom directory for extension storage files |
 | `projectsMemoryDir` | `projects-memory` | Subdirectory under `~/.pi/agent/` for project-scoped memory |
 | `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.pi/agent/sessions/` |
@@ -544,7 +544,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `reviewRecentMessages` | `0` | Recent messages included in background review (`0` = all) |
 | `reviewEnabled` | `true` | Enable/disable background learning loop |
 | `reviewTransport` | `direct` | LLM transport for background review, session flush, correction save, and manual consolidation: `direct` uses in-process `completeSimple()` with subprocess fallback; `subprocess` forces legacy `pi -p` only |
-| `memoryOverflowStrategy` | `auto-consolidate` | Behavior when MEMORY.md, USER.md, failures.md, or project-scoped memory reaches its character limit: `auto-consolidate` runs the existing consolidation flow; `reject` returns an error; `fifo-evict` rotates older entries in file order until the new entry fits |
+| `memoryOverflowStrategy` | `auto-consolidate` | Legacy-inject behavior when a Markdown memory file reaches its character limit: `auto-consolidate` runs the existing consolidation flow; `reject` returns an error; `fifo-evict` rotates older entries in file order until the new entry fits |
 | `autoConsolidate` | `true` | Legacy alias for `memoryOverflowStrategy` when `memoryOverflowStrategy` is not set (`true` = `auto-consolidate`, `false` = `reject`) |
 | `consolidationTimeoutMs` | `180000` | Maximum time in milliseconds for a consolidation run (auto and `/memory-consolidate` alike). Configured values are used verbatim; a consolidation pays child-process boot plus a full LLM turn, so values below the default are frequently killed mid-run and log a warning at startup |
 | `overflowGraceMs` | `180000` | Wall-clock grace period after a memory overflow before automatic consolidation is retried; this gives the active agent time to consolidate manually. Set to `0` to disable the grace period |
@@ -619,7 +619,7 @@ The `sessions.db` SQLite database stores session history and extended memory ent
 - **Background review cost**: Each review cycle costs one full LLM API call via a child `pi -p` process. Correction detection and explicit skill saves can add additional calls when the agent decides they are worth it.
 - **Session search requires indexing**: Past sessions must be indexed before they're searchable. Run `/memory-index-sessions` to bulk-import, or let the extension auto-index on session shutdown.
 - **Older Markdown memories may need backfill**: If you saved memories before the SQLite mirror existed or search looks stale, run `/memory-sync-markdown`.
-- **Core memory limits still apply**: SQLite search mirroring does not bypass the 5,000-char core Markdown limit. If consolidation cannot free space, the write fails instead of becoming SQLite-only memory invisibly.
+- **Core memory limits apply in `legacy-inject` mode**: policy-only writes can exceed the Markdown export cap because SQLite is the query authority, while manual `/memory-consolidate` remains available.
 - **System prompts are invisible**: Pi's TUI does not display the system prompt. Use `/memory-preview-context` to inspect whether policy-only or legacy memory injection is active.
 - **Project skill visibility depends on Pi discovery cycles**: project skills are exposed through `resources_discover` using the active project's `skills/` path. If a moved or newly created project skill doesn't show up immediately in a running session, trigger a reload/new session so Pi refreshes discovered resources.
 - **Project move requires active project context**: in `/memory-skills`, the `p` hotkey is disabled when Pi is not currently in a detected project directory.
