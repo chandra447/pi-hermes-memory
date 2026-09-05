@@ -121,6 +121,7 @@ export default function (pi: ExtensionAPI) {
     migrationSentinelPath: path.join(globalDir, ".skills-migrated-to-extension-storage"),
   });
   const dbManager = new DatabaseManager(globalDir);
+  dbManager.setQuickCheckOnOpen(config.quickCheckOnOpen ?? true);
   let databaseMigrationPending = shouldMigrateExtensionRoot
     && isDatabaseMigrationPending(legacyGlobalDir, globalDir);
   if (databaseMigrationPending) {

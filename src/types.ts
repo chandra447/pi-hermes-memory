@@ -52,6 +52,8 @@ export interface MemoryConfig {
   projectsMemoryDir?: string;
   /** Session search configuration. Default: { variant: "legacy" } */
   sessionSearch?: SessionSearchConfig;
+  /** Run a full SQLite quick_check asynchronously after opening. Default: true */
+  quickCheckOnOpen?: boolean;
   /** Override model used for child pi -p subprocess LLM calls. Default: unset */
   llmModelOverride?: string;
   /** Fallback model chain tried in order when the primary review model fails (rate limit, 401/403, 404, 500/503, invalid response). Default: unset */

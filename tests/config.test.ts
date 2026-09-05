@@ -44,6 +44,7 @@ describe("loadConfig", () => {
     // Retention is disabled by default so existing history is never silently
     // deleted; a positive value opts in, 0/omitted disables.
     assert.strictEqual(config.sessionRetentionDays, 0);
+    assert.strictEqual(config.quickCheckOnOpen, true);
   });
 
   it("honors a configured consolidationTimeoutMs, warning only when it is below the default", () => {
@@ -88,6 +89,7 @@ describe("loadConfig", () => {
       llmModelOverride: " openrouter/deepseek/deepseek-v4-flash ",
       llmThinkingOverride: "minimal",
       autoConsolidationWarnOnFailure: false,
+      quickCheckOnOpen: false,
     }));
     const config = loadConfig(TEST_CONFIG_PATH);
     assert.strictEqual(config.memoryMode, "legacy-inject");
@@ -104,9 +106,16 @@ describe("loadConfig", () => {
     assert.strictEqual(config.projectsMemoryDir, "my-memory");
     assert.strictEqual(config.llmModelOverride, "openrouter/deepseek/deepseek-v4-flash");
     assert.strictEqual(config.llmThinkingOverride, "minimal");
+    assert.strictEqual(config.quickCheckOnOpen, false);
     // Unset values use defaults
     assert.strictEqual(config.userCharLimit, 5000);
     assert.strictEqual(config.reviewEnabled, true);
+  });
+
+  it("only accepts boolean quickCheckOnOpen overrides", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ quickCheckOnOpen: "false" }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).quickCheckOnOpen, true);
   });
 
   it("merges array-form override tails with explicit llmFallbackModels", () => {

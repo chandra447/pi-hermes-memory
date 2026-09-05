@@ -905,6 +905,35 @@ describe('DatabaseManager', () => {
       assert.ok(fs.readdirSync(tmpDir).some((name) => name.startsWith('sessions.db.corrupt-')), 'corrupt DB should be quarantined');
     });
 
+    it('skips the startup integrity scan when disabled while preserving normal reads and writes', async () => {
+      const db = dbManager.getDb();
+      db.prepare(`
+        INSERT INTO sessions (id, project, cwd, started_at)
+        VALUES (?, ?, ?, ?)
+      `).run('skip-scan-session', 'skip-scan-project', '/work/skip-scan', '2026-05-03T00:00:00Z');
+      db.prepare(`
+        INSERT INTO messages (id, session_id, role, content, timestamp)
+        VALUES (?, ?, ?, ?, ?)
+      `).run('skip-scan-message', 'skip-scan-session', 'user', 'readable message', '2026-05-03T00:00:00Z');
+      dbManager.close();
+
+      corruptRecoverableIndexPage(path.join(tmpDir, 'sessions.db'), 'idx_messages_timestamp');
+
+      dbManager = new DatabaseManager(tmpDir);
+      dbManager.setQuickCheckOnOpen(false);
+      const reopenedDb = dbManager.getDb();
+      await dbManager.waitForStartupIntegrityScan();
+
+      assert.strictEqual(dbManager.getLastRecovery(), null);
+      const sessionCount = reopenedDb.prepare('SELECT COUNT(*) AS count FROM sessions').get();
+      assert.strictEqual(sessionCount.count, 1);
+      reopenedDb.prepare(`
+        INSERT INTO sessions (id, project, cwd, started_at)
+        VALUES (?, ?, ?, ?)
+      `).run('skip-scan-session-2', 'skip-scan-project', '/work/skip-scan', '2026-05-03T00:01:00Z');
+      assert.strictEqual(reopenedDb.prepare('SELECT COUNT(*) AS count FROM sessions').get().count, 2);
+    });
+
     it('quarantines unrecoverable files and recreates an empty database', () => {
       dbManager.close();
       const dbPath = path.join(tmpDir, 'sessions.db');
