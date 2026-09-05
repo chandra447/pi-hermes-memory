@@ -496,6 +496,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "projectsMemoryDir": "projects-memory",
   "sessionSearch": { "variant": "legacy" },
   "sessionRetentionDays": 0,
+  "sessionIndexExclude": [],
   "quickCheckOnOpen": true,
   "llmModelOverride": "openrouter/deepseek/deepseek-v4-flash",
   "llmThinkingOverride": "off",
@@ -535,6 +536,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `projectsMemoryDir` | `projects-memory` | Subdirectory under `~/.pi/agent/` for project-scoped memory |
 | `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.pi/agent/sessions/` |
 | `sessionRetentionDays` | `0` | Opt-in SQLite session retention, in days. `0` (default) disables pruning entirely and keeps the legacy count-only backfill preflight. When positive, sessions whose JSONL source file was last modified longer ago than the window are pruned from SQLite at startup — **rows only; the JSONL files in `~/.pi/agent/sessions/` are never deleted** — and both the deferred backfill and `/memory-index-sessions` skip files outside the window, so pruned sessions stay pruned instead of being re-indexed |
+| `sessionIndexExclude` | `[]` | First-level directory names under the sessions root to exclude from session indexing (exact names or `*` globs). The sessions directory is a shared namespace — extensions may store non-session JSONL artifacts there. Non-session files are already skipped by content sniffing (first line must be a `{"type":"session",...}` header) and no longer surface as backfill errors; use this setting to also skip whole directories regardless of content, e.g. `["subagent-artifacts"]` |
 | `quickCheckOnOpen` | `true` | Run a full SQLite integrity check asynchronously after opening the database; set to `false` to skip the startup scan (operation-time recovery remains enabled) |
 | `llmModelOverride` | unset | Optional model override for background review (direct and subprocess), correction save, session flush, and consolidation |
 | `llmThinkingOverride` | unset | Optional thinking override for those LLM calls; valid values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. If `llmModelOverride` is set and this is omitted, review/child calls default to `off` |

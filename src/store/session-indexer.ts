@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { DEFAULT_MAX_MESSAGE_CONTENT_LENGTH } from '../constants.js';
 import { DatabaseManager } from './db.js';
-import { parseSessionFile, getSessionFiles, type ParsedSession } from './session-parser.js';
+import { parseSessionFile, getSessionFiles, isSessionFile, type ParsedSession } from './session-parser.js';
 
 export const LAST_SESSION_BACKFILL_KEY = 'last_session_backfill';
 export const SESSION_BACKFILL_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -27,6 +27,12 @@ export interface BulkIndexResult {
   reachedLimit?: boolean;
   /** Session files skipped because their mtime is outside the retention window. */
   expiredSkipped?: number;
+  /**
+   * JSONL files skipped because their first line is not a `{"type":"session"}`
+   * header (see isSessionFile). Non-session extension artifacts living in the
+   * shared sessions directory land here instead of surfacing as parse errors.
+   */
+  nonSessionSkipped?: number;
 }
 
 interface SessionFileMetadata {
@@ -47,6 +53,12 @@ export interface IncrementalIndexOptions {
    * startup. Omit/0 to index every file (backwards-compatible default).
    */
   retentionCutoffMs?: number;
+  /**
+   * First-level directory names (exact or `*` globs) under the sessions root
+   * to skip entirely, from the `sessionIndexExclude` config. Applies only to
+   * the all-projects scan; an explicit projectDir is never filtered.
+   */
+  excludeDirs?: string[];
 }
 
 /**
@@ -340,6 +352,14 @@ function emptyBulkIndexResult(): BulkIndexResult {
 }
 
 function indexSessionFile(dbManager: DatabaseManager, file: string, result: BulkIndexResult): void {
+  if (!isSessionFile(file)) {
+    // Not a session JSONL (extension artifact in the shared sessions dir):
+    // skip silently — this is expected content, not an indexing failure, and
+    // not even a "processed" candidate file.
+    result.nonSessionSkipped = (result.nonSessionSkipped ?? 0) + 1;
+    return;
+  }
+
   result.sessionsProcessed++;
 
   const session = parseSessionFile(file);
@@ -376,8 +396,9 @@ export function indexAllSessions(
   sessionsDir: string,
   projectDir?: string,
   retentionCutoffMs = 0,
+  excludeDirs: string[] = [],
 ): BulkIndexResult {
-  const files = getSessionFiles(sessionsDir, projectDir);
+  const files = getSessionFiles(sessionsDir, projectDir, excludeDirs);
   const result = emptyBulkIndexResult();
   let expiredSkipped = 0;
 
@@ -419,7 +440,7 @@ export function indexChangedSessions(
   sessionsDir: string,
   options: IncrementalIndexOptions = {},
 ): BulkIndexResult {
-  const files = getSessionFiles(sessionsDir, options.projectDir);
+  const files = getSessionFiles(sessionsDir, options.projectDir, options.excludeDirs);
   const maxFilesToIndex = options.maxFilesToIndex ?? 50;
   const result = emptyBulkIndexResult();
 
@@ -432,6 +453,12 @@ export function indexChangedSessions(
   const changed: SessionFileMetadata[] = [];
   for (const file of files) {
     try {
+      if (!isSessionFile(file)) {
+        // Extension artifacts in the shared sessions dir: never queued, never
+        // counted against the per-startup cap, never surfaced as errors.
+        result.nonSessionSkipped = (result.nonSessionSkipped ?? 0) + 1;
+        continue;
+      }
       const metadata = getSessionFileMetadata(file);
       if (!isWithinRetention(metadata.mtimeMs, options.retentionCutoffMs)) {
         // Outside the retained window (e.g. pruned by pruneOldSessions):

@@ -170,7 +170,59 @@ export function parseSessionFile(filePath: string): ParsedSession | null {
  * @param projectDir — Optional: specific project directory name (e.g., "--Users-...--")
  * @returns Array of file paths
  */
-export function getSessionFiles(sessionsDir: string, projectDir?: string): string[] {
+/**
+ * Cheap content sniff: does this file look like a Pi session JSONL?
+ *
+ * The format contract (see Pi docs/session-format.md) requires the first line
+ * to be a `{"type":"session",...}` header entry. The sessions directory is a
+ * shared namespace — extensions (e.g. pi-subagents' `subagent-artifacts/`)
+ * drop non-session JSONL artifacts there, and indexing them used to surface a
+ * "Failed to parse" error per file on every startup backfill. Sniffing the
+ * first line (bounded 4 KB read, never the whole file) lets callers skip such
+ * artifacts silently.
+ *
+ * Unreadable files return true so the existing parse path reports them as
+ * real errors instead of hiding genuinely broken session files.
+ */
+export function isSessionFile(filePath: string): boolean {
+  const SNIFF_BYTES = 4096;
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(SNIFF_BYTES);
+    const bytesRead = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0);
+    if (bytesRead === 0) return false;
+    const firstLine = buf.subarray(0, bytesRead).toString('utf-8').split('\n', 1)[0].trim();
+    if (!firstLine) return false;
+    try {
+      const entry = JSON.parse(firstLine);
+      return entry !== null && typeof entry === 'object' && (entry as { type?: unknown }).type === 'session';
+    } catch {
+      return false;
+    }
+  } catch {
+    return true;
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+}
+
+/** Match a first-level directory name against exact names or `*` globs. */
+function matchesExcludePattern(name: string, patterns: string[]): boolean {
+  return patterns.some((pattern) => {
+    if (!pattern.includes('*')) return pattern === name;
+    const escaped = pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+    return new RegExp(`^${escaped}$`).test(name);
+  });
+}
+
+export function getSessionFiles(
+  sessionsDir: string,
+  projectDir?: string,
+  excludeDirs: string[] = [],
+): string[] {
   if (projectDir) {
     const dir = path.join(sessionsDir, projectDir);
     if (!fs.existsSync(dir)) return [];
@@ -185,6 +237,10 @@ export function getSessionFiles(sessionsDir: string, projectDir?: string): strin
   for (const entry of fs.readdirSync(sessionsDir)) {
     const entryPath = path.join(sessionsDir, entry);
     const stat = fs.statSync(entryPath);
+    if (stat.isDirectory() && matchesExcludePattern(entry, excludeDirs)) {
+      // User-configured exclusion (sessionIndexExclude): skip the whole dir.
+      continue;
+    }
     if (stat.isDirectory()) {
       // Scan .jsonl files inside project subdirectories
       for (const f of fs.readdirSync(entryPath)) {

@@ -41,7 +41,7 @@ export function registerIndexSessionsCommand(pi: ExtensionAPI, config: MemoryCon
         try {
           // Retention is honored here too: a manual reindex must not re-add the
           // expired sessions the auto pruning just deleted.
-          const result = indexAllSessions(dbManager, SESSIONS_DIR, undefined, retentionCutoffMs(config.sessionRetentionDays));
+          const result = indexAllSessions(dbManager, SESSIONS_DIR, undefined, retentionCutoffMs(config.sessionRetentionDays), config.sessionIndexExclude);
           const stats = getSessionStats(dbManager);
 
           let output = `\n✅ Session indexing complete!\n\n`;
