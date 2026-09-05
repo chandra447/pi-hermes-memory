@@ -16,6 +16,7 @@ describe("loadConfig", () => {
   it("returns defaults when no config file exists", () => {
     const config = loadConfig(TEST_CONFIG_PATH);
     assert.strictEqual(config.memoryMode, "policy-only");
+    assert.strictEqual(config.lazyInitialization, false);
     assert.strictEqual(config.memoryPolicyStyle, "full");
     assert.strictEqual(config.memoryPolicyCustomText, undefined);
     assert.strictEqual(config.memoryCharLimit, 5000);
@@ -110,6 +111,13 @@ describe("loadConfig", () => {
     // Unset values use defaults
     assert.strictEqual(config.userCharLimit, 5000);
     assert.strictEqual(config.reviewEnabled, true);
+  });
+
+  it("only accepts boolean lazyInitialization overrides", () => {
+    for (const value of [true, false, "true", 1, null]) {
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ lazyInitialization: value }));
+      assert.strictEqual(loadConfig(TEST_CONFIG_PATH).lazyInitialization, value === true);
+    }
   });
 
   it("only accepts boolean quickCheckOnOpen overrides", () => {

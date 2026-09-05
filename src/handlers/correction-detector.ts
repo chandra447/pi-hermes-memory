@@ -22,6 +22,7 @@ import {
   ENTRY_DELIMITER,
 } from "../constants.js";
 import type { MemoryConfig } from "../types.js";
+import type { EnsureMemoryReady } from "../memory-initialization.js";
 import { getMessageText } from "../types.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
@@ -129,7 +130,7 @@ export function setupCorrectionDetector(
   config: MemoryConfig,
   dbManager: DatabaseManager | null = null,
   projectName: ProjectNameRef = null,
-  deps: { runDirectMemoryCompletion?: typeof runDirectMemoryCompletion } = {},
+  deps: { runDirectMemoryCompletion?: typeof runDirectMemoryCompletion; ensureMemoryReady?: EnsureMemoryReady } = {},
 ): void {
   if (!config.correctionDetection) return;
 
@@ -164,6 +165,7 @@ export function setupCorrectionDetector(
     correctionInProgress = true;
 
     try {
+      await deps.ensureMemoryReady?.(ctx);
       // Build conversation snapshot
       const entries = ctx.sessionManager.getBranch();
       const parts: string[] = [];

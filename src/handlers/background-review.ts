@@ -16,12 +16,14 @@ import {
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import type { MemoryConfig } from "../types.js";
+import type { EnsureMemoryReady } from "../memory-initialization.js";
 import { applyRecentMessageLimit, collectMessageParts } from "./message-parts.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
 import { runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult } from "./review-memory-ops.js";
 
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 export interface BackgroundReviewOptions {
+  ensureMemoryReady?: EnsureMemoryReady;
   dbManager?: DatabaseManager | null;
   projectName?: ProjectNameRef;
   deps?: BackgroundReviewDeps;
@@ -253,6 +255,7 @@ export function setupBackgroundReview(
         return;
       }
       if (allParts.length < 4) return;
+      await options.ensureMemoryReady?.(ctx);
       if (sessionCancelled()) return;
 
       const parts = applyRecentMessageLimit(allParts, config.reviewRecentMessages);

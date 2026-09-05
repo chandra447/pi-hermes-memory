@@ -41,6 +41,7 @@ function isThinkingLevel(value: unknown): value is ThinkingLevel {
 }
 
 const DEFAULT_CONFIG: MemoryConfig = {
+  lazyInitialization: false,
   memoryMode: "policy-only",
   memoryPolicyStyle: "full",
   memoryCharLimit: DEFAULT_MEMORY_CHAR_LIMIT,
@@ -91,6 +92,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       );
       let hasLegacyAutoConsolidate = false;
       let hasMemoryOverflowStrategy = false;
+      if (typeof parsed.lazyInitialization === "boolean") config.lazyInitialization = parsed.lazyInitialization;
       if (parsed.memoryMode === "policy-only" || parsed.memoryMode === "legacy-inject") config.memoryMode = parsed.memoryMode;
       if (
         parsed.memoryPolicyStyle === "full" ||

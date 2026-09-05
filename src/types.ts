@@ -18,6 +18,8 @@ export interface SessionSearchConfig {
 }
 
 export interface MemoryConfig {
+  /** Defer policy-only memory initialization until first use. Default: false */
+  lazyInitialization?: boolean;
   /** Prompt memory mode. Default: policy-only */
   memoryMode: "policy-only" | "legacy-inject";
   /** Policy prompt style used when memoryMode is policy-only. Default: full */

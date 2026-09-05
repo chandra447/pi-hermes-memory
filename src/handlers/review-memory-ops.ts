@@ -3,7 +3,7 @@
  */
 
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { completeSimple, type Message, type SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
+import type { completeSimple, Message, SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import type { DatabaseManager } from "../store/db.js";
@@ -504,7 +504,6 @@ export async function runDirectMemoryCompletion(
   projectName?: string | null,
   deps: { completeSimple?: typeof completeSimple } = {},
 ): Promise<DirectReviewResult> {
-  const complete = deps.completeSimple ?? completeSimple;
   const aborted = (): DirectReviewResult => ({ ok: false, appliedCount: 0, fallbackReason: "aborted" });
   if (options.signal?.aborted) return aborted();
 
@@ -556,6 +555,8 @@ export async function runDirectMemoryCompletion(
     const request = { systemPrompt: options.systemPrompt, messages: [userMessage] };
 
     const completeOnce = async () => {
+      const complete = deps.completeSimple ?? (await import("@earendil-works/pi-ai/compat")).completeSimple;
+      if (controller.signal.aborted) throw new Error("Memory completion aborted");
       const response = await complete(
         model,
         request,

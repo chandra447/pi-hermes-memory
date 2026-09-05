@@ -18,6 +18,7 @@ import {
   FLUSH_PROMPT,
 } from "../constants.js";
 import type { MemoryConfig } from "../types.js";
+import type { EnsureMemoryReady } from "../memory-initialization.js";
 import { measureLifecycle } from "../lifecycle-timing.js";
 import { collectMessageParts } from "./message-parts.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
@@ -61,7 +62,7 @@ export function setupSessionFlush(
   config: MemoryConfig,
   dbManager: DatabaseManager | null = null,
   projectName: ProjectNameRef = null,
-  deps: { runDirectMemoryCompletion?: typeof runDirectMemoryCompletion } = {},
+  deps: { runDirectMemoryCompletion?: typeof runDirectMemoryCompletion; ensureMemoryReady?: EnsureMemoryReady } = {},
 ): void {
   let userTurnCount = 0;
   const runDirect = deps.runDirectMemoryCompletion ?? runDirectMemoryCompletion;
@@ -86,6 +87,11 @@ export function setupSessionFlush(
     }
 
     const parts = collectMessageParts(entries, config.flushRecentMessages);
+    try {
+      await deps.ensureMemoryReady?.(ctx);
+    } catch {
+      return; // Do not flush against an unloaded or partially migrated store.
+    }
     const activeProjectStore = resolveProjectStore(projectStore);
     const activeProjectName = resolveProjectName(projectName);
 
