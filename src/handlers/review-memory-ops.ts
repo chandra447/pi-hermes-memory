@@ -49,7 +49,7 @@ export function usesDirectTransport(config: Pick<MemoryConfig, "reviewTransport"
   return (config.reviewTransport ?? "direct") === "direct";
 }
 
-type ReviewLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride">;
+type ReviewLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmFallbackModels" | "llmThinkingOverride">;
 
 function findExactModelReferenceMatch(modelReference: string, availableModels: Model<Api>[]): Model<Api> | undefined {
   const trimmedReference = modelReference.trim();
@@ -82,6 +82,22 @@ function findExactModelReferenceMatch(modelReference: string, availableModels: M
 function normalizedModelOverride(config: ReviewLlmConfig): string | undefined {
   const trimmed = config.llmModelOverride?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function collectFallbackOverrides(config: ReviewLlmConfig): string[] {
+  const out: string[] = [];
+  for (const raw of config.llmFallbackModels ?? []) {
+    const t = raw.trim();
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+function allModelOverrides(config: ReviewLlmConfig): string[] {
+  const primary = normalizedModelOverride(config);
+  const fallbacks = collectFallbackOverrides(config);
+  const chain = primary ? [primary, ...fallbacks] : fallbacks;
+  return [...new Set(chain)];
 }
 
 function effectiveThinkingOverride(config: ReviewLlmConfig): ThinkingLevel | undefined {
@@ -124,6 +140,28 @@ export function resolveReviewModel(
     if (matched) return matched;
   }
   return ctxModel;
+}
+
+export function resolveReviewModels(
+  ctxModel: Model<Api> | undefined,
+  modelRegistry: ReviewModelRegistry,
+  config: ReviewLlmConfig,
+): Model<Api>[] {
+  const chain = allModelOverrides(config);
+  if (chain.length === 0) return ctxModel ? [ctxModel] : [];
+  const all = modelRegistry.getAll();
+  const resolved: Model<Api>[] = [];
+  for (const ref of chain) {
+    const m = findExactModelReferenceMatch(ref, all);
+    if (m) resolved.push(m);
+  }
+  // If none of the chain resolved, fall back to active model so we still try something
+  if (resolved.length === 0 && ctxModel) resolved.push(ctxModel);
+  return resolved;
+}
+
+export function getReviewModelChain(config: ReviewLlmConfig): string[] {
+  return allModelOverrides(config);
 }
 
 /**
@@ -470,125 +508,146 @@ export async function runDirectMemoryCompletion(
   const aborted = (): DirectReviewResult => ({ ok: false, appliedCount: 0, fallbackReason: "aborted" });
   if (options.signal?.aborted) return aborted();
 
-  const model = resolveReviewModel(ctx.model, ctx.modelRegistry, options.config);
-  if (!model) {
+  const models = resolveReviewModels(ctx.model, ctx.modelRegistry, options.config);
+  if (models.length === 0) {
     return { ok: false, appliedCount: 0, fallbackReason: "no_model" };
   }
 
-  const auth = await resolveRequestAuth(ctx.modelRegistry, model);
-  if (options.signal?.aborted) return aborted();
-  if (!auth.ok || !hasRequestAuth(auth)) {
-    return {
-      ok: false,
-      appliedCount: 0,
-      fallbackReason: "no_auth",
-      error: auth.ok ? `No request authentication for ${model.provider}` : auth.error,
-    };
-  }
-  let requestAuth: DirectReviewAuth = { apiKey: auth.apiKey, headers: auth.headers, env: auth.env };
-
-  const controller = new AbortController();
-  const timeoutMs = options.timeoutMs ?? 120000;
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const onExternalAbort = () => controller.abort();
-  if (options.signal) {
-    options.signal.addEventListener("abort", onExternalAbort, { once: true });
-    if (options.signal.aborted) controller.abort();
-  }
-
-  const thinking = effectiveThinkingOverride(options.config);
-  const userMessage: Message = {
-    role: "user",
-    content: [{ type: "text", text: options.userPrompt }],
-    timestamp: Date.now(),
-  };
-
-  const request = { systemPrompt: options.systemPrompt, messages: [userMessage] };
-
-  const completeOnce = async () => {
-    const response = await complete(
-      model,
-      request,
-      buildDirectReviewCompletionOptions(model, requestAuth, thinking, controller.signal),
-    );
-    if (response.stopReason === "error" && isAuthRejection(response.errorMessage ?? "")) {
-      throw new Error(response.errorMessage ?? "error");
-    }
-    return response;
-  };
-
-  try {
-    let response;
-    try {
-      response = await completeOnce();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (controller.signal.aborted || !isAuthRejection(message)) throw err;
-
-      // Thrown failures and error assistant responses share this path. API keys
-      // and OAuth headers can both rotate, so re-resolve through Pi and retry
-      // once only when the effective request auth actually changed; otherwise
-      // this is a real auth problem and the subprocess fallback should handle
-      // it (#139).
-      const rotated = await resolveRequestAuth(ctx.modelRegistry, model);
-      if (!rotated.ok || !hasRequestAuth(rotated) || sameRequestAuth(rotated, requestAuth)) throw err;
-
-      requestAuth = { apiKey: rotated.apiKey, headers: rotated.headers, env: rotated.env };
-      response = await completeOnce();
-    }
-
-    if (response.stopReason === "aborted" || controller.signal.aborted || options.signal?.aborted) {
-      return aborted();
-    }
-
-    const text = responseText(response.content);
-    const operations = parseReviewOperations(text);
-    if (operations === null) {
-      return { ok: false, appliedCount: 0, fallbackReason: "parse_error" };
-    }
-    if (operations.length === 0) {
-      return { ok: true, appliedCount: 0, fallbackReason: "empty" };
-    }
-    if (controller.signal.aborted || options.signal?.aborted) {
-      return aborted();
-    }
-
-    const applied = await applyReviewOperations(
-      store,
-      projectStore,
-      operations,
-      dbManager,
-      projectName,
-      {
-        requireAtomicShrink: options.requireAtomicShrink,
-        expectedTarget: options.expectedTarget,
-        signal: options.signal,
-      },
-    );
-    if (applied.aborted && applied.appliedCount === 0) {
-      return aborted();
-    }
-    if (applied.error) {
-      return {
+  // Try each model in chain: primary + llmFallbackModels. Only retry on
+  // provider/auth/transport failures; parse errors are prompt-specific so we
+  // still try the next model as it may have better instruction following.
+  let lastResult: DirectReviewResult | undefined;
+  for (let mi = 0; mi < models.length; mi++) {
+    const model = models[mi]!;
+    const auth = await resolveRequestAuth(ctx.modelRegistry, model);
+    if (options.signal?.aborted) return aborted();
+    if (!auth.ok || !hasRequestAuth(auth)) {
+      lastResult = {
         ok: false,
         appliedCount: 0,
-        fallbackReason: "provider_error",
-        error: applied.error,
+        fallbackReason: "no_auth",
+        error: auth.ok ? `No request authentication for ${model.provider}` : auth.error,
       };
+      if (mi < models.length - 1) continue;
+      return lastResult;
     }
-    return { ok: true, appliedCount: applied.appliedCount };
-  } catch (err) {
-    if (controller.signal.aborted || options.signal?.aborted) {
-      return aborted();
+    let requestAuth: DirectReviewAuth = { apiKey: auth.apiKey, headers: auth.headers, env: auth.env };
+
+    const controller = new AbortController();
+    const timeoutMs = options.timeoutMs ?? 120000;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const onExternalAbort = () => controller.abort();
+    if (options.signal) {
+      options.signal.addEventListener("abort", onExternalAbort, { once: true });
+      if (options.signal.aborted) controller.abort();
     }
-    return {
-      ok: false,
-      appliedCount: 0,
-      fallbackReason: "provider_error",
-      error: err instanceof Error ? err.message : String(err),
+
+    const thinking = effectiveThinkingOverride(options.config);
+    const userMessage: Message = {
+      role: "user",
+      content: [{ type: "text", text: options.userPrompt }],
+      timestamp: Date.now(),
     };
-  } finally {
-    clearTimeout(timeout);
-    options.signal?.removeEventListener("abort", onExternalAbort);
+
+    const request = { systemPrompt: options.systemPrompt, messages: [userMessage] };
+
+    const completeOnce = async () => {
+      const response = await complete(
+        model,
+        request,
+        buildDirectReviewCompletionOptions(model, requestAuth, thinking, controller.signal),
+      );
+      if (response.stopReason === "error" && isAuthRejection(response.errorMessage ?? "")) {
+        throw new Error(response.errorMessage ?? "error");
+      }
+      return response;
+    };
+
+    try {
+      let response;
+      try {
+        response = await completeOnce();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (controller.signal.aborted || !isAuthRejection(message)) throw err;
+
+        // Thrown failures and error assistant responses share this path. API keys
+        // and OAuth headers can both rotate, so re-resolve through Pi and retry
+        // once only when the effective request auth actually changed; otherwise
+        // this is a real auth problem and the subprocess fallback should handle
+        // it (#139).
+        const rotated = await resolveRequestAuth(ctx.modelRegistry, model);
+        if (!rotated.ok || !hasRequestAuth(rotated) || sameRequestAuth(rotated, requestAuth)) throw err;
+
+        requestAuth = { apiKey: rotated.apiKey, headers: rotated.headers, env: rotated.env };
+        response = await completeOnce();
+      }
+
+      if (response.stopReason === "aborted" || controller.signal.aborted || options.signal?.aborted) {
+        lastResult = { ok: false, appliedCount: 0, fallbackReason: "aborted" };
+        if (mi < models.length - 1) { clearTimeout(timeout); continue; }
+        return lastResult;
+      }
+
+      const text = responseText(response.content);
+      const operations = parseReviewOperations(text);
+      if (operations === null) {
+        lastResult = { ok: false, appliedCount: 0, fallbackReason: "parse_error" };
+        if (mi < models.length - 1) { clearTimeout(timeout); continue; }
+        return lastResult;
+      }
+      if (operations.length === 0) {
+        clearTimeout(timeout);
+        return { ok: true, appliedCount: 0, fallbackReason: "empty" };
+      }
+      if (controller.signal.aborted || options.signal?.aborted) {
+        return aborted();
+      }
+
+      const applied = await applyReviewOperations(
+        store,
+        projectStore,
+        operations,
+        dbManager,
+        projectName,
+        {
+          requireAtomicShrink: options.requireAtomicShrink,
+          expectedTarget: options.expectedTarget,
+          signal: options.signal,
+        },
+      );
+      if (applied.aborted && applied.appliedCount === 0) {
+        return aborted();
+      }
+      if (applied.error) {
+        lastResult = {
+          ok: false,
+          appliedCount: 0,
+          fallbackReason: "provider_error",
+          error: applied.error,
+        };
+        if (mi < models.length - 1) { clearTimeout(timeout); continue; }
+        return lastResult;
+      }
+      clearTimeout(timeout);
+      return { ok: true, appliedCount: applied.appliedCount };
+    } catch (err) {
+      if (controller.signal.aborted || options.signal?.aborted) {
+        lastResult = { ok: false, appliedCount: 0, fallbackReason: "aborted" };
+      } else {
+        lastResult = {
+          ok: false,
+          appliedCount: 0,
+          fallbackReason: "provider_error",
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+      if (mi < models.length - 1) { clearTimeout(timeout); continue; }
+      return lastResult!;
+    } finally {
+      clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", onExternalAbort);
+    }
   }
+  return lastResult ?? { ok: false, appliedCount: 0, fallbackReason: "provider_error", error: "All fallback models failed" };
 }
