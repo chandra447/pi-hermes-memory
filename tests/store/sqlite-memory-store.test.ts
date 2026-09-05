@@ -179,6 +179,89 @@ describe('sqlite-memory-store', () => {
       assert.deepStrictEqual(getMemories(dbManager, { project: 'spoofed-project' }), []);
     });
 
+    it('reports a degraded result (not a swallowed success) on FTS5 index errors', () => {
+      // A genuine FTS5 search-index error must not look like a successful
+      // zero-row sync: the result carries degraded + reason so the caller can
+      // surface /memory-sync-markdown repair guidance.
+      const failingDb = {
+        prepare: (sql: string) => ({
+          get: () => undefined,
+          all: () => [],
+          run: () => {
+            throw new Error('fts5: table memory_fts is corrupted');
+          },
+        }),
+      } as never;
+      const stubDbManager = {
+        getDb: () => failingDb,
+        withCorruptionRecovery: <T>(operation: () => T): T => operation(),
+      } as unknown as DatabaseManager;
+
+      const result = reconcileMarkdownMemoryScope(
+        stubDbManager,
+        ['degraded reconcile test entry'],
+        'memory',
+        null,
+      );
+      assert.equal(result.degraded, true);
+      assert.match(result.degradedReason ?? '', /fts5/);
+      assert.equal(result.inserted, 0);
+    });
+
+    it('propagates degraded from failure scopes (first reason wins)', () => {
+      // When multiple failure scopes are degraded, the aggregate result must
+      // be degraded with the first reason (not the last) so the user sees the
+      // original failure, not a later duplicate.
+      let callCount = 0;
+      const failingDb = {
+        prepare: (sql: string) => ({
+          get: () => undefined,
+          all: () => [],
+          run: () => {
+            callCount++;
+            throw new Error(`fts5: error #${callCount}`);
+          },
+        }),
+      } as never;
+      const stubDbManager = {
+        getDb: () => failingDb,
+        withCorruptionRecovery: <T>(operation: () => T): T => operation(),
+      } as unknown as DatabaseManager;
+
+      const result = reconcileMarkdownFailureScopes(
+        stubDbManager,
+        [
+          'failure entry one — Project: project-a <!-- created=2026-01-01 -->',
+          'failure entry two — Project: project-b <!-- created=2026-01-01 -->',
+        ],
+      );
+      assert.equal(result.degraded, true);
+      assert.match(result.degradedReason ?? '', /fts5: error #1/);
+    });
+
+    it('still propagates corruption errors instead of degrading (recovery must run)', () => {
+      // Corruption signals are NOT FTS5 errors: they must escape so
+      // DatabaseManager quarantines + rebuilds, never a degraded zero-result.
+      const failingDb = {
+        prepare: () => ({
+          get: () => undefined,
+          all: () => [],
+          run: () => {
+            throw new Error('database disk image is malformed');
+          },
+        }),
+      } as never;
+      const stubDbManager = {
+        getDb: () => failingDb,
+        withCorruptionRecovery: <T>(operation: () => T): T => operation(),
+      } as unknown as DatabaseManager;
+
+      assert.throws(
+        () => reconcileMarkdownMemoryScope(stubDbManager, ['corruption test entry'], 'memory', null),
+        /malformed/,
+      );
+    });
+
     it('prunes only absent rows in the exact target and project scope', () => {
       addMemory(dbManager, 'kept global memory', 'memory', null);
       addMemory(dbManager, 'orphaned global memory', 'memory', null);
@@ -331,6 +414,18 @@ describe('sqlite-memory-store', () => {
       addMemory(dbManager, 'exact phrase memory search example');
       addMemory(dbManager, 'name: Chandrateja', 'user');
       addMemory(dbManager, 'timezone: AEST', 'user');
+    });
+
+    it('degrades an all-stop-word query to the LIKE fallback instead of []', () => {
+      // "the" is a stop word and "and"/"or" connectors, so FTS5 normalization
+      // leaves nothing to match. The query must fall through to the scoped
+      // literal fallback (which still searches the raw terms) rather than
+      // hard-return an empty result set.
+      addMemory(dbManager, 'the build passes after restart');
+
+      const results = searchMemories(dbManager, 'the and or');
+      assert.ok(results.length > 0, 'all-stop-word query must reach the LIKE fallback, not []');
+      assert.ok(results.some(r => r.content.includes('the')));
     });
 
     it('should find memories by keyword', () => {

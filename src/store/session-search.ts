@@ -2,6 +2,7 @@ import { DatabaseManager } from './db.js';
 import {
   buildFallbackFts5Query,
   buildNaturalLanguageFallbackQuery,
+  collectLikeTerms,
   hasExplicitFts5Operator,
   isFts5QueryError,
   normalizeFts5Query,
@@ -38,28 +39,8 @@ type SearchMatch =
   | { type: 'fts'; query: string }
   | { type: 'like'; terms: string[] };
 
-const QUERY_TOKEN_PATTERN = /"([^"]*)"|(\S+)/g;
-const NATURAL_LANGUAGE_CONNECTORS = new Set(['and', 'or', 'not', 'near']);
-
 function escapeLikePattern(text: string): string {
   return text.replace(/[\\%_]/g, '\\$&');
-}
-
-function collectLikeTerms(query: string): string[] {
-  const terms: string[] = [];
-
-  for (const match of query.matchAll(QUERY_TOKEN_PATTERN)) {
-    const phrase = match[1];
-    const term = match[2];
-    if (phrase === undefined && term && NATURAL_LANGUAGE_CONNECTORS.has(term.toLowerCase())) {
-      continue;
-    }
-
-    const rawValue = phrase ?? term ?? '';
-    if (rawValue.length > 0) terms.push(rawValue);
-  }
-
-  return terms;
 }
 
 function mapRows(rows: Array<{
@@ -178,7 +159,12 @@ export function searchSessions(
 
   const normalizedQuery = normalizeFts5Query(query);
   if (normalizedQuery.length === 0) {
-    return [];
+    // Every term was a stop word or connector: nothing is left for FTS5 to
+    // match. Fall through to the scoped LIKE fallback instead of a hard [] so
+    // the query degrades to a literal substring search (the same fallback a
+    // normal query that matches nothing ends with).
+    const likeTerms = collectLikeTerms(query);
+    return executeSearch({ type: 'like', terms: likeTerms });
   }
 
   const exactResults = executeSearch({ type: 'fts', query: normalizedQuery });

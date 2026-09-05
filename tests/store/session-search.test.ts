@@ -50,6 +50,18 @@ describe('session-search', () => {
       assert.ok(results.length > 0);
       assert.ok(results.some(r => r.content.includes('Prisma')));
     });
+    it('degrades an all-stop-word query to the LIKE fallback instead of []', () => {
+      // "the" is a stop word and "and"/"or" connectors, so FTS5 normalization
+      // leaves nothing to match. The query must fall through to the scoped
+      // literal fallback (which still searches the raw terms) rather than
+      // hard-return an empty result set.
+      indexSession(dbManager, createTestSession());
+
+      const results = searchSessions(dbManager, 'the and or');
+      assert.ok(results.length > 0, 'all-stop-word query must reach the LIKE fallback, not []');
+      assert.ok(results.some(r => r.content.includes('the')));
+    });
+
     it('finds pure CJK substrings with the trigram tokenizer', () => {
       indexSession(dbManager, createTestSession({ id: 'cjk-trigram-session', messages: [
         { id: 'cjk-trigram-session-msg-1', role: 'assistant', content: '设备清单包含 NAS 和备份策略', timestamp: '2026-05-03T00:01:00Z' },

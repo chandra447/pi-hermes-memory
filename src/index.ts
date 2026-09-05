@@ -28,7 +28,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
 import { DatabaseManager } from "./store/db.js";
-import { indexSession, upsertSessionFileMetadata, pruneEphemeralReviewSessions } from "./store/session-indexer.js";
+import { indexSession, upsertSessionFileMetadata, pruneEphemeralReviewSessions, pruneOldSessions, retentionCutoffMs } from "./store/session-indexer.js";
 import { runRecoveryMaintenance } from "./store/recovery-maintenance.js";
 import { scheduleSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-backfill.js";
 import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-live-index.js";
@@ -221,6 +221,22 @@ export default function (pi: ExtensionAPI) {
       } catch (err) {
         console.warn(`⚠️ Ephemeral session cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
       }
+      // Prune sessions older than the configured retention window to bound the
+      // size of the session index database (see #183). Runs before
+      // scheduleSessionBackfill so pruned sessions are never re-indexed by a
+      // backfill started in the same startup.
+      if (config.sessionRetentionDays && config.sessionRetentionDays > 0) {
+        try {
+          const pruneResult = pruneOldSessions(dbManager, config.sessionRetentionDays);
+          if (pruneResult.sessionsRemoved > 0) {
+            console.info(
+              `🧠 Pruned ${pruneResult.sessionsRemoved} old session(s) (> ${config.sessionRetentionDays} days old)`,
+            );
+          }
+        } catch (err) {
+          console.warn(`⚠️ Session pruning failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
       try {
         await runRecoveryMaintenance({ config, globalDir });
       } catch (err) {
@@ -237,6 +253,9 @@ export default function (pi: ExtensionAPI) {
             console.info(message);
           }
         },
+        // Exclude files older than the retention cutoff so sessions pruned by
+        // retention are never re-indexed and never schedule another backfill.
+        retentionCutoffMs: retentionCutoffMs(config.sessionRetentionDays),
       });
     }
   });
@@ -328,7 +347,7 @@ export default function (pi: ExtensionAPI) {
   // ── 11. SQLite session search + extended memory ──
   registerSessionSearchTool(pi, dbManager, config.sessionSearch ?? { variant: "legacy" });
   registerMemorySearchTool(pi, dbManager);
-  registerIndexSessionsCommand(pi);
+  registerIndexSessionsCommand(pi, config);
 
   // ── 12. Auto-index session on shutdown ──
   // Registered last, so this runs after the session-flush shutdown handler and
