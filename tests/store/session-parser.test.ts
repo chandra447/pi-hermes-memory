@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { parseSessionFile, getSessionFiles, decodeProjectDir } from '../../src/store/session-parser.js';
+import { parseSessionFile, getSessionFiles, isSessionFile, decodeProjectDir } from '../../src/store/session-parser.js';
 
 describe('session-parser', () => {
   let tmpDir: string;
@@ -278,5 +278,92 @@ describe('session-parser', () => {
     it('should handle simple directory names', () => {
       assert.strictEqual(decodeProjectDir('my-project'), 'project');
     });
+  });
+});
+
+
+describe('isSessionFile', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'is-session-file-test-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('accepts a file whose first line is a session header', () => {
+    const filePath = path.join(tmpDir, 'real.jsonl');
+    fs.writeFileSync(filePath, [
+      JSON.stringify({ type: 'session', id: 's1', timestamp: '2026-05-03T00:00:00Z', cwd: '/test' }),
+      JSON.stringify({ type: 'message', id: 'm1' }),
+    ].join('\n'));
+    assert.strictEqual(isSessionFile(filePath), true);
+  });
+
+  it('rejects non-session JSONL (extension artifacts)', () => {
+    const filePath = path.join(tmpDir, 'artifact.jsonl');
+    fs.writeFileSync(filePath, JSON.stringify({ type: 'transcript', events: [] }) + '\n');
+    assert.strictEqual(isSessionFile(filePath), false);
+  });
+
+  it('rejects empty files and files without a parseable first line', () => {
+    const empty = path.join(tmpDir, 'empty.jsonl');
+    fs.writeFileSync(empty, '');
+    assert.strictEqual(isSessionFile(empty), false);
+    const garbage = path.join(tmpDir, 'garbage.jsonl');
+    fs.writeFileSync(garbage, 'not json at all\n');
+    assert.strictEqual(isSessionFile(garbage), false);
+    const blank = path.join(tmpDir, 'blank.jsonl');
+    fs.writeFileSync(blank, '\n\n' + JSON.stringify({ type: 'session' }));
+    assert.strictEqual(isSessionFile(blank), false);
+  });
+
+  it('rejects JSON first lines that are not objects or not session-typed', () => {
+    const arr = path.join(tmpDir, 'arr.jsonl');
+    fs.writeFileSync(arr, '[1,2,3]\n');
+    assert.strictEqual(isSessionFile(arr), false);
+    const nul = path.join(tmpDir, 'nul.jsonl');
+    fs.writeFileSync(nul, 'null\n');
+    assert.strictEqual(isSessionFile(nul), false);
+  });
+});
+
+describe('getSessionFiles excludeDirs', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'exclude-dirs-test-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function touchSessionFile(dir: string, name: string): void {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, name), JSON.stringify({ type: 'session', id: name, timestamp: '2026-05-03T00:00:00Z', cwd: '/t' }) + '\n');
+  }
+
+  it('skips first-level directories matched exactly', () => {
+    const root = path.join(tmpDir, 'sessions');
+    touchSessionFile(path.join(root, 'keep'), 'a.jsonl');
+    touchSessionFile(path.join(root, 'drop'), 'b.jsonl');
+    const files = getSessionFiles(root, undefined, ['drop']);
+    assert.ok(files.every(f => !f.includes(`${path.sep}drop${path.sep}`)));
+    assert.strictEqual(files.length, 1);
+  });
+
+  it('supports * globs and does not match nested levels', () => {
+    const root = path.join(tmpDir, 'sessions');
+    touchSessionFile(path.join(root, 'artifacts-x'), 'a.jsonl');
+    touchSessionFile(path.join(root, 'project-a'), 'b.jsonl');
+    const files = getSessionFiles(root, undefined, ['artifacts-*']);
+    assert.strictEqual(files.length, 1);
+    assert.ok(files[0].includes('project-a'));
+  });
+
+  it('an explicit projectDir is never filtered by excludeDirs', () => {
+    const root = path.join(tmpDir, 'sessions');
+    touchSessionFile(path.join(root, 'drop'), 'a.jsonl');
+    const files = getSessionFiles(root, 'drop', ['drop']);
+    assert.strictEqual(files.length, 1);
   });
 });

@@ -69,6 +69,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   sessionSearch: { variant: "legacy" },
   quickCheckOnOpen: true,
   sessionRetentionDays: DEFAULT_SESSION_RETENTION_DAYS,
+  sessionIndexExclude: [],
 };
 
 export const DEFAULT_CONFIG_PATH = path.join(
@@ -146,6 +147,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         config.sessionRetentionDays = parsed.sessionRetentionDays;
       }
       if (typeof parsed.standingInstructionsEnabled === "boolean") config.standingInstructionsEnabled = parsed.standingInstructionsEnabled;
+      if (isStringArray(parsed.sessionIndexExclude)) config.sessionIndexExclude = parsed.sessionIndexExclude;
       if (typeof parsed.projectCharLimit === "number") config.projectCharLimit = parsed.projectCharLimit;
       if (typeof parsed.memoryDir === "string") {
         const normalizedMemoryDir = normalizeConfiguredMemoryDir(parsed.memoryDir);

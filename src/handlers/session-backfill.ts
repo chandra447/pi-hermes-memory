@@ -32,6 +32,8 @@ export interface ScheduleSessionBackfillOptions {
   needsBackfillFn?: typeof needsBackfill;
   indexSessionsFn?: typeof indexChangedSessions;
   maxFilesToIndex?: number;
+  /** First-level dirs to skip in the all-projects scan (sessionIndexExclude config). */
+  sessionIndexExclude?: string[];
   touchBackfillTimestampFn?: typeof touchBackfillTimestamp;
   /**
    * Optional retention cutoff (ms epoch). Files older than this are excluded
@@ -43,8 +45,9 @@ export interface ScheduleSessionBackfillOptions {
 
 function formatBackfillResult(result: BulkIndexResult): string {
   const errorSuffix = result.errors.length > 0 ? ` (${result.errors.length} file error${result.errors.length === 1 ? '' : 's'})` : '';
+  const nonSessionSuffix = (result.nonSessionSkipped ?? 0) > 0 ? ` (${result.nonSessionSkipped} non-session files skipped)` : '';
   const limitSuffix = result.reachedLimit ? ' (startup limit reached)' : '';
-  return `🧠 Session backfill complete: ${result.sessionsIndexed} indexed, ${result.sessionsSkipped} skipped, ${result.messagesIndexed} messages${errorSuffix}${limitSuffix}.`;
+  return `🧠 Session backfill complete: ${result.sessionsIndexed} indexed, ${result.sessionsSkipped} skipped, ${result.messagesIndexed} messages${errorSuffix}${nonSessionSuffix}${limitSuffix}.`;
 }
 
 function notifyBestEffort(notify: NotifyFn | undefined, message: string, level: NotifyLevel): void {
@@ -102,7 +105,7 @@ export function scheduleSessionBackfill(
     setTimeoutFn(() => {
       measureLifecycleSync('session-backfill.callback', () => {
         try {
-          const result = indexSessionsFn(dbManager, sessionsDir, { maxFilesToIndex, retentionCutoffMs });
+          const result = indexSessionsFn(dbManager, sessionsDir, { maxFilesToIndex, retentionCutoffMs, excludeDirs: options.sessionIndexExclude });
           if (!result.reachedLimit) touchBackfillTimestampFn(dbManager);
           notifyBestEffort(options.notify, formatBackfillResult(result), result.errors.length > 0 || result.reachedLimit ? 'warning' : 'info');
         } catch (err) {

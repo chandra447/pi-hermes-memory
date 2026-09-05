@@ -99,6 +99,14 @@ export interface MemoryConfig {
    * Default: 0 (disabled).
    */
   sessionRetentionDays?: number;
+  /**
+   * First-level directory names (exact or `*` globs) under the sessions root
+   * to exclude from session indexing. The sessions directory is shared with
+   * extension artifacts (e.g. pi-subagents writes `subagent-artifacts/`);
+   * non-session JSONL is already skipped by content sniffing — use this to
+   * also skip whole directories regardless of content.
+   */
+  sessionIndexExclude?: string[];
 }
 
 export type MemoryCategory =

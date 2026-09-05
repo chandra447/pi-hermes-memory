@@ -257,6 +257,7 @@ export default function (pi: ExtensionAPI) {
         // Exclude files older than the retention cutoff so sessions pruned by
         // retention are never re-indexed and never schedule another backfill.
         retentionCutoffMs: retentionCutoffMs(config.sessionRetentionDays),
+        sessionIndexExclude: config.sessionIndexExclude,
       });
     }
   });
