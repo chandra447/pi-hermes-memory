@@ -108,9 +108,7 @@ describe("system prompt injection", () => {
     assert.ok(prompt1.includes("Original entry"), "snapshot should contain original entry");
 
     // Add a new entry in-memory (simulating a tool call that adds memory mid-session)
-    store.add("memory", "New entry after load");
-    // Wait for async write
-    await new Promise((r) => setTimeout(r, 250));
+    await store.add("memory", "New entry after load");
 
     // formatForSystemPrompt should still return the snapshot from load time
     const prompt2 = store.formatForSystemPrompt();

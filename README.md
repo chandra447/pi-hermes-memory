@@ -487,6 +487,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 
 ```json
 {
+  "lazyInitialization": false,
   "memoryMode": "policy-only",
   "memoryPolicyStyle": "full",
   "memoryCharLimit": 5000,
@@ -524,6 +525,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 
 | Setting | Default | Description |
 |---|---|---|
+| `lazyInitialization` | `false` | Opt in to first-use initialization in `policy-only` mode. Defers Markdown/SQLite sync, ordinary memory loading, maintenance and session indexing until a memory operation needs them. `legacy-inject` keeps eager loading to preserve session snapshots. See below for lifecycle tradeoffs. |
 | `memoryMode` | `policy-only` | Prompt behavior: `policy-only` injects only memory policy; `legacy-inject` restores full memory prompt injection |
 | `memoryPolicyStyle` | `full` | Policy text used in `policy-only` mode: `full` preserves the default v0.7 policy; `compact` uses shorter built-in guidance; `custom` uses `memoryPolicyCustomText`; `none` injects no policy text |
 | `memoryPolicyCustomText` | unset | Custom policy text used when `memoryPolicyStyle` is `custom`; blank or missing text falls back to `compact` |
@@ -562,6 +564,45 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `flushMinTurns` | `6` | Minimum turns before flush triggers |
 | `flushRecentMessages` | `0` | Recent messages included in session flush (`0` = all) |
 
+### Optional Lazy Initialization
+
+For installations on slow or shared storage, enable:
+
+```json
+{
+  "memoryMode": "policy-only",
+  "lazyInitialization": true
+}
+```
+
+With this option, opening Pi or sending an ordinary prompt does not initialize
+the memory database or read the ordinary memory stores. Tools and commands are
+still registered immediately. The first memory search, write, or data-dependent
+memory command waits for migration, synchronization and loading. Concurrent
+callers share the load; a failed load can be retried by the next operation.
+
+Important boundaries:
+
+- Pinned `STANDING.md` instructions and skill discovery remain available at
+  startup. If pinned instructions still live in the legacy storage root, that
+  upgrade is performed eagerly so the first prompt cannot silently omit them.
+- `legacy-inject` ignores the lazy option and preserves its startup snapshot.
+- Automatic review, correction capture and flush retain their existing triggers;
+  when a trigger fires, it initializes memory before reading or writing it.
+  Lazy initialization does not disable automatic learning or its model costs.
+- Session indexing starts after memory activation. Until then, Pi's original
+  JSONL session files remain the source of history. The first SQLite
+  `session_search` joins the bounded catch-up pass (at most 50 changed files);
+  use `/memory-index-sessions` for a larger backlog. Anchor-mode session search
+  reads JSONL directly and does not activate the memory database.
+- Closing an unused session does not initialize memory just to index it. A
+  configured flush that meets its minimum-turn threshold can still activate it.
+- This defers data initialization, not every extension module import. The direct
+  completion SDK is also imported on demand, when an LLM-backed operation runs.
+  First use pays the deferred cost; this is not a guarantee of faster searches.
+
+The default remains `false`, so existing installations keep eager initialization.
+
 ## Diagnosing lifecycle latency
 
 Run Pi with timing enabled to see which memory lifecycle step is slow:
@@ -573,12 +614,27 @@ PI_TIMING=1 pi
 `pi-hermes-memory` writes these spans to stderr only when timing is enabled:
 
 - `session-start.persistence-sync` and `session-start.load`
+- `memory-init.persistence-sync` and `memory-init.load` instead, when lazy initialization is enabled
 - `session-backfill.check` and `session-backfill.callback`
 - `live-index.callback`
 - `shutdown.flush`, `shutdown.active-index`, `shutdown.index-waits`, and `shutdown.database-close`
 - `database.open`, `database.quick-check`, and `database.checkpoint`
 
 The deferred backfill, live-index, and integrity-check spans may appear after startup spans because they run on later timer turns. `/reload` does not run `shutdown.flush`; other shutdown reasons keep the configured direct completion and subprocess fallback. Use the measured spans before changing indexing, checkpoint, or synchronization policy.
+
+From a development checkout, compare eager and lazy extension initialization
+without model calls or access to your real memory:
+
+```bash
+node --import tsx scripts/benchmark-memory-startup.mjs
+node --import tsx scripts/benchmark-memory-startup.mjs --lazy
+```
+
+The benchmark uses a disposable agent root with synthetic memories for 20
+projects. It reports import, registration, session startup and first-search
+times separately; it does not measure the full Pi TUI. Run variants sequentially
+and repeat to account for filesystem cache effects. Set `TMPDIR` to a directory
+on shared storage to measure that storage's data initialization cost.
 
 ## Where Data Lives
 
