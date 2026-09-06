@@ -584,22 +584,28 @@ callers share the load; a failed load can be retried by the next operation.
 Important boundaries:
 
 - Pinned `STANDING.md` instructions and skill discovery remain available at
-  startup. If pinned instructions still live in the legacy storage root, that
-  upgrade is performed eagerly so the first prompt cannot silently omit them.
+  startup. Pins in a legacy storage root are read independently of migration or
+  SQLite; the primary file, even if empty, takes precedence. `/memory-pin` writes
+  to the primary path without dropping the legacy instructions it loaded.
 - `legacy-inject` ignores the lazy option and preserves its startup snapshot.
 - Automatic review, correction capture and flush retain their existing triggers;
   when a trigger fires, it initializes memory before reading or writing it.
   Lazy initialization does not disable automatic learning or its model costs.
 - Session indexing starts after memory activation. Until then, Pi's original
-  JSONL session files remain the source of history. The first SQLite
-  `session_search` joins the bounded catch-up pass (at most 50 changed files);
-  use `/memory-index-sessions` for a larger backlog. Anchor-mode session search
+  JSONL session files remain the source of history. First use joins the scheduled
+  catch-up pass to completion (at most 50 changed files), without using the
+  five-second shutdown timeout. Use `/memory-index-sessions` for a larger backlog.
+  Anchor-mode session search
   reads JSONL directly and does not activate the memory database.
 - Closing an unused session does not initialize memory just to index it. A
   configured flush that meets its minimum-turn threshold can still activate it.
-- This defers data initialization, not every extension module import. The direct
-  completion SDK is also imported on demand, when an LLM-backed operation runs.
-  First use pays the deferred cost; this is not a guarantee of faster searches.
+  Shutdown joins in-flight preparation and memory tool/command execution before
+  closing SQLite. Escape cancels a tool's wait without cancelling shared work.
+- Project listing, prompt preview and anchor search do not activate SQLite.
+- This defers data initialization, not extension SDK imports. The direct
+  completion SDK remains a static import so Pi's jiti aliases also work in
+  production installs without package-local SDK peers. First use pays the
+  deferred data-loading cost; this is not a guarantee of faster searches.
 
 The default remains `false`, so existing installations keep eager initialization.
 
@@ -635,6 +641,12 @@ projects. It reports import, registration, session startup and first-search
 times separately; it does not measure the full Pi TUI. Run variants sequentially
 and repeat to account for filesystem cache effects. Set `TMPDIR` to a directory
 on shared storage to measure that storage's data initialization cost.
+
+`npm run check:production` packs the checkout, installs it in a temporary directory
+without dev/peer dependencies, and loads it through Pi's real jiti loader. It
+exercises the direct-completion path against a loopback HTTP fixture, not a paid
+model or real memory. npm access is required to install production dependencies;
+native install scripts are disabled because the fixture writes no memories.
 
 ## Where Data Lives
 

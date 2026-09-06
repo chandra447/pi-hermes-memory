@@ -51,6 +51,7 @@ export class StandingInstructions {
     private readonly filePath: string,
     private readonly maxEntries: number = STANDING_MAX_ENTRIES,
     private readonly maxChars: number = STANDING_MAX_CHARS,
+    private readonly legacyFilePath?: string,
   ) {}
 
   getFilePath(): string {
@@ -58,13 +59,23 @@ export class StandingInstructions {
   }
 
   async load(): Promise<void> {
-    try {
-      const raw = await fs.readFile(this.filePath, "utf-8");
-      this.instructions = parseInstructions(raw);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      this.instructions = [];
+    // Read legacy pins without opening SQLite or migrating other memory. The
+    // primary file (even if empty) wins; recheck it if migration moved the legacy
+    // file between reads. Mutations still publish only to the primary path.
+    const candidates = this.legacyFilePath
+      ? [this.filePath, this.legacyFilePath, this.filePath]
+      : [this.filePath];
+    for (const candidate of candidates) {
+      try {
+        const raw = await fs.readFile(candidate, "utf-8");
+        this.instructions = parseInstructions(raw);
+        this.loaded = true;
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
     }
+    this.instructions = [];
     this.loaded = true;
   }
 

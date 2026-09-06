@@ -6,6 +6,7 @@ import os from 'node:os';
 import { DatabaseManager } from '../../src/store/db.js';
 import {
   scheduleSessionBackfill,
+  joinSessionBackfill,
   waitForSessionBackfill,
   type SessionBackfillState,
 } from '../../src/handlers/session-backfill.js';
@@ -188,6 +189,21 @@ describe('session backfill handler', () => {
     const completed = await waitForSessionBackfill(5, state);
 
     assert.equal(completed, false);
+  });
+
+  it('first-use join does not inherit the five-second shutdown deadline', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const backfill = Promise.withResolvers<void>();
+    const state: SessionBackfillState = { inProgress: true, promise: backfill.promise };
+    let joined = false;
+    const firstUse = joinSessionBackfill(state).then(() => { joined = true; });
+    const shutdown = waitForSessionBackfill(5000, state);
+    t.mock.timers.tick(6000);
+    assert.equal(await shutdown, false);
+    assert.equal(joined, false);
+    backfill.resolve();
+    await firstUse;
+    assert.equal(joined, true);
   });
 
   it('propagates the retention cutoff to the backfill file set', async () => {

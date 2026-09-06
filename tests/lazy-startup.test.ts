@@ -103,6 +103,8 @@ describe("lazy startup lifecycle", () => {
     await emit("message_end", { message: { role: "user", content: "hello" } });
     await emit("turn_end", { message: { role: "assistant", content: [] } });
     await commands["memory-preview-context"].handler("", ctx);
+    await commands["memory-switch-project"].handler("", ctx);
+    assert.ok(notifications.some((text) => text.includes("workspace (1 entry)")));
     await emit("session_shutdown", { reason: "quit" });
     assert.equal(loads.mock.callCount(), 0);
     assert.equal(opens.mock.callCount(), 0);
@@ -189,6 +191,80 @@ describe("lazy startup lifecycle", () => {
     assert.equal((await search()).details.count, 2);
   });
 
+  it("clears a rejected project load before switching to a non-project cwd or retrying", async (t) => {
+    const original = MemoryStore.prototype.loadFromDisk;
+    let loads = 0;
+    t.mock.method(MemoryStore.prototype, "loadFromDisk", async function (this: InstanceType<typeof MemoryStore>) {
+      if (++loads === 2) throw new Error("project load failed");
+      return original.call(this);
+    });
+    register();
+    await emit("session_start");
+    await assert.rejects(search(), /project load failed/);
+    ctx.cwd = os.homedir();
+    assert.equal((await search()).details.count, 2);
+    const unavailable = await tools.memory_add.execute("write", { target: "project", content: "not a project" }, undefined, undefined, ctx);
+    assert.equal(unavailable.details.success, false);
+    ctx.cwd = cwd;
+    assert.equal((await search()).details.count, 2);
+    assert.equal(loads, 3);
+  });
+
+  it("does not close or reopen SQLite beneath a first-use project bind", async (t) => {
+    const originalLoad = MemoryStore.prototype.loadFromDisk;
+    const binding = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let loads = 0;
+    t.mock.method(MemoryStore.prototype, "loadFromDisk", async function (this: InstanceType<typeof MemoryStore>) {
+      if (++loads === 2) { binding.resolve(); await release.promise; }
+      return originalLoad.call(this);
+    });
+    const getDb = t.mock.method(DatabaseManager.prototype, "getDb");
+    const close = t.mock.method(DatabaseManager.prototype, "close");
+    register();
+    await emit("session_start");
+    const first = search();
+    await binding.promise;
+    const rejected = assert.rejects(first, /shut down/);
+    let shutDown = false;
+    const shutdown = emit("session_shutdown", { reason: "quit" }).then(() => { shutDown = true; });
+    try {
+      await new Promise(setImmediate);
+      assert.equal(shutDown, false);
+      assert.equal(close.mock.callCount(), 0);
+    } finally {
+      release.resolve();
+      await Promise.all([rejected, shutdown]);
+    }
+    const manager = getDb.mock.calls[0].this;
+    assert.throws(() => manager.getDb(), /shut down/);
+    assert.equal(close.mock.callCount(), 1);
+  });
+
+  it("waits for the full scheduled batch across forty multi-message history files", async (t) => {
+    const dir = path.join(root, "sessions", "workspace");
+    await fs.mkdir(dir, { recursive: true });
+    const timestamp = new Date().toISOString();
+    for (let fileIndex = 0; fileIndex < 40; fileIndex++) {
+      const id = `history-${fileIndex}`;
+      const entries = [
+        { type: "session", id, timestamp, cwd },
+        ...Array.from({ length: 25 }, (_, i) => ({
+          type: "message", id: `${id}-m${i}`, parentId: i ? `${id}-m${i - 1}` : null, timestamp,
+          message: { role: "user", content: [{ type: "text", text: `historical decision ${fileIndex} ${i}` }], timestamp: Date.now() },
+        })),
+      ];
+      await fs.writeFile(path.join(dir, `${id}.jsonl`), entries.map((entry) => JSON.stringify(entry)).join("\n"));
+    }
+    const getDb = t.mock.method(DatabaseManager.prototype, "getDb");
+    register();
+    await emit("session_start");
+    await tools.session_search.execute("id", { query: "historical" }, undefined, undefined, ctx);
+    const stats = getDb.mock.calls[0].this.getStats();
+    assert.equal(stats.sessions, 40);
+    assert.equal(stats.messages, 1000);
+  });
+
   for (const overrides of [{ lazyInitialization: false }, { memoryMode: "legacy-inject" }]) {
     it(`preserves eager loading with ${JSON.stringify(overrides)}`, async (t) => {
       await configure(overrides);
@@ -218,13 +294,20 @@ describe("lazy startup lifecycle", () => {
     assert.match(await fs.readFile(path.join(globalDir, "USER.md"), "utf8"), /legacy durable preference/);
   });
 
-  it("does not lose pinned instructions when upgrading from a legacy root", async () => {
+  it("keeps legacy pins and skill discovery available even when memory initialization fails", async (t) => {
     const legacy = path.join(root, "memory");
     await fs.mkdir(legacy);
     await fs.rename(path.join(globalDir, "STANDING.md"), path.join(legacy, "STANDING.md"));
+    const getDb = t.mock.method(DatabaseManager.prototype, "getDb", () => { throw new Error("database unavailable"); });
     register();
     await emit("session_start");
+    const resources = await emit("resources_discover", { cwd, reason: "startup" });
+    assert.equal(resources.skillPaths.length, 2);
+    assert.equal(getDb.mock.callCount(), 0);
     const prompt = await emit("before_agent_start", { systemPrompt: "base" });
     assert.match(prompt.systemPrompt, /Always ask before deployment/);
+    await assert.rejects(search(), /database unavailable/);
+    const afterFailure = await emit("before_agent_start", { systemPrompt: "base" });
+    assert.match(afterFailure.systemPrompt, /Always ask before deployment/);
   });
 });

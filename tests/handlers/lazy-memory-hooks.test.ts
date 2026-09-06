@@ -102,4 +102,27 @@ describe("lazy memory automatic operations", () => {
     await f.emit("session_before_compact");
     assert.equal(f.calls(), 0);
   });
+
+  it("retries a pending correction without consuming its rate limit on initialization failure", async () => {
+    const f = fixture();
+    let attempts = 0;
+    setupCorrectionDetector(f.pi, f.store, null, f.config, null, null, {
+      ensureMemoryReady: async (ctx) => {
+        if (++attempts === 1) throw new Error("transient load failure");
+        await f.ensureMemoryReady(ctx);
+      },
+      runDirectMemoryCompletion: f.runDirectMemoryCompletion,
+    });
+    await f.emit("message_end", { message: { role: "user", content: "no, use pnpm" } });
+    await f.emit("turn_end");
+    assert.equal(f.calls(), 0);
+    let saved = "";
+    f.store.addFailure = async (text: string) => { saved = text; return { success: true }; };
+    await f.emit("message_end", { message: { role: "user", content: "continue with the work" } });
+    await f.emit("turn_end");
+    assert.equal(attempts, 2);
+    assert.equal(f.calls(), 1);
+    assert.match(saved, /use pnpm/);
+    assert.doesNotMatch(saved, /continue with the work/);
+  });
 });

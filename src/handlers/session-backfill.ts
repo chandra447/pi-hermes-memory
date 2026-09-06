@@ -124,6 +124,14 @@ export function scheduleSessionBackfill(
 }
 
 /**
+ * First-use readiness has no shutdown deadline: the scheduled pass must settle
+ * before a search can read its index. Each extension owns its own state.
+ */
+export async function joinSessionBackfill(state: SessionBackfillState = sessionBackfillState): Promise<void> {
+  await state.promise;
+}
+
+/**
  * Wait briefly for an in-progress backfill before shutdown closes SQLite.
  *
  * @returns true if no backfill was running or it completed before the timeout;

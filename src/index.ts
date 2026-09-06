@@ -30,7 +30,7 @@ import { SkillStore } from "./store/skill-store.js";
 import { DatabaseManager } from "./store/db.js";
 import { indexSession, upsertSessionFileMetadata, pruneEphemeralReviewSessions, pruneOldSessions, retentionCutoffMs } from "./store/session-indexer.js";
 import { runRecoveryMaintenance } from "./store/recovery-maintenance.js";
-import { scheduleSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-backfill.js";
+import { scheduleSessionBackfill, joinSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS, type SessionBackfillState } from "./handlers/session-backfill.js";
 import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-live-index.js";
 import { parseSessionFile } from "./store/session-parser.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
@@ -124,11 +124,14 @@ export default function (pi: ExtensionAPI) {
     migrationSentinelPath: path.join(globalDir, ".skills-migrated-to-extension-storage"),
   });
   const dbManager = new DatabaseManager(globalDir);
+  let databaseClosed = false;
+  const backfillState: SessionBackfillState = { inProgress: false, promise: null };
   dbManager.setQuickCheckOnOpen(config.quickCheckOnOpen ?? true);
   // No database may open before first-use migration has completed.
   let databaseMigrationPending = (lazy && shouldMigrateExtensionRoot) || (shouldMigrateExtensionRoot
     && isDatabaseMigrationPending(legacyGlobalDir, globalDir));
   dbManager.setOpenGuard(() => {
+    if (databaseClosed) throw new Error("Memory session has shut down");
     if (databaseMigrationPending) throw new Error("Legacy sessions.db migration is pending");
   });
   const sessionsDir = path.join(agentRoot, "sessions");
@@ -174,6 +177,9 @@ export default function (pi: ExtensionAPI) {
       configureMemoryToolProjectStore(projectStore);
       projectLoad = projectStore?.loadFromDisk().catch((error) => {
         projectMemoryDir = null;
+        projectStore = null;
+        projectName = "";
+        projectLoad = undefined;
         throw error;
       });
     }
@@ -183,7 +189,8 @@ export default function (pi: ExtensionAPI) {
   // Never written by review, consolidation or the correction detector — see
   // store/standing-instructions.ts for why provenance has to be structural.
   const standingStore = config.standingInstructionsEnabled !== false
-    ? new StandingInstructions(path.join(globalDir, STANDING_FILE))
+    ? new StandingInstructions(path.join(globalDir, STANDING_FILE), undefined, undefined,
+        shouldMigrateExtensionRoot ? path.join(legacyGlobalDir, STANDING_FILE) : undefined)
     : null;
 
   const initialization = createMemoryInitializer(async () => {
@@ -201,7 +208,6 @@ export default function (pi: ExtensionAPI) {
             {
               onMigrationSucceeded: () => {
                 databaseMigrationPending = false;
-                dbManager.setOpenGuard(null);
               },
             },
           );
@@ -245,6 +251,7 @@ export default function (pi: ExtensionAPI) {
         console.warn(`⚠️ Snapshot retention sweep failed: ${err instanceof Error ? err.message : String(err)}`);
       }
       scheduleSessionBackfill(dbManager, sessionsDir, {
+        state: backfillState,
         notify: (message, level) => {
           const ui = sessionContext?.ui;
           if (ui?.notify) {
@@ -260,26 +267,27 @@ export default function (pi: ExtensionAPI) {
         retentionCutoffMs: retentionCutoffMs(config.sessionRetentionDays),
       });
     }
+  }, async (ctx) => {
+    try {
+      await bindProjectFromCwd(ctx.cwd);
+    } finally {
+      // Even a failed project bind must not leave backfill running past close.
+      if (lazy) await joinSessionBackfill(backfillState);
+    }
   });
 
-  const ensureMemoryReady: EnsureMemoryReady = async (ctx) => {
-    await initialization.ensure();
-    await bindProjectFromCwd(ctx.cwd);
-  };
-  const memoryPi = withMemoryInitialization(pi, ensureMemoryReady);
+  const ensureMemoryReady: EnsureMemoryReady = (ctx, signal) => initialization.ensure(ctx, signal);
+  const memoryPi = withMemoryInitialization(pi, initialization);
 
   // Skills and pinned instructions must be available even without a lookup.
   pi.on("session_start", async (_event, ctx) => {
     sessionContext = ctx;
-    // An old pinned file must migrate before it can be advertised as active.
-    const migrateStanding = lazy && standingStore && shouldMigrateExtensionRoot
-      && !fs.existsSync(path.join(globalDir, STANDING_FILE))
-      && fs.existsSync(path.join(legacyGlobalDir, STANDING_FILE));
-    if (!lazy || migrateStanding) await ensureMemoryReady(ctx);
+    // Pinned directives must not depend on migration/SQLite being healthy.
+    if (standingStore) await standingStore.load();
+    if (!lazy) await ensureMemoryReady(ctx);
     refreshSkillProjectContext(ctx.cwd);
     await skillStore.migrateLegacySkills();
     await skillStore.ensureDiscoveredRoots();
-    if (standingStore) await standingStore.load();
   });
 
   registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir);
@@ -354,7 +362,7 @@ export default function (pi: ExtensionAPI) {
   registerInsightsCommand(memoryPi, store, projectStoreRef, projectNameRef);
   registerSkillsCommand(pi, skillStore);
   registerInterviewCommand(memoryPi, store);
-  registerSwitchProjectCommand(memoryPi, config);
+  registerSwitchProjectCommand(pi, config);
   registerLearnMemoryCommand(pi);
   registerSyncMarkdownMemoriesCommand(memoryPi, dbManager, globalDir, config.projectsMemoryDir, agentRoot);
   registerPreviewContextCommand(lazy ? pi : memoryPi, store, projectStoreRef, projectNameRef, config, standingStore);
@@ -370,12 +378,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── 11. SQLite session search + extended memory ──
-  const sessionSearchPi = withMemoryInitialization(pi, async (ctx) => {
-    await ensureMemoryReady(ctx);
-    // A first lookup must not race the deferred catch-up pass.
-    if (lazy) await waitForSessionBackfill(SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS);
-  });
-  registerSessionSearchTool(config.sessionSearch?.variant === "anchors" ? pi : sessionSearchPi,
+  registerSessionSearchTool(config.sessionSearch?.variant === "anchors" ? pi : memoryPi,
     dbManager, config.sessionSearch ?? { variant: "legacy" });
   registerMemorySearchTool(memoryPi, dbManager);
   registerIndexSessionsCommand(memoryPi, config);
@@ -394,13 +397,14 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, ctx) => {
     await initialization.close();
     if (lazy && !initialization.isReady()) {
+      databaseClosed = true;
       dbManager.close();
       return;
     }
     try {
       measureLifecycleSync("shutdown.active-index", () => {
         const sessionFile = ctx.sessionManager.getSessionFile();
-        if (sessionFile && require("node:fs").existsSync(sessionFile)) {
+        if (sessionFile && fs.existsSync(sessionFile)) {
           const sessionData = parseSessionFile(sessionFile);
           if (sessionData) {
             dbManager.withCorruptionRecovery(() => {
@@ -419,13 +423,14 @@ export default function (pi: ExtensionAPI) {
     } finally {
       try {
         await measureLifecycle("shutdown.index-waits", () => Promise.all([
-          waitForSessionBackfill(SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS),
+          waitForSessionBackfill(SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS, backfillState),
           waitForLiveSessionIndex(SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS),
         ]));
       } catch {
         // Best effort only — shutdown should not be held up by indexing errors.
       }
       try {
+        databaseClosed = true;
         measureLifecycleSync("shutdown.database-close", () => dbManager.close());
       } catch { /* best effort — never block shutdown */ }
     }

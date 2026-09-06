@@ -55,6 +55,35 @@ describe("StandingInstructions parsing", () => {
 });
 
 describe("StandingInstructions writes", () => {
+  it("loads legacy pins without migration and carries them into the first primary write", async () => {
+    const legacy = path.join(root, "legacy-standing.md");
+    await fs.writeFile(legacy, "always ask before deployment\n");
+    const store = new StandingInstructions(filePath, undefined, undefined, legacy);
+    await store.load();
+    assert.deepEqual(store.list(), ["always ask before deployment"]);
+    await assert.rejects(fs.access(filePath), { code: "ENOENT" });
+    assert.equal((await store.add("run the tests first")).success, true);
+    assert.match(await fs.readFile(filePath, "utf8"), /always ask before deployment\nrun the tests first/);
+    assert.equal(await fs.readFile(legacy, "utf8"), "always ask before deployment\n");
+  });
+
+  it("treats an empty primary file as authoritative instead of reviving legacy pins", async () => {
+    const legacy = path.join(root, "legacy-standing.md");
+    await fs.writeFile(legacy, "old rule\n");
+    await fs.writeFile(filePath, "");
+    const store = new StandingInstructions(filePath, undefined, undefined, legacy);
+    await store.load();
+    assert.deepEqual(store.list(), []);
+  });
+
+  it("does not hide an unreadable primary file behind a legacy fallback", async () => {
+    const legacy = path.join(root, "legacy-standing.md");
+    await fs.writeFile(legacy, "old rule\n");
+    await fs.mkdir(filePath);
+    const store = new StandingInstructions(filePath, undefined, undefined, legacy);
+    await assert.rejects(store.load(), { code: "EISDIR" });
+  });
+
   it("persists a pinned instruction and reloads it", async () => {
     const store = await loadedStore();
     const result = await store.add("  never run find / ");

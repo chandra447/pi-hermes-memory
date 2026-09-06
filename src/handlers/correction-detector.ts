@@ -134,7 +134,7 @@ export function setupCorrectionDetector(
 ): void {
   if (!config.correctionDetection) return;
 
-  let pendingCorrection = false;
+  let pendingCorrection: string | undefined;
   let turnsSinceLastCorrection = 3; // Start at threshold so first correction can fire immediately
   let correctionInProgress = false;
   const runDirect = deps.runDirectMemoryCompletion ?? runDirectMemoryCompletion;
@@ -145,7 +145,7 @@ export function setupCorrectionDetector(
     const text = getMessageText(event.message);
     if (!text) return;
     if (isCorrection(text, config)) {
-      pendingCorrection = true;
+      pendingCorrection = text;
     }
   });
 
@@ -155,17 +155,25 @@ export function setupCorrectionDetector(
       turnsSinceLastCorrection++;
       return;
     }
-    pendingCorrection = false;
+    if (correctionInProgress) return;
+    const correctionText = pendingCorrection;
+    pendingCorrection = undefined;
 
     // Rate limit: max 1 correction save per 3 turns
     if (turnsSinceLastCorrection < 3) return;
-    if (correctionInProgress) return;
 
-    turnsSinceLastCorrection = 0;
     correctionInProgress = true;
 
     try {
-      await deps.ensureMemoryReady?.(ctx);
+      try {
+        await deps.ensureMemoryReady?.(ctx, ctx.signal);
+      } catch {
+        // Keep the correction eligible for the next turn after a transient load
+        // failure, without consuming the successful-capture rate limit.
+        pendingCorrection ??= correctionText;
+        return;
+      }
+      turnsSinceLastCorrection = 0;
       // Build conversation snapshot
       const entries = ctx.sessionManager.getBranch();
       const parts: string[] = [];
@@ -205,6 +213,9 @@ export function setupCorrectionDetector(
       }
 
       promptBody.push(
+        "",
+        "--- User Correction to Save ---",
+        correctionText,
         "",
         "--- Recent Conversation ---",
         recentParts.join("\n\n"),
@@ -272,14 +283,6 @@ export function setupCorrectionDetector(
 
       // Also save as a failure memory for learning
       try {
-        let lastUserMsg: string | undefined;
-        for (let i = recentParts.length - 1; i >= 0; i--) {
-          if (recentParts[i].startsWith("[USER]")) {
-            lastUserMsg = recentParts[i];
-            break;
-          }
-        }
-        const correctionText = lastUserMsg ? lastUserMsg.replace(/^\[USER\]:\s*/, "") : "";
         if (correctionText) {
           const directive = extractCorrectionDirective(correctionText);
           const failureReason = "User corrected the agent";

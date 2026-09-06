@@ -63,10 +63,11 @@ describe("guarded memory entry points", () => {
     const commands: any[] = [];
     const events: string[] = [];
     const contexts: unknown[] = [];
+    const init = createMemoryInitializer(async () => {}, async (ctx) => { contexts.push(ctx); events.push("ready"); });
     const pi = withMemoryInitialization({
       registerTool: (tool: any) => tools.push(tool),
       registerCommand: (name: string, options: any) => commands.push({ name, ...options }),
-    } as any, async (ctx) => { contexts.push(ctx); events.push("ready"); });
+    } as any, init);
     const renderResult = () => undefined;
     const parameters = {} as any;
     const getArgumentCompletions = () => null;
@@ -96,7 +97,7 @@ describe("guarded memory entry points", () => {
     let executions = 0;
     const gate = Promise.withResolvers<void>();
     const init = createMemoryInitializer(async () => { loads++; await gate.promise; });
-    withMemoryInitialization({ registerTool: (def: any) => { tool = def; } } as any, () => init.ensure())
+    withMemoryInitialization({ registerTool: (def: any) => { tool = def; } } as any, init)
       .registerTool({ name: "test", label: "Test", description: "Test", parameters: {} as any,
         execute: async () => { executions++; return { content: [], details: {} }; } });
     const aborted = AbortSignal.abort();
@@ -111,5 +112,71 @@ describe("guarded memory entry points", () => {
     assert.equal(loads, 1);
     assert.equal(executions, 1);
     await init.close();
+  });
+
+  it("keeps first use unready and shutdown waiting through project binding and backfill", async () => {
+    const bind = Promise.withResolvers<void>();
+    const backfill = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const init = createMemoryInitializer(async () => {}, async () => {
+      started.resolve();
+      await bind.promise;
+      await backfill.promise;
+    });
+    const first = init.ensure({ cwd: "/project" });
+    await started.promise;
+    assert.equal(init.isReady(), false);
+    const rejected = assert.rejects(first, /shut down/);
+    let closed = false;
+    const closing = init.close().then(() => { closed = true; });
+    bind.resolve();
+    await new Promise(setImmediate);
+    assert.equal(init.isReady(), false);
+    assert.equal(closed, false);
+    backfill.resolve();
+    await Promise.all([rejected, closing]);
+    assert.equal(closed, true);
+  });
+
+  it("waits for tool execution, not just its preparation, before closing", async () => {
+    const execution = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const init = createMemoryInitializer(async () => {});
+    const running = init.run({ cwd: "/project" }, async () => {
+      started.resolve();
+      await execution.promise;
+      return "written";
+    });
+    await started.promise;
+    let closed = false;
+    const closing = init.close().then(() => { closed = true; });
+    await new Promise(setImmediate);
+    assert.equal(closed, false);
+    await assert.rejects(init.run({ cwd: "/project" }, async () => "late"), /shut down/);
+    execution.resolve();
+    assert.equal(await running, "written");
+    await closing;
+  });
+
+  it("cancels a waiting tool immediately while retaining shared preparation for shutdown", { timeout: 2000 }, async () => {
+    const preparation = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const init = createMemoryInitializer(async () => {}, async () => {
+      started.resolve();
+      await preparation.promise;
+    });
+    const controller = new AbortController();
+    const cancelled = assert.rejects(init.run({ cwd: "/project" }, async () => {
+      assert.fail("cancelled tool must not execute");
+    }, controller.signal), /cancelled/);
+    await started.promise;
+    controller.abort(new Error("cancelled"));
+    await cancelled;
+    let closed = false;
+    const closing = init.close().then(() => { closed = true; });
+    await new Promise(setImmediate);
+    assert.equal(closed, false);
+    preparation.resolve();
+    await closing;
   });
 });
