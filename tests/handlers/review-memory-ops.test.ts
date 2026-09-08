@@ -1064,3 +1064,73 @@ describe("applyReviewOperations", () => {
     }
   });
 });
+
+describe("response channel fallbacks (#197)", () => {
+  function registry() {
+    return {
+      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "sk-test" }),
+      getAll: () => [mockModel(true)],
+      getAvailable: () => [mockModel(true)],
+    };
+  }
+
+  async function runReview(complete: unknown) {
+    return runDirectMemoryCompletion(
+      { model: mockModel(true), modelRegistry: registry() } as never,
+      null as never,
+      null,
+      { userPrompt: "u", systemPrompt: "s", config: {} },
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+  }
+
+  it("parses ops from thinking blocks when content has no text blocks", async () => {
+    const complete = async () => ({
+      stopReason: "stop",
+      content: [
+        { type: "thinking", thinking: JSON.stringify({ operations: [] }) },
+      ],
+    });
+
+    const result = await runReview(complete);
+
+    // "empty" (not "empty_response") proves the ops JSON inside the thinking
+    // block reached the parser and parsed cleanly.
+    assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty" });
+  });
+
+  it("prefers text blocks over thinking blocks when both are present", async () => {
+    const complete = async () => ({
+      stopReason: "stop",
+      content: [
+        { type: "text", text: "not json at all" },
+        { type: "thinking", thinking: JSON.stringify({ operations: [] }) },
+      ],
+    });
+
+    const result = await runReview(complete);
+
+    // Valid ops in thinking must not mask an unparseable text answer.
+    assert.deepStrictEqual(result, { ok: false, appliedCount: 0, fallbackReason: "parse_error" });
+  });
+
+  it("returns empty_response on a clean stop with neither text nor thinking", async () => {
+    const complete = async () => ({ stopReason: "stop", content: [] });
+
+    const result = await runReview(complete);
+
+    assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty_response" });
+  });
+
+  it("keeps parse_error when a truncated (length) response has no content", async () => {
+    const complete = async () => ({ stopReason: "length", content: [] });
+
+    const result = await runReview(complete);
+
+    // Truncation means the model may not have finished; the fallback chain
+    // (next model / subprocess) must still get a chance to retry.
+    assert.deepStrictEqual(result, { ok: false, appliedCount: 0, fallbackReason: "parse_error" });
+  });
+});

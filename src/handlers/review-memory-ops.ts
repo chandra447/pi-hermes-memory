@@ -28,7 +28,7 @@ export interface ApplyReviewOperationsResult {
 export interface DirectReviewResult {
   ok: boolean;
   appliedCount: number;
-  fallbackReason?: "no_model" | "no_auth" | "aborted" | "parse_error" | "provider_error" | "empty";
+  fallbackReason?: "no_model" | "no_auth" | "aborted" | "parse_error" | "provider_error" | "empty" | "empty_response";
   error?: string;
 }
 
@@ -487,11 +487,26 @@ export async function applyReviewOperations(
 
 function responseText(content: unknown): string {
   if (!Array.isArray(content)) return "";
-  return content
+  const text = content
     .filter((block): block is { type: "text"; text: string } => (
       !!block && typeof block === "object" && (block as { type?: string }).type === "text"
     ))
     .map((block) => block.text)
+    .join("\n");
+  if (text.trim()) return text;
+
+  // Some providers park the whole answer in the reasoning/thinking channel and
+  // leave content empty (e.g. vLLM servers started with DEFAULT_THINKING=max,
+  // regardless of the client-side thinking level) (#197). Recover the
+  // parseable output from thinking blocks instead of treating it as a parse
+  // error. Schema validation in parseReviewOperations still rejects non-JSON
+  // chain-of-thought rambling, so this only helps when the model actually
+  // emitted the ops JSON inside its reasoning channel.
+  return content
+    .filter((block): block is { type: "thinking"; thinking: string } => (
+      !!block && typeof block === "object" && (block as { type?: string }).type === "thinking"
+    ))
+    .map((block) => block.thinking)
     .join("\n");
 }
 
@@ -598,6 +613,19 @@ export async function runDirectMemoryCompletion(
       }
 
       const text = responseText(response.content);
+      // A clean stop with no output in either the text or the reasoning channel
+      // means the provider returned nothing usable (e.g. its server-side
+      // thinking default swallowed the answer). Same outcome as "nothing to
+      // save" — ok with zero operations — but under a distinct reason so the
+      // empty-vs-empty_response cases stay distinguishable. Do not treat it as
+      // a parse error: that would burn the subprocess fallback (and a second
+      // full LLM call) on every review when the provider is misconfigured
+      // (#197). Truncated responses (stopReason "length") still fall through
+      // to parse_error so the fallback chain can retry them.
+      if (!text.trim() && response.stopReason === "stop") {
+        clearTimeout(timeout);
+        return { ok: true, appliedCount: 0, fallbackReason: "empty_response" };
+      }
       const operations = parseReviewOperations(text);
       if (operations === null) {
         lastResult = { ok: false, appliedCount: 0, fallbackReason: "parse_error" };
