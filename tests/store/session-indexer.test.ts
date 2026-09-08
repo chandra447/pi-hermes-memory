@@ -626,6 +626,42 @@ describe('session-indexer', () => {
       assert.strictEqual(countSessionFiles(sessionsDir), 2);
     });
 
+    it('needsBackfill is false for an artifacts-only sessions dir with a fresh timestamp (sniffed-out files never demand work)', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      // Extension artifacts (no {"type":"session"} header) in a subdirectory:
+      // they never receive session_files stamps, so a naive preflight would
+      // return true on the first unstamped file on every startup.
+      const artifactsDir = path.join(sessionsDir, 'subagent-artifacts');
+      fs.mkdirSync(artifactsDir, { recursive: true });
+      fs.writeFileSync(path.join(artifactsDir, 'worker_transcript.jsonl'), JSON.stringify({ type: 'transcript', entries: [] }) + '\n');
+      touchBackfillTimestamp(dbManager, new Date('2026-05-03T00:30:00Z'));
+
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), false);
+    });
+
+    it('needsBackfill is false when only excluded dirs exist and the last backfill is recent', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'noise-dir', 's1');
+      touchBackfillTimestamp(dbManager, new Date('2026-05-03T00:30:00Z'));
+
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z'), 0, ['noise-dir']), false);
+      // sanity: without the exclusion the same state demands a backfill
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), true);
+    });
+
+    it('countSessionFiles excludes non-session artifacts and excluded dirs by default', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'project-a', 's1');
+      const artifactsDir = path.join(sessionsDir, 'subagent-artifacts');
+      fs.mkdirSync(artifactsDir, { recursive: true });
+      fs.writeFileSync(path.join(artifactsDir, 'worker_transcript.jsonl'), JSON.stringify({ type: 'transcript' }) + '\n');
+
+      assert.strictEqual(countSessionFiles(sessionsDir), 1);
+      // glob exclusion drops the artifacts dir; the real session remains
+      assert.strictEqual(countSessionFiles(sessionsDir, ['subagent-*']), 1);
+      assert.strictEqual(countSessionFiles(sessionsDir, ['project-a']), 0);
+    });
+
     it('needsBackfill is true when session file count exceeds indexed sessions', () => {
       const sessionsDir = path.join(tmpDir, 'sessions');
       writeJsonlSession(sessionsDir, 'project-a', 's1');

@@ -87,7 +87,7 @@ export function scheduleSessionBackfill(
   try {
     if (!measureLifecycleSync(
       'session-backfill.check',
-      () => needsBackfillFn(dbManager, sessionsDir, undefined, retentionCutoffMs),
+      () => needsBackfillFn(dbManager, sessionsDir, undefined, retentionCutoffMs, options.sessionIndexExclude),
     )) {
       return false;
     }

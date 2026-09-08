@@ -306,6 +306,16 @@ describe('isSessionFile', () => {
     assert.strictEqual(isSessionFile(filePath), false);
   });
 
+  it('fails open when the first line exceeds the sniff window (no newline observed)', () => {
+    const filePath = path.join(tmpDir, 'big-header.jsonl');
+    // A session header whose first line is longer than the 4KB sniff window:
+    // the truncated fragment is unparseable, but a real session must not be
+    // silently dropped — the full parser gets to decide.
+    const bigHeader = JSON.stringify({ type: 'session', id: 's1', meta: 'x'.repeat(8192), timestamp: '2026-05-03T00:00:00Z', cwd: '/test' });
+    fs.writeFileSync(filePath, bigHeader + '\n' + JSON.stringify({ type: 'message', id: 'm1' }));
+    assert.strictEqual(isSessionFile(filePath), true);
+  });
+
   it('rejects empty files and files without a parseable first line', () => {
     const empty = path.join(tmpDir, 'empty.jsonl');
     fs.writeFileSync(empty, '');

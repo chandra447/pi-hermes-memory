@@ -192,13 +192,19 @@ export function isSessionFile(filePath: string): boolean {
     const buf = Buffer.alloc(SNIFF_BYTES);
     const bytesRead = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0);
     if (bytesRead === 0) return false;
-    const firstLine = buf.subarray(0, bytesRead).toString('utf-8').split('\n', 1)[0].trim();
+    const head = buf.subarray(0, bytesRead).toString('utf-8');
+    const newline = head.indexOf('\n');
+    const firstLine = (newline === -1 ? head : head.slice(0, newline)).trim();
     if (!firstLine) return false;
     try {
       const entry = JSON.parse(firstLine);
       return entry !== null && typeof entry === 'object' && (entry as { type?: unknown }).type === 'session';
     } catch {
-      return false;
+      // Unparseable first line. If no newline was observed the line may simply
+      // run past the sniff window (a truncated fragment) — fail open and let
+      // the full parser decide, so a real session with a big header is never
+      // silently dropped. A complete line that fails to parse is foreign.
+      return newline === -1;
     }
   } catch {
     return true;
@@ -212,8 +218,9 @@ export function isSessionFile(filePath: string): boolean {
 /** Match a first-level directory name against exact names or `*` globs. */
 function matchesExcludePattern(name: string, patterns: string[]): boolean {
   return patterns.some((pattern) => {
-    if (!pattern.includes('*')) return pattern === name;
-    const escaped = pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+    const normalized = pattern.trim();
+    if (!normalized.includes('*')) return normalized === name;
+    const escaped = normalized.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
     return new RegExp(`^${escaped}$`).test(name);
   });
 }
@@ -222,38 +229,37 @@ export function getSessionFiles(
   sessionsDir: string,
   projectDir?: string,
   excludeDirs: string[] = [],
+  sessionOnly = false,
 ): string[] {
-  if (projectDir) {
-    const dir = path.join(sessionsDir, projectDir);
+  const collect = (dir: string, recursive: boolean): string[] => {
     if (!fs.existsSync(dir)) return [];
-    return fs.readdirSync(dir)
-      .filter(f => f.endsWith('.jsonl'))
-      .map(f => path.join(dir, f));
-  }
-
-  // All projects
-  if (!fs.existsSync(sessionsDir)) return [];
-  const files: string[] = [];
-  for (const entry of fs.readdirSync(sessionsDir)) {
-    const entryPath = path.join(sessionsDir, entry);
-    const stat = fs.statSync(entryPath);
-    if (stat.isDirectory() && matchesExcludePattern(entry, excludeDirs)) {
-      // User-configured exclusion (sessionIndexExclude): skip the whole dir.
-      continue;
-    }
-    if (stat.isDirectory()) {
-      // Scan .jsonl files inside project subdirectories
-      for (const f of fs.readdirSync(entryPath)) {
-        if (f.endsWith('.jsonl')) {
-          files.push(path.join(entryPath, f));
+    const out: string[] = [];
+    for (const entry of fs.readdirSync(dir)) {
+      const entryPath = path.join(dir, entry);
+      const stat = fs.statSync(entryPath);
+      if (stat.isDirectory()) {
+        if (recursive && matchesExcludePattern(entry, excludeDirs)) {
+          // User-configured exclusion (sessionIndexExclude): skip the whole dir.
+          continue;
         }
+        if (recursive) {
+          // Scan .jsonl files inside project subdirectories
+          for (const f of fs.readdirSync(entryPath)) {
+            if (f.endsWith('.jsonl')) {
+              out.push(path.join(entryPath, f));
+            }
+          }
+        }
+      } else if (stat.isFile() && entry.endsWith('.jsonl')) {
+        out.push(entryPath);
       }
-    } else if (stat.isFile() && entry.endsWith('.jsonl')) {
-      // Also pick up root-level .jsonl files
-      files.push(entryPath);
     }
-  }
-  return files;
+    return out;
+  };
+  const files = projectDir
+    ? collect(path.join(sessionsDir, projectDir), false)
+    : collect(sessionsDir, true);
+  return sessionOnly ? files.filter(isSessionFile) : files;
 }
 
 /**

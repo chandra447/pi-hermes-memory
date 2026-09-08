@@ -7,10 +7,27 @@ import fs from 'node:fs';
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DatabaseManager } from '../store/db.js';
 import { indexAllSessions, getSessionStats, retentionCutoffMs } from '../store/session-indexer.js';
+import { getSessionFiles, isSessionFile } from '../store/session-parser.js';
 import type { MemoryConfig } from '../types.js';
 import { AGENT_ROOT } from '../paths.js';
 
 const SESSIONS_DIR = process.env.PI_CODING_AGENT_SESSION_DIR || path.join(AGENT_ROOT, 'sessions');
+
+/** Preflight count mirroring the indexer's filtered view: session files, the
+ *  sniffed-out non-session remainder, and the project dirs touched. */
+function countSessionFilesWithSkips(sessionsDir: string, excludeDirs: string[] = []): { sessions: number; nonSession: number; projects: string[] } {
+  if (!fs.existsSync(sessionsDir)) return { sessions: 0, nonSession: 0, projects: [] };
+  const all = getSessionFiles(sessionsDir, undefined, excludeDirs, false);
+  let sessions = 0;
+  const projects = new Set<string>();
+  for (const file of all) {
+    if (!isSessionFile(file)) continue;
+    sessions++;
+    const parent = path.basename(path.dirname(file));
+    if (parent !== path.basename(sessionsDir)) projects.add(parent);
+  }
+  return { sessions, nonSession: all.length - sessions, projects: [...projects] };
+}
 
 export function registerIndexSessionsCommand(pi: ExtensionAPI, config: MemoryConfig): void {
   pi.registerCommand("memory-index-sessions", {
@@ -20,20 +37,15 @@ export function registerIndexSessionsCommand(pi: ExtensionAPI, config: MemoryCon
       ctx.ui.notify('🔍 Scanning session directories...', 'info');
 
       try {
-        // Count sessions first for progress display
-        let totalFiles = 0;
-        let projectDirs: string[] = [];
-        if (fs.existsSync(SESSIONS_DIR)) {
-          projectDirs = fs.readdirSync(SESSIONS_DIR)
-            .filter(d => fs.statSync(path.join(SESSIONS_DIR, d)).isDirectory());
-          for (const dir of projectDirs) {
-            const files = fs.readdirSync(path.join(SESSIONS_DIR, dir))
-              .filter(f => f.endsWith('.jsonl'));
-            totalFiles += files.length;
-          }
-        }
+        // Count sessions first for progress display — same filtered view the
+        // indexer runs (sessionIndexExclude dirs dropped, non-session jsonl
+        // sniffed out), so "Found N" matches what will actually be processed.
+        const countResult = countSessionFilesWithSkips(SESSIONS_DIR, config.sessionIndexExclude);
+        const totalFiles = countResult.sessions;
+        const nonSessionFiles = countResult.nonSession;
+        const projectDirs = countResult.projects;
 
-        ctx.ui.notify(`📁 Found ${totalFiles} session files across ${projectDirs.length} projects\n⏳ Indexing...`, 'info');
+        ctx.ui.notify(`📁 Found ${totalFiles} session files across ${projectDirs.length} projects${nonSessionFiles > 0 ? ` (${nonSessionFiles} non-session files will be skipped)` : ''}\n⏳ Indexing...`, 'info');
 
         const memoryDir = path.join(AGENT_ROOT, 'pi-hermes-memory');
         const dbManager = new DatabaseManager(memoryDir);
@@ -49,6 +61,9 @@ export function registerIndexSessionsCommand(pi: ExtensionAPI, config: MemoryCon
           output += `├─ Sessions processed: ${result.sessionsProcessed}\n`;
           output += `├─ Sessions indexed: ${result.sessionsIndexed}\n`;
           output += `├─ Sessions skipped (already indexed): ${result.sessionsSkipped}\n`;
+          if (result.nonSessionSkipped) {
+            output += `├─ Non-session files skipped: ${result.nonSessionSkipped}\n`;
+          }
           if (result.expiredSkipped) {
             output += `├─ Sessions skipped (outside retention): ${result.expiredSkipped}\n`;
           }
