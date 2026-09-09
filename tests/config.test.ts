@@ -49,6 +49,22 @@ describe("loadConfig", () => {
     assert.strictEqual(config.quickCheckOnOpen, true);
   });
 
+  it("honors consolidationChunkChars and consolidationMaxRounds", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ consolidationChunkChars: 6000, consolidationMaxRounds: 2 }));
+    const config = loadConfig(TEST_CONFIG_PATH);
+    assert.strictEqual(config.consolidationChunkChars, 6000);
+    assert.strictEqual(config.consolidationMaxRounds, 2);
+  });
+
+  it("ignores out-of-range consolidation chunking values", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ consolidationChunkChars: 100, consolidationMaxRounds: 0 }));
+    const config = loadConfig(TEST_CONFIG_PATH);
+    assert.strictEqual(config.consolidationChunkChars, undefined, "below the 500-char floor should be ignored");
+    assert.strictEqual(config.consolidationMaxRounds, undefined, "below 1 round should be ignored");
+  });
+
   it("honors a configured consolidationTimeoutMs, warning only when it is below the default", () => {
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
     const warnings: string[] = [];
