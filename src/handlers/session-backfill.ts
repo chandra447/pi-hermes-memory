@@ -1,7 +1,8 @@
-import { measureLifecycleSync } from '../lifecycle-timing.js';
+import { measureLifecycle, measureLifecycleSync } from '../lifecycle-timing.js';
 import type { DatabaseManager } from '../store/db.js';
 import {
   indexChangedSessions,
+  indexChangedSessionsAsync,
   needsBackfill,
   touchBackfillTimestamp,
   type BulkIndexResult,
@@ -30,7 +31,7 @@ export interface ScheduleSessionBackfillOptions {
   state?: SessionBackfillState;
   setTimeoutFn?: SetTimeoutFn;
   needsBackfillFn?: typeof needsBackfill;
-  indexSessionsFn?: typeof indexChangedSessions;
+  indexSessionsFn?: typeof indexChangedSessions | typeof indexChangedSessionsAsync;
   maxFilesToIndex?: number;
   touchBackfillTimestampFn?: typeof touchBackfillTimestamp;
   /**
@@ -72,7 +73,7 @@ export function scheduleSessionBackfill(
   const state = options.state ?? sessionBackfillState;
   const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
   const needsBackfillFn = options.needsBackfillFn ?? needsBackfill;
-  const indexSessionsFn = options.indexSessionsFn ?? indexChangedSessions;
+  const indexSessionsFn = options.indexSessionsFn ?? indexChangedSessionsAsync;
   const maxFilesToIndex = options.maxFilesToIndex ?? SESSION_BACKFILL_MAX_FILES;
   const touchBackfillTimestampFn = options.touchBackfillTimestampFn ?? touchBackfillTimestamp;
   const retentionCutoffMs = options.retentionCutoffMs ?? 0;
@@ -100,9 +101,9 @@ export function scheduleSessionBackfill(
   state.inProgress = true;
   state.promise = new Promise<void>((resolve) => {
     setTimeoutFn(() => {
-      measureLifecycleSync('session-backfill.callback', () => {
+      void measureLifecycle('session-backfill.callback', async () => {
         try {
-          const result = indexSessionsFn(dbManager, sessionsDir, { maxFilesToIndex, retentionCutoffMs });
+          const result = await indexSessionsFn(dbManager, sessionsDir, { maxFilesToIndex, retentionCutoffMs });
           if (!result.reachedLimit) touchBackfillTimestampFn(dbManager);
           notifyBestEffort(options.notify, formatBackfillResult(result), result.errors.length > 0 || result.reachedLimit ? 'warning' : 'info');
         } catch (err) {

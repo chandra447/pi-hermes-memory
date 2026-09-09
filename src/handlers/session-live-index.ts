@@ -1,6 +1,6 @@
-import { measureLifecycleSync } from '../lifecycle-timing.js';
+import { measureLifecycle } from '../lifecycle-timing.js';
 import type { DatabaseManager } from '../store/db.js';
-import { indexLiveSession } from '../store/session-indexer.js';
+import { indexLiveSession, indexLiveSessionAsync } from '../store/session-indexer.js';
 
 export const SESSION_LIVE_INDEX_DELAY_MS = 50;
 export const SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS = 5000;
@@ -12,6 +12,7 @@ type SessionManagerSnapshot = Parameters<typeof indexLiveSession>[1];
 export interface SessionLiveIndexState {
   inProgress: boolean;
   promise: Promise<void> | null;
+  pending?: Map<string, () => Promise<void>>;
 }
 
 export const sessionLiveIndexState: SessionLiveIndexState = {
@@ -22,7 +23,7 @@ export const sessionLiveIndexState: SessionLiveIndexState = {
 export interface ScheduleLiveSessionIndexOptions {
   state?: SessionLiveIndexState;
   setTimeoutFn?: SetTimeoutFn;
-  indexLiveSessionFn?: typeof indexLiveSession;
+  indexLiveSessionFn?: typeof indexLiveSession | typeof indexLiveSessionAsync;
   delayMs?: number;
   onError?: (error: unknown) => void;
 }
@@ -41,24 +42,32 @@ export function scheduleLiveSessionIndex(
   options: ScheduleLiveSessionIndexOptions = {},
 ): boolean {
   const state = options.state ?? sessionLiveIndexState;
+  const pending = state.pending ??= new Map();
+  const key = sessionManager.getSessionFile?.() ?? sessionManager.getHeader()?.id ?? 'ephemeral';
+  if (!pending.has(key)) pending.set(key, async () => {
+    try {
+      await dbManager.withCorruptionRecovery(() => (options.indexLiveSessionFn ?? indexLiveSessionAsync)(dbManager, sessionManager));
+    } catch (err) {
+      try { options.onError?.(err); } catch { /* best effort */ }
+    }
+  });
   if (state.inProgress) {
     return false;
   }
 
   const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
-  const indexLiveSessionFn = options.indexLiveSessionFn ?? indexLiveSession;
   const delayMs = options.delayMs ?? SESSION_LIVE_INDEX_DELAY_MS;
 
   state.inProgress = true;
   state.promise = new Promise<void>((resolve) => {
     setTimeoutFn(() => {
-      measureLifecycleSync('live-index.callback', () => {
+      void measureLifecycle('live-index.callback', async () => {
         try {
-          dbManager.withCorruptionRecovery(() => {
-            indexLiveSessionFn(dbManager, sessionManager);
-          });
-        } catch (err) {
-          try { options.onError?.(err); } catch { /* best effort */ }
+          while (pending.size) {
+            const [nextKey, run] = pending.entries().next().value!;
+            pending.delete(nextKey);
+            await run();
+          }
         } finally {
           state.inProgress = false;
           state.promise = null;

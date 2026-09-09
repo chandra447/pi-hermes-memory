@@ -28,11 +28,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
 import { DatabaseManager } from "./store/db.js";
-import { indexSession, upsertSessionFileMetadata, pruneEphemeralReviewSessions, pruneOldSessions, retentionCutoffMs } from "./store/session-indexer.js";
+import { indexLiveSessionAsync, pruneEphemeralReviewSessions, pruneOldSessions, retentionCutoffMs } from "./store/session-indexer.js";
 import { runRecoveryMaintenance } from "./store/recovery-maintenance.js";
 import { scheduleSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-backfill.js";
 import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-live-index.js";
-import { parseSessionFile } from "./store/session-parser.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
 import { registerSkillTool } from "./tools/skill-tool.js";
 import { registerSessionSearchTool } from "./tools/session-search-tool.js";
@@ -363,22 +362,7 @@ export default function (pi: ExtensionAPI) {
   // close() and silently no-op.
   pi.on("session_shutdown", async (_event, ctx) => {
     try {
-      measureLifecycleSync("shutdown.active-index", () => {
-        const sessionFile = ctx.sessionManager.getSessionFile();
-        if (sessionFile && require("node:fs").existsSync(sessionFile)) {
-          const sessionData = parseSessionFile(sessionFile);
-          if (sessionData) {
-            dbManager.withCorruptionRecovery(() => {
-              indexSession(dbManager, sessionData);
-              // Keep session_files metadata in sync with the final on-disk state.
-              // Pi appends the closing session entry on shutdown after the last
-              // message_end, so without this upsert the stored size/mtime would be
-              // stale and the next startup would re-parse this file unnecessarily.
-              upsertSessionFileMetadata(dbManager, sessionFile, sessionData.id);
-            });
-          }
-        }
-      });
+      await measureLifecycle("shutdown.active-index", () => indexLiveSessionAsync(dbManager, ctx.sessionManager));
     } catch {
       // Silent fail — don't block shutdown
     } finally {
