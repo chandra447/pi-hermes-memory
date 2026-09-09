@@ -46,6 +46,17 @@ export const DEFAULT_FLUSH_COMPACT_TIMEOUT_MS = 60_000;
 /** Shutdown flush cap. Not configurable. */
 export const DEFAULT_FLUSH_SHUTDOWN_TIMEOUT_MS = 10_000;
 
+/**
+ * Above this many chars of (metadata-stripped) entries in one consolidation
+ * prompt, the subprocess path splits the work into multiple child runs
+ * ("rounds"), each bounded by its own consolidationTimeoutMs, reloading from
+ * disk between rounds. Stores at or below the threshold keep today's
+ * single-shot child run. #P1: one whole-store LLM merge routinely exceeds any
+ * sane single-call timeout at cap scale.
+ */
+export const DEFAULT_CONSOLIDATION_CHUNK_CHARS = 4000;
+/** Max subprocess consolidation rounds per trigger (chunked path only). */
+export const DEFAULT_CONSOLIDATION_MAX_ROUNDS = 4;
 /** Wall-clock grace after overflow before an automatic consolidation may run. */
 export const DEFAULT_OVERFLOW_GRACE_MS = 180000;
 export const DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS = 7;

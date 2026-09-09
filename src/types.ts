@@ -93,6 +93,14 @@ export interface MemoryConfig {
   nudgeToolCalls: number;
   /** Maximum time in milliseconds for a consolidation run, auto or manual. Default: 180000 */
   consolidationTimeoutMs: number;
+  /**
+   * Entries joined above this many chars split subprocess consolidation into
+   * multiple child runs, each with its own consolidationTimeoutMs. Has no
+   * effect on the direct (in-process) transport. Default: 4000
+   */
+  consolidationChunkChars?: number;
+  /** Maximum subprocess consolidation rounds per trigger. Default: 4 */
+  consolidationMaxRounds?: number;
   /** Log failed auto-consolidation attempts to the session console. Default: true */
   autoConsolidationWarnOnFailure: boolean;
   /** Inject pinned STANDING.md instructions into every session. Default: true */
@@ -150,6 +158,11 @@ export interface ConsolidationResult {
   consolidated: boolean;
   /** Error message if consolidation failed */
   error?: string;
+  /**
+   * Number of subprocess consolidation rounds that completed successfully
+   * (chunked path only; absent for single-shot runs).
+   */
+  rounds?: number;
   /**
    * Set when another session already holds the consolidation lock for this
    * target. Nothing is broken — the work is happening elsewhere — so callers
