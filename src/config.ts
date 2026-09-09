@@ -146,6 +146,16 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
           );
         }
       }
+      if (typeof parsed.consolidationChunkChars === "number"
+        && Number.isFinite(parsed.consolidationChunkChars)
+        && parsed.consolidationChunkChars >= 500) {
+        config.consolidationChunkChars = parsed.consolidationChunkChars;
+      }
+      if (typeof parsed.consolidationMaxRounds === "number"
+        && Number.isInteger(parsed.consolidationMaxRounds)
+        && parsed.consolidationMaxRounds >= 1) {
+        config.consolidationMaxRounds = parsed.consolidationMaxRounds;
+      }
       if (typeof parsed.autoConsolidationWarnOnFailure === "boolean") {
         config.autoConsolidationWarnOnFailure = parsed.autoConsolidationWarnOnFailure;
       }

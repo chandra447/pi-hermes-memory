@@ -23,6 +23,8 @@ import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import {
   CONSOLIDATION_PROMPT,
+  DEFAULT_CONSOLIDATION_CHUNK_CHARS,
+  DEFAULT_CONSOLIDATION_MAX_ROUNDS,
   DEFAULT_CONSOLIDATION_TIMEOUT_MS,
   DIRECT_CONSOLIDATION_SYSTEM_PROMPT,
   ENTRY_DELIMITER,
@@ -35,7 +37,11 @@ import { AtomicLockCoordinator } from "../store/atomic-lock-coordinator.js";
 
 type MemoryTarget = "memory" | "user" | "failure";
 type ToolMemoryTarget = MemoryTarget | "project";
-type ConsolidationLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride" | "reviewTransport">;
+type ConsolidationLlmConfig = Pick<
+  MemoryConfig,
+  "llmModelOverride" | "llmThinkingOverride" | "reviewTransport"
+  | "consolidationChunkChars" | "consolidationMaxRounds"
+>;
 
 // staleMs is deliberately decoupled from the consolidation timeout. The holder
 // beats every CONSOLIDATION_LOCK_HEARTBEAT_MS while its child runs, so a
@@ -175,6 +181,36 @@ function buildConsolidationPrompt(
   ].join("\n");
 }
 
+function chunkCharsFor(config: ConsolidationLlmConfig): number {
+  const value = config.consolidationChunkChars;
+  return typeof value === "number" && Number.isFinite(value) && value >= 500
+    ? value
+    : DEFAULT_CONSOLIDATION_CHUNK_CHARS;
+}
+
+function maxRoundsFor(config: ConsolidationLlmConfig): number {
+  const value = config.consolidationMaxRounds;
+  return typeof value === "number" && Number.isInteger(value) && value >= 1
+    ? value
+    : DEFAULT_CONSOLIDATION_MAX_ROUNDS;
+}
+
+/**
+ * Head entries worth up to chunkChars of prompt text. Whole entries only; an
+ * entry larger than chunkChars travels alone so the loop always makes progress.
+ */
+export function takeChunk(entries: string[], chunkChars: number): string[] {
+  const batch: string[] = [];
+  let length = 0;
+  for (const entry of entries) {
+    const entryLength = entry.length + ENTRY_DELIMITER.length;
+    if (batch.length > 0 && length + entryLength > chunkChars) break;
+    batch.push(entry);
+    length += entryLength;
+  }
+  return batch;
+}
+
 export async function triggerConsolidation(
   pi: ExtensionAPI,
   store: MemoryStore,
@@ -276,18 +312,87 @@ export async function triggerConsolidation(
       }
     }
 
-    const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, promptEntries), llmConfig, {
-      signal,
-      timeoutMs,
-      retryWithoutOverrides: true,
-    }) as { code: number; stdout?: string; stderr?: string; killed?: boolean };
+    const chunkChars = chunkCharsFor(llmConfig);
+    const maxRounds = maxRoundsFor(llmConfig);
 
-    if (result.code === 0) {
-      return { consolidated: true };
+    if (promptEntries.join(ENTRY_DELIMITER).length <= chunkChars) {
+      // Single-shot path — behavior unchanged from pre-chunking releases.
+      const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, promptEntries), llmConfig, {
+        signal,
+        timeoutMs,
+        retryWithoutOverrides: true,
+      }) as { code: number; stdout?: string; stderr?: string; killed?: boolean };
+
+      if (result.code === 0) {
+        return { consolidated: true };
+      }
+      return {
+        consolidated: false,
+        error: describeConsolidationFailure(result, timeoutMs),
+      };
+    }
+
+    // Chunked path — the store exceeds one child run's prompt budget, and a
+    // single whole-store LLM merge is what produced the observed "subprocess
+    // terminated (likely timeout)" failures at cap scale. Split into bounded
+    // rounds: each round consolidates a head slice under its own timeout, then
+    // reloads from disk (the child modified files) and re-evaluates. Resume
+    // needs no cursor: partial progress is already on disk, so the next
+    // trigger continues from current state.
+    let completedRounds = 0;
+    let failureMessage: string | undefined;
+
+    while (completedRounds < maxRounds) {
+      if (promptEntries.join(ENTRY_DELIMITER).length <= chunkChars) break;
+      if (signal?.aborted) {
+        failureMessage = "aborted between consolidation rounds";
+        break;
+      }
+
+      const totalBefore = promptEntries.join(ENTRY_DELIMITER).length;
+      const batch = takeChunk(promptEntries, chunkChars);
+      const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, batch), llmConfig, {
+        signal,
+        timeoutMs,
+        retryWithoutOverrides: true,
+      }) as { code: number; stdout?: string; stderr?: string; killed?: boolean };
+
+      if (result.code !== 0) {
+        failureMessage = describeConsolidationFailure(result, timeoutMs)
+          + (completedRounds > 0
+            ? ` ${completedRounds} earlier round${completedRounds === 1 ? "" : "s"} shrank the store; retrigger consolidation to continue.`
+            : "");
+        break;
+      }
+
+      completedRounds++;
+      try {
+        await store.loadFromDisk();
+        promptEntries = entriesForTarget(store, target);
+      } catch {
+        failureMessage = "could not reload memory after a consolidation round";
+        break;
+      }
+
+      if (promptEntries.join(ENTRY_DELIMITER).length >= totalBefore) {
+        // The round consolidated nothing (child exited 0 without shrinking).
+        // Burning the remaining rounds would only repeat this; a later trigger
+        // can try again. The child exited 0, so keep single-shot success
+        // semantics: the run counts as consolidated.
+        break;
+      }
+    }
+
+    if (completedRounds > 0) {
+      return {
+        consolidated: true,
+        rounds: completedRounds,
+        ...(failureMessage ? { error: failureMessage } : {}),
+      };
     }
     return {
       consolidated: false,
-      error: describeConsolidationFailure(result, timeoutMs),
+      error: failureMessage ?? "consolidation produced no progress",
     };
 } catch (err) {
     const message = String(err);
