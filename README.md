@@ -539,6 +539,8 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "failureInjectionMaxAgeDays": 7,
   "failureInjectionMaxEntries": 5,
   "consolidationTimeoutMs": 180000,
+  "consolidationChunkChars": 4000,
+  "consolidationMaxRounds": 4,
   "overflowGraceMs": 180000,
   "autoConsolidationWarnOnFailure": true,
   "flushOnCompact": true,
@@ -575,7 +577,9 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `reviewTransport` | `direct` | LLM transport for background review, session flush, correction save, and manual consolidation: `direct` uses in-process `completeSimple()` with subprocess fallback; `subprocess` forces legacy `pi -p` only |
 | `memoryOverflowStrategy` | `auto-consolidate` | Legacy-inject behavior when a Markdown memory file reaches its character limit: `auto-consolidate` runs the existing consolidation flow; `reject` returns an error; `fifo-evict` rotates older entries in file order until the new entry fits |
 | `autoConsolidate` | `true` | Legacy alias for `memoryOverflowStrategy` when `memoryOverflowStrategy` is not set (`true` = `auto-consolidate`, `false` = `reject`) |
-| `consolidationTimeoutMs` | `180000` | Maximum time in milliseconds for a consolidation run (auto and `/memory-consolidate` alike). Configured values are used verbatim; a consolidation pays child-process boot plus a full LLM turn, so values below the default are frequently killed mid-run and log a warning at startup |
+| `consolidationTimeoutMs` | `180000` | Maximum time in milliseconds for a consolidation run (auto and `/memory-consolidate` alike). Applies **per subprocess round** when chunking is active. Configured values are used verbatim; a consolidation pays child-process boot plus a full LLM turn, so values below the default are frequently killed mid-run and log a warning at startup |
+| `consolidationChunkChars` | `4000` | When the entries to consolidate exceed this many chars, the subprocess path splits consolidation into multiple child runs (rounds), each bounded by its own `consolidationTimeoutMs`, reloading from disk between rounds so a killed run resumes from partial progress. Stores at or below the threshold keep the single-shot behavior. Has no effect on the direct in-process transport. Minimum 500 |
+| `consolidationMaxRounds` | `4` | Maximum subprocess consolidation rounds per trigger when chunking is active. Each round needs to shrink the store or the loop stops early |
 | `overflowGraceMs` | `180000` | Wall-clock grace period after a memory overflow before automatic consolidation is retried; this gives the active agent time to consolidate manually. Set to `0` to disable the grace period |
 | `autoConsolidationWarnOnFailure` | `true` | Log failed automatic consolidation attempts to the session console. Set to `false` to suppress only this warning; the memory tool result still reports the failure reason |
 | `correctionDetection` | `true` | Detect user corrections and save immediately |
