@@ -1233,3 +1233,69 @@ describe("chunked subprocess consolidation", () => {
     });
   });
 });
+
+describe("chunked prompt scoping", () => {
+  it("adds the scope guard only to chunked-round prompts", async () => {
+    execCalls = [];
+    const MEMORY_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "pi-consolidation-scope-"));
+    try {
+      const store = new MemoryStore({
+        memoryCharLimit: 5_000_000,
+        userCharLimit: 100,
+        nudgeInterval: 10,
+        reviewEnabled: false,
+        flushOnCompact: false,
+        flushOnShutdown: false,
+        flushMinTurns: 6,
+        autoConsolidate: false,
+        correctionDetection: false,
+        nudgeToolCalls: 15,
+        memoryDir: MEMORY_DIR,
+      });
+      await store.loadFromDisk();
+      for (let i = 0; i < 8; i++) {
+        await store.add("memory", `scope-entry-${i}-${"z".repeat(580)}`);
+      }
+
+      const pi = {
+        on: () => {},
+        exec: async (...args: any[]) => {
+          execCalls.push(captureExecArgs(args));
+          return { code: 0, stdout: "done", stderr: "" };
+        },
+        registerTool: () => {},
+        registerCommand: () => {},
+      } as any;
+
+      await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS);
+
+      const prompts = execCalls.map((call) => call[1].at(-1) as string);
+      assert.ok(prompts.length >= 1, "over-chunk store should run at least one chunked round");
+      for (const prompt of prompts) {
+        assert.ok(
+          prompt.includes("covers ONLY the entries listed above"),
+          "every chunked-round prompt must carry the scope guard",
+        );
+        assert.ok(
+          prompt.includes("Do NOT add, modify, or remove any entry that is not listed above"),
+          "chunked-round prompt must forbid out-of-scope mutations",
+        );
+      }
+
+      execCalls = [];
+      // Same store, now under one chunk (chunkChars raised): single-shot keeps
+      // the unscoped wording.
+      await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", {
+        consolidationChunkChars: 100_000,
+      });
+      assert.strictEqual(execCalls.length, 1);
+      const singleShotPrompt = execCalls[0][1].at(-1) as string;
+      assert.ok(
+        !singleShotPrompt.includes("covers ONLY the entries listed above"),
+        "single-shot prompt must stay unchanged",
+      );
+    } finally {
+      await fs.rm(MEMORY_DIR, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
