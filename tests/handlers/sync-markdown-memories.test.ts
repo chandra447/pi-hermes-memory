@@ -12,8 +12,26 @@ import {
   syncMarkdownMemoriesToSqlite,
 } from '../../src/handlers/sync-markdown-memories.js';
 import { ENTRY_DELIMITER } from '../../src/constants.js';
-import { addMemory, getMemories, searchMemories } from '../../src/store/sqlite-memory-store.js';
+import { addMemory, getMemories, reconcileMarkdownMemoryScope, searchMemories } from '../../src/store/sqlite-memory-store.js';
 import { AtomicLockCoordinator } from '../../src/store/atomic-lock-coordinator.js';
+import { MemoryStore } from '../../src/store/memory-store.js';
+
+async function withBlockedMemoryWrites<T>(dbManager: DatabaseManager, fn: () => T | Promise<T>): Promise<T> {
+  const db = dbManager.getDb() as { prepare: (sql: string) => unknown };
+  const originalPrepare = db.prepare.bind(db);
+  db.prepare = (sql: string) => {
+    const normalized = sql.replace(/\s+/g, ' ').trim();
+    if (/^INSERT(?: OR REPLACE)? INTO memories\b/i.test(normalized) || /^UPDATE memories\b/i.test(normalized)) {
+      throw new Error(`unexpected memories write: ${normalized}`);
+    }
+    return originalPrepare(sql);
+  };
+  try {
+    return await fn();
+  } finally {
+    db.prepare = originalPrepare;
+  }
+}
 
 describe('memory sqlite sync + markdown backfill', () => {
   let tmpDir: string;
@@ -487,5 +505,101 @@ describe('memory sqlite sync + markdown backfill', () => {
     } finally {
       targetManager.close();
     }
+  });
+
+  it('skips unchanged markdown on a second startup sync without inserting', async () => {
+    fs.writeFileSync(path.join(globalDir, 'MEMORY.md'), 'startup skip entry', 'utf-8');
+    const first = await syncMarkdownMemoriesToSqlite(dbManager, globalDir, undefined, agentRoot);
+    assert.strictEqual(first.imported, 1);
+
+    const second = await withBlockedMemoryWrites(dbManager, () =>
+      syncMarkdownMemoriesToSqlite(dbManager, globalDir, undefined, agentRoot),
+    );
+    assert.strictEqual(second.imported, 0);
+    assert.strictEqual(getMemories(dbManager, { target: 'memory', project: null }).length, 1);
+  });
+
+  it('repairs COUNT-preserving sqlite-only drift through the command, not startup', async () => {
+    fs.writeFileSync(path.join(globalDir, 'MEMORY.md'), 'canonical markdown content', 'utf-8');
+    await syncMarkdownMemoriesToSqlite(dbManager, globalDir, undefined, agentRoot);
+    dbManager.getDb().prepare(`
+      UPDATE memories SET content = 'drifted sqlite content' WHERE target = 'memory' AND project IS NULL
+    `).run();
+
+    await syncMarkdownMemoriesToSqlite(dbManager, globalDir, undefined, agentRoot);
+    assert.strictEqual(
+      getMemories(dbManager, { target: 'memory', project: null })[0].content,
+      'drifted sqlite content',
+    );
+
+    let handler: any;
+    const mockPi = {
+      registerCommand: (_name: string, opts: any) => {
+        handler = opts.handler;
+      },
+    } as unknown as ExtensionAPI;
+    const notifications: Array<{ message: string; severity: string }> = [];
+    const ctx = {
+      ui: {
+        notify: (message: string, severity: string) => {
+          notifications.push({ message, severity });
+        },
+      },
+    } as any;
+
+    registerSyncMarkdownMemoriesCommand(mockPi, dbManager, globalDir, undefined, agentRoot);
+    await handler({}, ctx);
+
+    assert.strictEqual(
+      getMemories(dbManager, { target: 'memory', project: null })[0].content,
+      'canonical markdown content',
+    );
+    assert.ok(notifications.some((n) => n.message.includes('SQLite sync complete')));
+  });
+
+  it('still reconciles a same-size rewrite that preserves mtime', async () => {
+    const memoryFile = path.join(globalDir, 'MEMORY.md');
+    const first = 'same-len-entry-aaa';
+    const second = 'same-len-entry-bbb';
+    assert.strictEqual(first.length, second.length);
+    fs.writeFileSync(memoryFile, first, 'utf-8');
+    await syncMarkdownMemoriesToSqlite(dbManager, globalDir, undefined, agentRoot);
+    assert.deepStrictEqual(
+      getMemories(dbManager, { target: 'memory', project: null }).map((entry) => entry.content),
+      [first],
+    );
+
+    const st = fs.statSync(memoryFile);
+    fs.writeFileSync(memoryFile, second, 'utf-8');
+    fs.utimesSync(memoryFile, st.atime, st.mtime);
+
+    await syncMarkdownMemoriesToSqlite(dbManager, globalDir, undefined, agentRoot);
+    assert.deepStrictEqual(
+      getMemories(dbManager, { target: 'memory', project: null }).map((entry) => entry.content),
+      [second],
+    );
+  });
+
+  it('skips startup sync after a live mutation observer already reconciled', async () => {
+    const store = new MemoryStore({
+      memoryDir: globalDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      failureCharLimit: 5000,
+    } as any);
+    await store.loadFromDisk();
+    store.setMutationObserver((target, entries) => {
+      reconcileMarkdownMemoryScope(dbManager, entries, target, null);
+      return null;
+    });
+
+    const added = await store.add('memory', 'observer composed entry');
+    assert.ok(added.success);
+    assert.strictEqual(getMemories(dbManager, { target: 'memory', project: null }).length, 1);
+
+    const counters = await withBlockedMemoryWrites(dbManager, () =>
+      syncMarkdownMemoriesToSqlite(dbManager, globalDir, undefined, agentRoot),
+    );
+    assert.strictEqual(counters.imported, 0);
   });
 });
