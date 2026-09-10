@@ -29,6 +29,7 @@ describe("loadConfig", () => {
     assert.strictEqual(config.flushOnShutdown, true);
     assert.strictEqual(config.flushMinTurns, 6);
     assert.strictEqual(config.flushRecentMessages, 0);
+    assert.strictEqual(config.flushCompactTimeoutMs, 60000);
     assert.strictEqual(config.memoryOverflowStrategy, "auto-consolidate");
     assert.strictEqual(config.autoConsolidate, true);
     assert.strictEqual(config.consolidationTimeoutMs, 180000);
@@ -71,6 +72,31 @@ describe("loadConfig", () => {
       console.warn = originalWarn;
     }
   });
+
+  it("honors a configured flushCompactTimeoutMs, warning only when it is below the default", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => { warnings.push(String(message)); };
+
+    try {
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ flushCompactTimeoutMs: 90000 }));
+      assert.strictEqual(loadConfig(TEST_CONFIG_PATH).flushCompactTimeoutMs, 90000);
+      assert.deepStrictEqual(warnings, [], "a value above the default should not warn");
+
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ flushCompactTimeoutMs: 30000 }));
+      assert.strictEqual(
+        loadConfig(TEST_CONFIG_PATH).flushCompactTimeoutMs,
+        30000,
+        "a lower configured value must be honored, not clamped",
+      );
+      assert.strictEqual(warnings.length, 1, "a sub-default value should warn once");
+      assert.match(warnings[0], /30000ms.*below the 60000ms default/);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
 
   it("overrides defaults when config file exists", () => {
     // Write a config file

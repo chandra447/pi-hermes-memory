@@ -12,6 +12,7 @@ import {
   DEFAULT_REVIEW_RECENT_MESSAGES,
   DEFAULT_FLUSH_RECENT_MESSAGES,
   DEFAULT_CONSOLIDATION_TIMEOUT_MS,
+  DEFAULT_FLUSH_COMPACT_TIMEOUT_MS,
   DEFAULT_OVERFLOW_GRACE_MS,
   DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
   DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
@@ -55,6 +56,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   flushOnShutdown: true,
   flushMinTurns: DEFAULT_FLUSH_MIN_TURNS,
   flushRecentMessages: DEFAULT_FLUSH_RECENT_MESSAGES,
+  flushCompactTimeoutMs: DEFAULT_FLUSH_COMPACT_TIMEOUT_MS,
   memoryOverflowStrategy: "auto-consolidate",
   overflowGraceMs: DEFAULT_OVERFLOW_GRACE_MS,
   autoConsolidate: true,
@@ -111,6 +113,15 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (typeof parsed.flushOnShutdown === "boolean") config.flushOnShutdown = parsed.flushOnShutdown;
       if (typeof parsed.flushMinTurns === "number") config.flushMinTurns = parsed.flushMinTurns;
       if (isNonNegativeNumber(parsed.flushRecentMessages)) config.flushRecentMessages = parsed.flushRecentMessages;
+      if (typeof parsed.flushCompactTimeoutMs === "number") {
+        config.flushCompactTimeoutMs = parsed.flushCompactTimeoutMs;
+        if (parsed.flushCompactTimeoutMs < DEFAULT_FLUSH_COMPACT_TIMEOUT_MS) {
+          console.warn(
+            `⚠️ flushCompactTimeoutMs is set to ${parsed.flushCompactTimeoutMs}ms, below the ${DEFAULT_FLUSH_COMPACT_TIMEOUT_MS}ms default.`
+            + " Compact flush is one LLM turn over the conversation; local models are routinely cut off below this.",
+          );
+        }
+      }
       if (typeof parsed.autoConsolidate === "boolean") {
         config.autoConsolidate = parsed.autoConsolidate;
         hasLegacyAutoConsolidate = true;

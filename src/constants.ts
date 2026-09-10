@@ -35,6 +35,17 @@ export const DEFAULT_FLUSH_RECENT_MESSAGES = 0;
  * including lower ones; `loadConfig` warns when a value below this is set.
  */
 export const DEFAULT_CONSOLIDATION_TIMEOUT_MS = 180000;
+/**
+ * Compact flush is one LLM turn over the conversation snapshot, awaited
+ * before compaction. 30s was cutting local-model prompts mid-prefill
+ * (#225); the value is a ceiling (cloud calls return early). Honor
+ * configured values verbatim; loadConfig warns below this.
+ */
+export const DEFAULT_FLUSH_COMPACT_TIMEOUT_MS = 60_000;
+
+/** Shutdown flush cap. Not configurable. */
+export const DEFAULT_FLUSH_SHUTDOWN_TIMEOUT_MS = 10_000;
+
 /** Wall-clock grace after overflow before an automatic consolidation may run. */
 export const DEFAULT_OVERFLOW_GRACE_MS = 180000;
 export const DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS = 7;

@@ -6,6 +6,20 @@
  * Default transport: in-process direct completion (same mechanism as
  * background review — see review-memory-ops.ts). Falls back to a `pi -p`
  * subprocess only if direct mode fails or reviewTransport forces subprocess.
+ *
+ * Compact flush spends at most `flushCompactTimeoutMs` across both transports
+ * (one shared window). Direct runs first; the `pi -p` fallback gets only the
+ * remainder, never a second copy of the budget. Shutdown stays a hardcoded
+ * 10s cap and is silent.
+ *
+ * Access pattern (remaining × session-signal × notify):
+ * | Event                                         | leftover                         | session signal | notify                          |
+ * | Direct ok                                     | n/a (return)                     | live           | none                            |
+ * | Direct `no_model` / `parse_error` with time   | subprocess leftover, not budget  | live           | none unless child then exhausts |
+ * | Direct internal timeout at ceiling            | leftover < floor → skip child    | live           | warning, once                   |
+ * | Esc during compact (`event.signal`)           | skip even if leftover ≫ 0        | aborted        | silent                          |
+ * | `reviewTransport: "subprocess"`               | one child, leftover = budget     | as above       | on exhaust                      |
+ * | Shutdown                                      | budget 10000, no session signal  | n/a            | never                           |
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -13,6 +27,7 @@ import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import {
   buildMemoryTargetRoutingGuidance,
+  DEFAULT_FLUSH_SHUTDOWN_TIMEOUT_MS,
   DIRECT_FLUSH_SYSTEM_PROMPT,
   ENTRY_DELIMITER,
   FLUSH_PROMPT,
@@ -24,6 +39,72 @@ import { collectMessageParts } from "./message-parts.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
 import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
+
+/** Do not spawn pi -p when leftover time is below this, floored by the budget itself. */
+const FLUSH_SUBPROCESS_MIN_REMAINING_MS = 5_000;
+
+export type FlushKind = "compact" | "shutdown";
+
+export type FlushHandoff =
+  | { skip: "session_aborted" }
+  | { skip: "budget_exhausted" }
+  | { timeoutMs: number };
+
+type FlushContext = Pick<ExtensionContext, "sessionManager" | "model" | "modelRegistry" | "cwd"> & {
+  ui?: Pick<ExtensionContext["ui"], "notify">;
+};
+
+/** Remaining subprocess budget. null = skip (spent, below spawn floor, or non-positive). */
+export function remainingFlushTimeoutMs(budgetMs: number, elapsedMs: number): number | null {
+  if (budgetMs <= 0) return null;
+  const elapsed = Math.max(0, elapsedMs);
+  const remaining = budgetMs - elapsed;
+  const floor = Math.min(FLUSH_SUBPROCESS_MIN_REMAINING_MS, budgetMs);
+  if (remaining < floor) return null;
+  return remaining;
+}
+
+export function resolveFlushHandoff(
+  sessionAborted: boolean,
+  budgetMs: number,
+  elapsedMs: number,
+): FlushHandoff {
+  if (sessionAborted) return { skip: "session_aborted" };
+  const leftover = remainingFlushTimeoutMs(budgetMs, elapsedMs);
+  if (leftover === null) return { skip: "budget_exhausted" };
+  return { timeoutMs: leftover };
+}
+
+function linkBudget(parent: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onParent = () => controller.abort();
+  parent?.addEventListener("abort", onParent, { once: true });
+  if (parent?.aborted) controller.abort();
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", onParent);
+    },
+  };
+}
+
+function notifyCompactFailure(
+  ctx: FlushContext,
+  kind: FlushKind,
+  detail: string,
+): void {
+  if (kind !== "compact") return;
+  try {
+    ctx.ui?.notify(
+      `Memory flush before compact did not save (${detail}). Compaction continues. Raise flushCompactTimeoutMs for slow/local models.`,
+      "warning",
+    );
+  } catch {
+    // compact ctx can go stale; never throw into session_before_compact
+  }
+}
 
 function buildDirectFlushUserPrompt(
   store: MemoryStore,
@@ -62,9 +143,14 @@ export function setupSessionFlush(
   config: MemoryConfig,
   dbManager: DatabaseManager | null = null,
   projectName: ProjectNameRef = null,
-  deps: { runDirectMemoryCompletion?: typeof runDirectMemoryCompletion; ensureMemoryReady?: EnsureMemoryReady } = {},
+  deps: {
+    runDirectMemoryCompletion?: typeof runDirectMemoryCompletion;
+    now?: () => number;
+    ensureMemoryReady?: EnsureMemoryReady;
+  } = {},
 ): void {
   let userTurnCount = 0;
+  const now = deps.now ?? Date.now;
   const runDirect = deps.runDirectMemoryCompletion ?? runDirectMemoryCompletion;
 
   pi.on("message_end", async (event, _ctx) => {
@@ -73,85 +159,116 @@ export function setupSessionFlush(
 
   /** Shared flush logic — builds conversation snapshot and saves memories */
   async function flush(
-    ctx: Pick<ExtensionContext, "sessionManager" | "model" | "modelRegistry" | "cwd">,
-    signal?: AbortSignal,
-    timeoutMs = 30000,
+    ctx: FlushContext,
+    signal: AbortSignal | undefined,
+    timeoutMs: number,
+    kind: FlushKind,
   ): Promise<void> {
-    if (userTurnCount < config.flushMinTurns) return;
-
-    let entries;
     try {
-      entries = ctx.sessionManager.getBranch();
-    } catch {
-      return; // Context already stale
-    }
+      if (userTurnCount < config.flushMinTurns) return;
 
-    const parts = collectMessageParts(entries, config.flushRecentMessages);
-    try {
-      await deps.ensureMemoryReady?.(ctx);
-    } catch {
-      return; // Do not flush against an unloaded or partially migrated store.
-    }
-    const activeProjectStore = resolveProjectStore(projectStore);
-    const activeProjectName = resolveProjectName(projectName);
-
-    if (usesDirectTransport(config)) {
+      let entries;
       try {
-        const directResult = await runDirect(
-          ctx,
-          store,
-          activeProjectStore,
-          {
-            systemPrompt: [
-              DIRECT_FLUSH_SYSTEM_PROMPT,
-              "",
-              buildMemoryTargetRoutingGuidance(activeProjectStore !== null),
-            ].join("\n"),
-            userPrompt: buildDirectFlushUserPrompt(store, activeProjectStore, parts),
-            config,
-            timeoutMs,
-            signal,
-          },
-          dbManager,
-          activeProjectName,
-        );
-        if (directResult.ok) return;
+        entries = ctx.sessionManager.getBranch();
       } catch {
-        // Fall through to subprocess below.
+        return; // Context already stale
       }
-    }
 
-    const flushMessage = [
-      FLUSH_PROMPT,
-      "",
-      buildMemoryTargetRoutingGuidance(activeProjectStore !== null),
-      "",
-      "--- Conversation ---",
-      parts.join("\n\n"),
-    ].join("\n");
+      const parts = collectMessageParts(entries, config.flushRecentMessages);
+      try {
+        await deps.ensureMemoryReady?.(ctx);
+      } catch {
+        return; // Do not flush against an unloaded or partially migrated store.
+      }
+      const activeProjectStore = resolveProjectStore(projectStore);
+      const activeProjectName = resolveProjectName(projectName);
 
-    try {
-      await execChildPrompt(pi, flushMessage, config, {
-        cwd: ctx.cwd,
-        model: resolveChildPiModel(ctx.model),
-        signal,
-        timeoutMs,
-      });
+      const started = now();
+      const opening = resolveFlushHandoff(Boolean(signal?.aborted), timeoutMs, now() - started);
+      if ("skip" in opening) {
+        if (opening.skip === "budget_exhausted") {
+          notifyCompactFailure(ctx, kind, `timed out after ${timeoutMs}ms`);
+        }
+        return;
+      }
+
+      const budget = linkBudget(signal, timeoutMs);
+      try {
+        if (usesDirectTransport(config)) {
+          try {
+            const directResult = await runDirect(
+              ctx,
+              store,
+              activeProjectStore,
+              {
+                systemPrompt: [
+                  DIRECT_FLUSH_SYSTEM_PROMPT,
+                  "",
+                  buildMemoryTargetRoutingGuidance(activeProjectStore !== null),
+                ].join("\n"),
+                userPrompt: buildDirectFlushUserPrompt(store, activeProjectStore, parts),
+                config,
+                timeoutMs: opening.timeoutMs,
+                signal: budget.signal,
+              },
+              dbManager,
+              activeProjectName,
+            );
+            if (directResult.ok) return;
+          } catch {
+            // Fall through with leftover, not a copied ceiling.
+          }
+        }
+
+        const handoff = resolveFlushHandoff(Boolean(signal?.aborted), timeoutMs, now() - started);
+        if ("skip" in handoff) {
+          if (handoff.skip === "budget_exhausted") {
+            notifyCompactFailure(ctx, kind, `timed out after ${timeoutMs}ms`);
+          }
+          return;
+        }
+
+        const flushMessage = [
+          FLUSH_PROMPT,
+          "",
+          buildMemoryTargetRoutingGuidance(activeProjectStore !== null),
+          "",
+          "--- Conversation ---",
+          parts.join("\n\n"),
+        ].join("\n");
+
+        try {
+          await execChildPrompt(pi, flushMessage, config, {
+            cwd: ctx.cwd,
+            model: resolveChildPiModel(ctx.model),
+            signal,
+            timeoutMs: handoff.timeoutMs,
+          });
+        } catch {
+          if (!signal?.aborted) {
+            notifyCompactFailure(ctx, kind, `timed out after ${timeoutMs}ms`);
+          }
+        }
+      } finally {
+        budget.dispose();
+      }
     } catch {
-      // Best-effort flush — never block compaction or shutdown.
+      // Best-effort flush — never throw into compaction or shutdown.
     }
   }
 
   // Flush before compaction (can afford to wait)
   pi.on("session_before_compact", async (event, ctx) => {
     if (!config.flushOnCompact) return;
-    await flush(ctx, event.signal, 30000);
+    await flush(ctx, event.signal, config.flushCompactTimeoutMs, "compact");
   });
 
   // Flush before session shutdown. Pi awaits async session_shutdown handlers
   // before invalidating the session, so await the bounded flush here.
   pi.on("session_shutdown", async (event, ctx) => {
     if (!config.flushOnShutdown || event.reason === "reload") return;
-    await measureLifecycle("shutdown.flush", () => flush(ctx, undefined, 10000));
+    await measureLifecycle("shutdown.flush", () =>
+      flush(ctx, undefined, DEFAULT_FLUSH_SHUTDOWN_TIMEOUT_MS, "shutdown"),
+    );
   });
 }
