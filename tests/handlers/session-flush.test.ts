@@ -919,7 +919,7 @@ describe("compact flush budget", () => {
     assert.equal(notifications.length, 0);
   });
 
-  it("non-positive compact budget skips without an LLM call and notifies once", async () => {
+  it("non-positive compact budget skips without an LLM call and stays silent", async () => {
     const { ctx, notifications } = flushCtxWithNotify();
     setupSessionFlush(
       mockPi.pi,
@@ -936,8 +936,7 @@ describe("compact flush budget", () => {
 
     assert.equal(directCalls.length, 0);
     assert.equal(mockPi.execCalls.length, 0);
-    assert.equal(notifications.length, 1);
-    assert.match(notifications[0].message, /flushCompactTimeoutMs/);
+    assert.equal(notifications.length, 0);
   });
 
   it("subprocess transport takes one child at the full compact ceiling", async () => {
@@ -1000,7 +999,59 @@ describe("compact flush budget", () => {
     assert.ok(options && typeof options === "object" && "timeoutMs" in options);
     assert.equal(options.timeoutMs, 60_000);
   });
+  it("child killed by the watchdog (non-zero exit) notifies once", async () => {
+    const failingPi = createMockPi();
+    failingPi.pi.exec = async () => ({ code: 124, killed: true, stdout: "", stderr: "" });
+    const { ctx, notifications } = flushCtxWithNotify();
+    setupSessionFlush(
+      failingPi.pi,
+      mockStore,
+      null,
+      defaultConfig({ reviewTransport: "subprocess" }),
+    );
+
+    await primeFlushReady(failingPi.handlers);
+    await emit(failingPi.handlers, "session_before_compact", { signal: undefined }, ctx);
+
+    assert.equal(notifications.length, 1);
+    assert.match(notifications[0].message, /child exited with code 124/);
+    assert.match(notifications[0].message, /flushCompactTimeoutMs/);
+  });
+
+  it("direct receives the linked budget signal, not the raw session signal", async () => {
+    const { ctx } = flushCtxWithNotify();
+    const sessionController = new AbortController();
+    const seen: AbortSignal[] = [];
+    setupSessionFlush(
+      mockPi.pi,
+      mockStore,
+      null,
+      defaultConfig(),
+      null,
+      null,
+      {
+        runDirectMemoryCompletion: async (...args: unknown[]) => {
+          const options = args[3] as { signal?: AbortSignal };
+          const linked = options.signal;
+          seen.push(linked as AbortSignal);
+          const { promise, resolve } = Promise.withResolvers<{ ok: boolean; appliedCount: number; fallbackReason: string }>();
+          linked?.addEventListener("abort", () => resolve({ ok: false, appliedCount: 0, fallbackReason: "aborted" }), { once: true });
+          sessionController.abort(); // synchronous dispatch forwards through linkBudget
+          return promise;
+        },
+      },
+    );
+
+    await primeFlushReady(mockPi.handlers);
+    await emit(mockPi.handlers, "session_before_compact", { signal: sessionController.signal }, ctx);
+
+    assert.equal(seen.length, 1);
+    assert.notEqual(seen[0], sessionController.signal);
+    assert.equal(seen[0].aborted, true);
+    assert.equal(mockPi.execCalls.length, 0);
+  });
 });
+
 
 describe("shutdown flush budget", () => {
   let mockPi: MockSessionFlushPi;

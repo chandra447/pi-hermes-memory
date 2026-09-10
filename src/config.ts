@@ -113,7 +113,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (typeof parsed.flushOnShutdown === "boolean") config.flushOnShutdown = parsed.flushOnShutdown;
       if (typeof parsed.flushMinTurns === "number") config.flushMinTurns = parsed.flushMinTurns;
       if (isNonNegativeNumber(parsed.flushRecentMessages)) config.flushRecentMessages = parsed.flushRecentMessages;
-      if (typeof parsed.flushCompactTimeoutMs === "number") {
+      if (typeof parsed.flushCompactTimeoutMs === "number" && Number.isFinite(parsed.flushCompactTimeoutMs)) {
         config.flushCompactTimeoutMs = parsed.flushCompactTimeoutMs;
         if (parsed.flushCompactTimeoutMs < DEFAULT_FLUSH_COMPACT_TIMEOUT_MS) {
           console.warn(

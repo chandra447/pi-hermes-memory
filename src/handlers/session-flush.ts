@@ -10,15 +10,16 @@
  * Compact flush spends at most `flushCompactTimeoutMs` across both transports
  * (one shared window). Direct runs first; the `pi -p` fallback gets only the
  * remainder, never a second copy of the budget. Shutdown stays a hardcoded
- * 10s cap and is silent.
+ * 10s cap and is silent. `pi.exec` resolves (never rejects) on timeout/kill,
+ * so a non-zero child exit notifies the same way an exhaust does.
  *
  * Access pattern (remaining × session-signal × notify):
  * | Event                                         | leftover                         | session signal | notify                          |
  * | Direct ok                                     | n/a (return)                     | live           | none                            |
- * | Direct `no_model` / `parse_error` with time   | subprocess leftover, not budget  | live           | none unless child then exhausts |
+ * | Direct `no_model` / `parse_error` with time   | subprocess leftover, not budget  | live           | none unless child fails/exits   |
  * | Direct internal timeout at ceiling            | leftover < floor → skip child    | live           | warning, once                   |
  * | Esc during compact (`event.signal`)           | skip even if leftover ≫ 0        | aborted        | silent                          |
- * | `reviewTransport: "subprocess"`               | one child, leftover = budget     | as above       | on exhaust                      |
+ * | `reviewTransport: "subprocess"`               | one child, leftover = budget     | as above       | warn on nonzero exit / throw    |
  * | Shutdown                                      | budget 10000, no session signal  | n/a            | never                           |
  */
 
@@ -27,6 +28,7 @@ import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import {
   buildMemoryTargetRoutingGuidance,
+  DEFAULT_FLUSH_COMPACT_TIMEOUT_MS,
   DEFAULT_FLUSH_SHUTDOWN_TIMEOUT_MS,
   DIRECT_FLUSH_SYSTEM_PROMPT,
   ENTRY_DELIMITER,
@@ -182,15 +184,10 @@ export function setupSessionFlush(
       }
       const activeProjectStore = resolveProjectStore(projectStore);
       const activeProjectName = resolveProjectName(projectName);
+      if (signal?.aborted) return;
+      if (timeoutMs <= 0) return; // explicit disable or degenerate config: silent
 
       const started = now();
-      const opening = resolveFlushHandoff(Boolean(signal?.aborted), timeoutMs, now() - started);
-      if ("skip" in opening) {
-        if (opening.skip === "budget_exhausted") {
-          notifyCompactFailure(ctx, kind, `timed out after ${timeoutMs}ms`);
-        }
-        return;
-      }
 
       const budget = linkBudget(signal, timeoutMs);
       try {
@@ -208,7 +205,7 @@ export function setupSessionFlush(
                 ].join("\n"),
                 userPrompt: buildDirectFlushUserPrompt(store, activeProjectStore, parts),
                 config,
-                timeoutMs: opening.timeoutMs,
+                timeoutMs,
                 signal: budget.signal,
               },
               dbManager,
@@ -238,15 +235,21 @@ export function setupSessionFlush(
         ].join("\n");
 
         try {
-          await execChildPrompt(pi, flushMessage, config, {
+          const childResult = await execChildPrompt(pi, flushMessage, config, {
             cwd: ctx.cwd,
             model: resolveChildPiModel(ctx.model),
             signal,
             timeoutMs: handoff.timeoutMs,
           });
-        } catch {
+          // pi.exec resolves {code, killed} on timeout/kill instead of rejecting;
+          // a watchdog-killed child is a miss the same way an exhaust is.
+          if (!signal?.aborted && typeof childResult?.code === "number" && childResult.code !== 0) {
+            notifyCompactFailure(ctx, kind, `child exited with code ${childResult.code}`);
+          }
+        } catch (err) {
           if (!signal?.aborted) {
-            notifyCompactFailure(ctx, kind, `timed out after ${timeoutMs}ms`);
+            const detail = err instanceof Error ? err.message : String(err);
+            notifyCompactFailure(ctx, kind, `child error: ${detail}`);
           }
         }
       } finally {
@@ -260,7 +263,7 @@ export function setupSessionFlush(
   // Flush before compaction (can afford to wait)
   pi.on("session_before_compact", async (event, ctx) => {
     if (!config.flushOnCompact) return;
-    await flush(ctx, event.signal, config.flushCompactTimeoutMs, "compact");
+    await flush(ctx, event.signal, config.flushCompactTimeoutMs ?? DEFAULT_FLUSH_COMPACT_TIMEOUT_MS, "compact");
   });
 
   // Flush before session shutdown. Pi awaits async session_shutdown handlers

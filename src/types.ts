@@ -49,7 +49,7 @@ export interface MemoryConfig {
   /** Recent conversation messages included in session flush. 0 = all. Default: 0 */
   flushRecentMessages?: number;
   /** Ceiling for the compact-path flush (direct + subprocess). Default: 60000 */
-  flushCompactTimeoutMs: number;
+  flushCompactTimeoutMs?: number;
 
   /** Override extension storage directory. Default: ~/.pi/agent/pi-hermes-memory */
   memoryDir?: string;

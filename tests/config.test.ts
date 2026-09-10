@@ -97,6 +97,21 @@ describe("loadConfig", () => {
     }
   });
 
+  it("ignores non-finite flushCompactTimeoutMs values and keeps the default", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => { warnings.push(String(message)); };
+
+    try {
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ flushCompactTimeoutMs: 1e999 }));
+      assert.strictEqual(loadConfig(TEST_CONFIG_PATH).flushCompactTimeoutMs, 60000);
+      assert.deepStrictEqual(warnings, [], "a non-finite value is treated as absent, not warned");
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
 
   it("overrides defaults when config file exists", () => {
     // Write a config file
