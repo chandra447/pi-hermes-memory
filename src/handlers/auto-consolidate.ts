@@ -170,15 +170,27 @@ function buildConsolidationPrompt(
   target: MemoryTarget,
   toolTarget: ToolMemoryTarget,
   entries: string[],
+  scoped = false,
 ): string {
-  return [
+  const lines = [
     CONSOLIDATION_PROMPT,
     "",
     `--- Current ${labelForTarget(target, toolTarget)} Entries ---`,
     entries.join(ENTRY_DELIMITER) || "(empty)",
     "",
     `Use memory_add, memory_replace, or memory_remove to consolidate. Target: '${toolTarget}'`,
-  ].join("\n");
+  ];
+  if (scoped) {
+    // Chunked rounds present a slice of the store, but the child's memory tools
+    // can see everything. Without an explicit scope the model may modify entries
+    // it was never shown — observed in real runs (a round wiped 11 out-of-scope
+    // entries). Real runs 2026-09-10.
+    lines.push(
+      "This pass covers ONLY the entries listed above — they are one slice of a larger store being consolidated in rounds.",
+      "Do NOT add, modify, or remove any entry that is not listed above.",
+    );
+  }
+  return lines.join("\n");
 }
 
 function chunkCharsFor(config: ConsolidationLlmConfig): number {
@@ -351,7 +363,9 @@ export async function triggerConsolidation(
 
       const totalBefore = promptEntries.join(ENTRY_DELIMITER).length;
       const batch = takeChunk(promptEntries, chunkChars);
-      const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, batch), llmConfig, {
+      const batchSet = new Set(batch);
+      const beforeRound = promptEntries;
+      const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, batch, true), llmConfig, {
         signal,
         timeoutMs,
         retryWithoutOverrides: true,
@@ -372,6 +386,17 @@ export async function triggerConsolidation(
       } catch {
         failureMessage = "could not reload memory after a consolidation round";
         break;
+      }
+
+      // Detect out-of-scope changes: entries that vanished this round without
+      // being part of the presented slice. The scope instruction makes this
+      // unlikely; the check makes it visible rather than silent.
+      const outOfScope = beforeRound.filter(
+        (entry) => !batchSet.has(entry) && !promptEntries.includes(entry),
+      );
+      if (outOfScope.length > 0) {
+        const note = `round ${completedRounds} touched ${outOfScope.length} out-of-scope entr${outOfScope.length === 1 ? "y" : "ies"}`;
+        failureMessage = failureMessage ? `${failureMessage} ${note}` : note;
       }
 
       if (promptEntries.join(ENTRY_DELIMITER).length >= totalBefore) {
