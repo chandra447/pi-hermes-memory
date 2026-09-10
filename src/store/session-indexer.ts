@@ -530,26 +530,29 @@ export function needsBackfill(
   retentionCutoffMs = 0,
   excludeDirs: string[] = [],
 ): boolean {
-  const db = dbManager.getDb();
-  // Same filtered enumeration the deferred pass will actually run: sniffed-out
-  // artifacts and excluded dirs never get session_files stamps, so counting
-  // them here would keep preflight returning true forever on artifact-heavy
-  // machines (scheduling churn the backfill result can never clear).
-  const files = getSessionFiles(sessionsDir, undefined, excludeDirs, true);
-  const indexed = db.prepare('SELECT COUNT(*) as count FROM sessions').get() as { count: number };
+  // Enumerate WITHOUT sniffing: the sniff belongs to the per-file loop below so
+  // it only runs for files that actually lack a stored-match. Mirrors
+  // indexChangedSessions' I/O ordering: a steady-state startup (everything
+  // indexed) stays a readdir + stat + cheap DB lookup pass — no open + read
+  // per session file inside session_start. Excluded dirs are dropped here.
+  const files = getSessionFiles(sessionsDir, undefined, excludeDirs, false);
 
   if (retentionCutoffMs <= 0) {
-    // Retention disabled: keep the historical cheap path — a plain file-count
-    // vs row-count comparison decides before any per-file stat work, so
-    // large session directories stay fast on startup.
-    if (files.length > indexed.count) {
-      return true;
-    }
-
+    // Retention disabled. The historical `files.length > indexed.count` fast
+    // path is deliberately gone: with non-session artifacts in the tree it
+    // over-counts files that will never receive session_files rows, so it
+    // returned true on every startup — the exact churn this preflight must
+    // terminate. The metadata loop below is stat + indexed-DB lookups only
+    // for steady state, which is cheap enough to always pay.
     for (const file of files) {
       try {
         const metadata = getSessionFileMetadata(file);
         if (storedSessionFileMatches(dbManager, metadata)) continue;
+        // Unstamped or changed: only now is the sniff worth its cost. A
+        // non-session artifact never gets a stamp, so it must not demand a
+        // backfill (continue = non-work) — otherwise artifact-heavy machines
+        // would reschedule the deferred pass on every launch forever.
+        if (!isSessionFile(file)) continue;
         return true;
       } catch {
         // An unreadable or malformed session file still needs indexing.
@@ -565,14 +568,19 @@ export function needsBackfill(
   // the window there is no work at all. Returning here (instead of falling
   // through to the periodic timestamp check) keeps an all-expired store from
   // scheduling an empty backfill on every startup before a timestamp is ever
-  // written.
+  // written. hasRetainedFile keeps its raw meaning (any retained, non-excluded
+  // file, artifacts included) so the periodic-timestamp behavior is unchanged.
   let hasRetainedFile = false;
   for (const file of files) {
     try {
       const metadata = getSessionFileMetadata(file);
       if (!isWithinRetention(metadata.mtimeMs, retentionCutoffMs)) continue;
       hasRetainedFile = true;
-      if (!storedSessionFileMatches(dbManager, metadata)) return true;
+      if (!storedSessionFileMatches(dbManager, metadata)) {
+        // Sniff only unstamped files (same ordering as the branch above):
+        // artifacts are non-work and must not demand a backfill.
+        if (isSessionFile(file)) return true;
+      }
     } catch {
       return true;
     }

@@ -639,6 +639,33 @@ describe('session-indexer', () => {
       assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), false);
     });
 
+    it('preflight is false with a fresh timestamp even when indexed files are unreadable (stored-match short-circuits the sniff)', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      // Several indexed sessions, then corrupted IN PLACE with the DB stamps
+      // re-pointed at the corrupted file's exact stat values: stored-match
+      // hits, so the preflight must skip each file WITHOUT opening or parsing
+      // it. If the sniff ran, the garbage first line would fail open (no
+      // newline in the fragment) and demand a backfill — asserting false here
+      // proves the stat → stored-match short-circuit keeps steady state
+      // sniff-free even for content the parser could never accept.
+      for (let i = 1; i <= 5; i++) {
+        writeJsonlSession(sessionsDir, `project-${i}`, `s${i}`);
+      }
+      indexAllSessions(dbManager, sessionsDir);
+
+      const db = dbManager.getDb();
+      for (const dir of fs.readdirSync(sessionsDir)) {
+        const filePath = path.join(sessionsDir, dir, `${dir.replace('project-', 's')}.jsonl`);
+        if (!fs.existsSync(filePath)) continue;
+        fs.writeFileSync(filePath, 'x'.repeat(fs.statSync(filePath).size));
+        const after = fs.statSync(filePath);
+        db.prepare('UPDATE session_files SET size = ?, mtime_ms = ? WHERE path = ?').run(after.size, Math.trunc(after.mtimeMs), filePath);
+      }
+      touchBackfillTimestamp(dbManager, new Date('2026-05-03T00:30:00Z'));
+
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), false);
+    });
+
     it('needsBackfill is false when only excluded dirs exist and the last backfill is recent', () => {
       const sessionsDir = path.join(tmpDir, 'sessions');
       writeJsonlSession(sessionsDir, 'noise-dir', 's1');
