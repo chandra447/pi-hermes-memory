@@ -15,7 +15,13 @@ import {
 import { DatabaseManager } from "../../src/store/db.js";
 import { getMemories, reconcileMarkdownMemoryScope } from "../../src/store/sqlite-memory-store.js";
 import { acquireMarkdownMutationLock } from "../../src/store/markdown-mutation-lock.js";
-import { MEMORY_FILE } from "../../src/constants.js";
+import {
+  DIRECT_CONSOLIDATION_SYSTEM_PROMPT,
+  DIRECT_CORRECTION_SYSTEM_PROMPT,
+  DIRECT_FLUSH_SYSTEM_PROMPT,
+  DIRECT_REVIEW_SYSTEM_PROMPT,
+  MEMORY_FILE,
+} from "../../src/constants.js";
 
 function mockModel(reasoning: boolean): Model<Api> {
   return {
@@ -506,6 +512,45 @@ describe("parseReviewOperations", () => {
     assert.deepStrictEqual(parsed, [
       { action: "add", target: "user", content: "prefers dark mode" },
     ]);
+  });
+
+  it("prefers the last operations object when CoT restates the schema first (#197)", () => {
+    const parsed = parseReviewOperations(
+      'The schema is {"operations":[]} but I will save:\n{"operations":[{"action":"add","target":"user","content":"prefers dark mode"}]}',
+    );
+
+    assert.deepStrictEqual(parsed, [
+      { action: "add", target: "user", content: "prefers dark mode" },
+    ]);
+  });
+
+  it("still parses a single object surrounded by prose via the first-to-last slice", () => {
+    const parsed = parseReviewOperations(
+      'Sure — here it is:\n{"operations":[{"action":"add","target":"user","content":"prefers dark mode"}]}\nDone.',
+    );
+
+    assert.deepStrictEqual(parsed, [
+      { action: "add", target: "user", content: "prefers dark mode" },
+    ]);
+  });
+
+  it("returns null when no candidate object carries an operations array", () => {
+    assert.strictEqual(parseReviewOperations("checked {\"a\":1} and {\"b\":2} — nothing worth saving"), null);
+  });
+
+  it("does not parse live operations out of any direct prompt (schema echo, #197)", () => {
+    for (const prompt of [
+      DIRECT_REVIEW_SYSTEM_PROMPT,
+      DIRECT_FLUSH_SYSTEM_PROMPT,
+      DIRECT_CONSOLIDATION_SYSTEM_PROMPT,
+      DIRECT_CORRECTION_SYSTEM_PROMPT,
+    ]) {
+      const parsed = parseReviewOperations(prompt);
+      assert.ok(
+        parsed === null || parsed.length === 0,
+        `direct prompt must not contain a parseable operations example, got ${JSON.stringify(parsed)}`,
+      );
+    }
   });
 });
 
@@ -1132,5 +1177,105 @@ describe("response channel fallbacks (#197)", () => {
     // Truncation means the model may not have finished; the fallback chain
     // (next model / subprocess) must still get a chance to retry.
     assert.deepStrictEqual(result, { ok: false, appliedCount: 0, fallbackReason: "parse_error" });
+  });
+
+  it("treats a redacted-only completion as empty_response, not parse_error", async () => {
+    const complete = async () => ({
+      stopReason: "stop",
+      content: [
+        { type: "thinking", thinking: "encrypted redacted payload", redacted: true },
+      ],
+    });
+
+    const result = await runReview(complete);
+
+    // The redacted block is skipped — nothing parseable, nothing emitted in
+    // the clear: same clean-stop empty_response as a silent model, rather
+    // than a parse_error that would burn the subprocess fallback (#197).
+    assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty_response" });
+  });
+
+  it("skips redacted thinking blocks but still recovers a clear one", async () => {
+    const complete = async () => ({
+      stopReason: "stop",
+      content: [
+        { type: "thinking", thinking: "encrypted redacted payload", redacted: true },
+        { type: "thinking", thinking: JSON.stringify({ operations: [] }) },
+      ],
+    });
+
+    const result = await runReview(complete);
+
+    assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty" });
+  });
+
+  it("falls back to thinking when the text block is whitespace only", async () => {
+    const complete = async () => ({
+      stopReason: "stop",
+      content: [
+        { type: "text", text: "   \n\t" },
+        { type: "thinking", thinking: JSON.stringify({ operations: [] }) },
+      ],
+    });
+
+    const result = await runReview(complete);
+
+    // Whitespace-only text must not mask recoverable thinking output.
+    assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty" });
+  });
+});
+
+describe("thinking-channel CoT recovery (#197)", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "review-cot-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function registry() {
+    return {
+      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "sk-test" }),
+      getAll: () => [mockModel(true)],
+      getAvailable: () => [mockModel(true)],
+    };
+  }
+
+  it("applies the trailing answer when CoT restates the schema first", async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+
+    const complete = async () => ({
+      stopReason: "stop",
+      content: [
+        {
+          type: "thinking",
+          thinking:
+            'The schema is {"operations":[]} but I will save:\n{"operations":[{"action":"add","target":"user","content":"prefers dark mode"}]}',
+        },
+      ],
+    });
+
+    const result = await runDirectMemoryCompletion(
+      { model: mockModel(true), modelRegistry: registry() } as never,
+      store,
+      null,
+      { userPrompt: "u", systemPrompt: "s", config: {} },
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.appliedCount, 1);
+    assert.ok(store.getUserEntries().some((entry) => entry.includes("prefers dark mode")));
   });
 });

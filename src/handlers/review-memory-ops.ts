@@ -49,6 +49,15 @@ export function usesDirectTransport(config: Pick<MemoryConfig, "reviewTransport"
   return (config.reviewTransport ?? "direct") === "direct";
 }
 
+/** One shared budget for a single review/flush/correction/consolidation
+ * completion, on both the direct transport and the `pi -p` subprocess
+ * fallback. Deliberately not configurable (#197): the bug was the double
+ * spend, not the number — after the empty-response short-circuit the
+ * painful case is one 120s call. Consolidation keeps its separate
+ * `consolidationTimeoutMs` because it is user-visible and must actually
+ * shrink. */
+export const REVIEW_COMPLETION_TIMEOUT_MS = 120_000;
+
 type ReviewLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmFallbackModels" | "llmThinkingOverride">;
 
 function findExactModelReferenceMatch(modelReference: string, availableModels: Model<Api>[]): Model<Api> | undefined {
@@ -242,12 +251,77 @@ export async function resolveRequestAuth(
   return modelRegistry.getApiKeyAndHeaders(model);
 }
 
-function extractJsonPayload(text: string): unknown {
+/** A JSON object extracted from a model response. Not yet validated as an
+ * operations payload — parseReviewOperations narrows the `operations`
+ * field at its boundary. */
+type JsonObjectPayload = { operations?: unknown };
+
+function isJsonObjectPayload(value: unknown): value is JsonObjectPayload {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Scan for balanced top-level {...} spans, string- and escape-aware, so
+ * that braces inside JSON string literals never open or close a span. */
+function topLevelObjectSpans(text: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}" && depth > 0) {
+      depth--;
+      if (depth === 0 && start >= 0) spans.push([start, i]);
+    }
+  }
+  return spans;
+}
+
+/** CoT routinely restates the schema before answering, so the first-to-last
+ * slice above is invalid JSON across that span. Scan balanced top-level
+ * objects from the end and return the last one that parses with an
+ * `operations` array — the answer trailing the preamble (#197). */
+function lastParseableOperationsObject(text: string): JsonObjectPayload | null {
+  const spans = topLevelObjectSpans(text);
+  for (let s = spans.length - 1; s >= 0; s--) {
+    const span = spans[s];
+    if (!span) continue;
+    try {
+      const parsed: unknown = JSON.parse(text.slice(span[0], span[1] + 1));
+      if (isJsonObjectPayload(parsed) && Array.isArray(parsed.operations)) {
+        return parsed;
+      }
+    } catch {
+      // keep scanning
+    }
+  }
+  return null;
+}
+
+function extractJsonPayload(text: string): JsonObjectPayload | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
 
+  const asObject = (value: unknown): JsonObjectPayload | null =>
+    isJsonObjectPayload(value) ? value : null;
+
   try {
-    return JSON.parse(trimmed);
+    return asObject(JSON.parse(trimmed));
   } catch {
     // continue
   }
@@ -255,7 +329,7 @@ function extractJsonPayload(text: string): unknown {
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fenced?.[1]) {
     try {
-      return JSON.parse(fenced[1].trim());
+      return asObject(JSON.parse(fenced[1].trim()));
     } catch {
       // continue
     }
@@ -265,13 +339,13 @@ function extractJsonPayload(text: string): unknown {
   const end = trimmed.lastIndexOf("}");
   if (start >= 0 && end > start) {
     try {
-      return JSON.parse(trimmed.slice(start, end + 1));
+      return asObject(JSON.parse(trimmed.slice(start, end + 1)));
     } catch {
-      return null;
+      return lastParseableOperationsObject(trimmed);
     }
   }
 
-  return null;
+  return lastParseableOperationsObject(trimmed);
 }
 
 function isMemoryCategory(value: unknown): value is MemoryCategory {
@@ -297,11 +371,11 @@ export function parseReviewOperations(text: string): ReviewMemoryOperation[] | n
   }
 
   const payload = extractJsonPayload(text);
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+  if (!payload) {
     return null;
   }
 
-  const operations = (payload as { operations?: unknown }).operations;
+  const operations = payload.operations;
   if (!Array.isArray(operations)) return null;
 
   const parsed: ReviewMemoryOperation[] = [];
@@ -505,6 +579,11 @@ function responseText(content: unknown): string {
   return content
     .filter((block): block is { type: "thinking"; thinking: string } => (
       !!block && typeof block === "object" && (block as { type?: string }).type === "thinking"
+      // Anthropic redacted_thinking arrives as {type:"thinking", redacted:true}
+      // after normalization — there is no recoverable payload in it, and
+      // letting it through would turn a redacted-only completion into a
+      // parse_error and burn the subprocess fallback (#197).
+      && (block as { redacted?: boolean }).redacted !== true
     ))
     .map((block) => block.thinking)
     .join("\n");
@@ -553,7 +632,7 @@ export async function runDirectMemoryCompletion(
     let requestAuth: DirectReviewAuth = { apiKey: auth.apiKey, headers: auth.headers, env: auth.env };
 
     const controller = new AbortController();
-    const timeoutMs = options.timeoutMs ?? 120000;
+    const timeoutMs = options.timeoutMs ?? REVIEW_COMPLETION_TIMEOUT_MS;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     const onExternalAbort = () => controller.abort();
     if (options.signal) {

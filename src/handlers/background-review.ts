@@ -19,7 +19,7 @@ import type { MemoryConfig } from "../types.js";
 import type { EnsureMemoryReady } from "../memory-initialization.js";
 import { applyRecentMessageLimit, collectMessageParts } from "./message-parts.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
-import { runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult } from "./review-memory-ops.js";
+import { REVIEW_COMPLETION_TIMEOUT_MS, runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult } from "./review-memory-ops.js";
 
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 export interface BackgroundReviewOptions {
@@ -151,7 +151,7 @@ async function runSubprocessReview(
     // Session-scoped signal only. The turn signal belongs to the interactive
     // agent run; forwarding it cancels unrelated review on a later user abort.
     signal,
-    timeoutMs: 120000,
+    timeoutMs: REVIEW_COMPLETION_TIMEOUT_MS,
   });
 }
 
@@ -286,7 +286,7 @@ export function setupBackgroundReview(
                 buildMemoryTargetRoutingGuidance(activeProjectStore !== null),
               ].join("\n"),
               config,
-              timeoutMs: 120000,
+              timeoutMs: REVIEW_COMPLETION_TIMEOUT_MS,
               signal: sessionAbort.signal,
             },
             dbManager,
