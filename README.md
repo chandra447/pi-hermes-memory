@@ -122,6 +122,32 @@ Or test locally without installing:
 pi -e /path/to/pi-hermes-memory/src/index.ts
 ```
 
+### DeepSeek Harness
+
+Use persistent memory in [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+through [pi2dsh](https://github.com/weijiafu14/pi2dsh):
+
+```bash
+dsh plugin --profile web add -w pi2dsh pi-hermes-memory
+dsh web
+```
+
+If pnpm requests build approval, run `dsh plugin --profile web approve-builds`,
+approve `better-sqlite3` and `esbuild` when listed, then restart `dsh web`.
+
+In one conversation, ask:
+
+> Use memory_add to remember that my project codename is ZEPHYR-7741.
+
+Start a **new session** and ask:
+
+> Use memory_search to recall my project codename.
+
+Use `memory_replace` to update a saved fact and `memory_remove` to delete it.
+The package manages its own memory files and SQLite store under
+`$DSH_HOME/pi2dsh/agent/` (with the default DSH home when `DSH_HOME` is unset).
+For the headless CLI, install into `--profile headless` instead of `web`.
+
 ### Homebrew / Node ABI mismatches
 
 `better-sqlite3` is a native addon. If Pi is installed via Homebrew and the extension was compiled for a different Node ABI, session search may warn:
