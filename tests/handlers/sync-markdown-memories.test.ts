@@ -516,6 +516,8 @@ describe('memory sqlite sync + markdown backfill', () => {
       syncMarkdownMemoriesToSqlite(dbManager, globalDir, undefined, agentRoot),
     );
     assert.strictEqual(second.imported, 0);
+    assert.strictEqual(second.warnings.length, 0, 'a working skip never touches memories, so no blocked-write errors');
+    assert.strictEqual(second.skipped, 1);
     assert.strictEqual(getMemories(dbManager, { target: 'memory', project: null }).length, 1);
   });
 
@@ -601,5 +603,7 @@ describe('memory sqlite sync + markdown backfill', () => {
       syncMarkdownMemoriesToSqlite(dbManager, globalDir, undefined, agentRoot),
     );
     assert.strictEqual(counters.imported, 0);
+    assert.strictEqual(counters.warnings.length, 0, 'the observer-written fingerprint must let startup skip without touching memories');
+    assert.strictEqual(counters.skipped, 1);
   });
 });

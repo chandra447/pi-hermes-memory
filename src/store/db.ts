@@ -651,13 +651,19 @@ export class DatabaseManager {
   }
 
   private copyRecoverableRows(source: DatabaseLike, target: DatabaseLike): Record<string, number> {
-    return {
+    const counts = {
       extension_metadata: this.copyExtensionMetadata(source, target),
       sessions: this.copySessions(source, target),
       messages: this.copyMessages(source, target),
       session_files: this.copySessionFiles(source, target),
       memories: this.copyMemories(source, target),
     };
+    // Markdown-scope fingerprints describe the rows in their source db; the
+    // copies above coerce invalid values instead of dropping rows, so a copied
+    // fingerprint can agree with coerced rows while content drifted. A rebuilt
+    // database re-mirrors markdown exactly once, at zero cost when healthy.
+    target.prepare("DELETE FROM extension_metadata WHERE key LIKE 'mdsync:v1:%'").run();
+    return counts;
   }
 
   private copyExtensionMetadata(source: DatabaseLike, target: DatabaseLike): number {

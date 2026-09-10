@@ -111,7 +111,9 @@ export interface MarkdownReconcileOptions {
   force?: boolean;
 }
 
-/** Private to this module. Not exported. */
+/** Private to this module. Not exported. Bump the version whenever
+ * parseMarkdownMemoryEntry or the reconcile body changes what a fingerprinted
+ * scope should produce — stored fingerprints cannot see a parser change. */
 const MDSYNC_PREFIX = 'mdsync:v1:';
 
 interface MarkdownScopeSyncState {
@@ -520,18 +522,23 @@ export function reconcileMarkdownMemoryScope(
   const reconcile = (): MarkdownMemoryReconcileResult => {
     const db = dbManager.getDb();
 
-    if (!force) {
-      const stateRow = db.prepare(
+    const stateRow = !force
+      ? (db.prepare(
         'SELECT value FROM extension_metadata WHERE key = ?',
-      ).get(syncKey) as { value: string } | undefined;
-      const state = parseMarkdownScopeSyncState(stateRow?.value);
+      ).get(syncKey) as { value: string } | undefined)
+      : undefined;
+    const state = parseMarkdownScopeSyncState(stateRow?.value);
+    if (!force && state && state.sha256 === hash) {
+      // COUNT only matters when the fingerprint already matches the input;
+      // scopes without a state row (fresh install, emptied scope) skip straight
+      // to the body and leave the metadata table untouched below.
       const countParams: unknown[] = [];
       const countConditions = buildScopeConditions(countParams, target, normalizedProject);
       const countRow = db.prepare(
         `SELECT COUNT(*) as count FROM memories WHERE ${countConditions.join(' AND ')}`,
       ).get(...countParams) as { count: number } | undefined;
       const count = Number(countRow?.count ?? 0);
-      if (state && state.sha256 === hash && count === state.entryCount) {
+      if (count === state.entryCount) {
         return { inserted: 0, existing: state.entryCount, removed: 0 };
       }
     }
@@ -578,7 +585,11 @@ export function reconcileMarkdownMemoryScope(
 
     const unique = desiredIdentities.size;
     if (unique === 0) {
-      db.prepare('DELETE FROM extension_metadata WHERE key = ?').run(syncKey);
+      // Only a scope that previously had a fingerprint needs the delete; an
+      // always-empty scope costs two reads, never a write transaction.
+      if (state) {
+        db.prepare('DELETE FROM extension_metadata WHERE key = ?').run(syncKey);
+      }
     } else {
       db.prepare(
         'INSERT OR REPLACE INTO extension_metadata (key, value) VALUES (?, ?)',

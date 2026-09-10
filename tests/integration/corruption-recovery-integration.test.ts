@@ -69,6 +69,8 @@ describe('Corruption recovery during markdown sync', () => {
 
       // 5. The entry must actually be persisted in the rebuilt database —
       // a swallowed zero-count success would leave the memory in markdown only.
+      // The rebuild strips copied markdown-scope fingerprints (copyRecoverableRows),
+      // so the retry on the new handle re-mirrors instead of trusting them.
       assert.ok(second.inserted >= 1, `expected the entry to persist after recovery, got ${JSON.stringify(second)}`);
       const rows = dbManager.getDb()
         .prepare('SELECT content FROM memories WHERE target = ? ORDER BY id ASC')
