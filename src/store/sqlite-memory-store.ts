@@ -9,6 +9,7 @@ import {
   normalizeNaturalLanguageFts5Query,
 } from './fts-query.js';
 import { normalizeMemoryLookupText } from './memory-lookup.js';
+import { MDSYNC_METADATA_KEY_PREFIX } from '../constants.js';
 import type { MemoryCategory } from '../types.js';
 
 export { isFts5QueryError };
@@ -111,18 +112,13 @@ export interface MarkdownReconcileOptions {
   force?: boolean;
 }
 
-/** Private to this module. Not exported. Bump the version whenever
- * parseMarkdownMemoryEntry or the reconcile body changes what a fingerprinted
- * scope should produce — stored fingerprints cannot see a parser change. */
-const MDSYNC_PREFIX = 'mdsync:v1:';
-
 interface MarkdownScopeSyncState {
   sha256: string;
   entryCount: number;
 }
 
 function markdownScopeSyncKey(target: string, project: string | null): string {
-  return MDSYNC_PREFIX + JSON.stringify([target, project]);
+  return MDSYNC_METADATA_KEY_PREFIX + JSON.stringify([target, project]);
 }
 
 function parseMarkdownScopeSyncState(value: unknown): MarkdownScopeSyncState | null {
@@ -522,16 +518,20 @@ export function reconcileMarkdownMemoryScope(
   const reconcile = (): MarkdownMemoryReconcileResult => {
     const db = dbManager.getDb();
 
-    const stateRow = !force
-      ? (db.prepare(
-        'SELECT value FROM extension_metadata WHERE key = ?',
-      ).get(syncKey) as { value: string } | undefined)
-      : undefined;
+    // Read the fingerprint row on the force path too: an emptying scope needs it
+    // to know whether a stale row is worth deleting, and force is the repair
+    // command, where one indexed read costs nothing.
+    const stateRow = db.prepare(
+      'SELECT value FROM extension_metadata WHERE key = ?',
+    ).get(syncKey) as { value: string } | undefined;
     const state = parseMarkdownScopeSyncState(stateRow?.value);
     if (!force && state && state.sha256 === hash) {
-      // COUNT only matters when the fingerprint already matches the input;
-      // scopes without a state row (fresh install, emptied scope) skip straight
-      // to the body and leave the metadata table untouched below.
+      // Liveness here is a row COUNT over this scope's slice: the fingerprint
+      // binds markdown bytes, not the mirror's content, so a mirror that drifted
+      // without changing its row count keeps skipping. That is the deliberate
+      // trade for the per-startup sweep this gate removes; the forced
+      // /memory-sync-markdown reconcile is the repair for every such drift,
+      // including a search index that lost rows.
       const countParams: unknown[] = [];
       const countConditions = buildScopeConditions(countParams, target, normalizedProject);
       const countRow = db.prepare(

@@ -6,6 +6,7 @@ import { AtomicLockCoordinator } from './atomic-lock-coordinator.js';
 import { canonicalStoragePathSync } from './canonical-storage-path.js';
 import { isBunRuntime, loadBetterSqlite3 } from './sqlite-native.js';
 import { measureLifecycleSync } from '../lifecycle-timing.js';
+import { MDSYNC_METADATA_KEY_PREFIX } from '../constants.js';
 
 type StatementLike = {
   run: (...args: any[]) => any;
@@ -662,7 +663,9 @@ export class DatabaseManager {
     // copies above coerce invalid values instead of dropping rows, so a copied
     // fingerprint can agree with coerced rows while content drifted. A rebuilt
     // database re-mirrors markdown exactly once, at zero cost when healthy.
-    target.prepare("DELETE FROM extension_metadata WHERE key LIKE 'mdsync:v1:%'").run();
+    // The pattern follows the shared prefix constant, so bumping its version
+    // keeps this strip in step instead of silently missing the new keys.
+    target.prepare("DELETE FROM extension_metadata WHERE key LIKE ?").run(`${MDSYNC_METADATA_KEY_PREFIX}%`);
     return counts;
   }
 

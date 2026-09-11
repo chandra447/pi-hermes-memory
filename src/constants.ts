@@ -55,6 +55,17 @@ export const MEMORY_FILE = "MEMORY.md";
 export const USER_FILE = "USER.md";
 export const STANDING_FILE = "STANDING.md";
 
+// ─── Markdown→SQLite sync state ───
+/**
+ * Key prefix for per-scope reconcile fingerprints in `extension_metadata`.
+ * Bump the version whenever `parseMarkdownMemoryEntry` or the reconcile body
+ * changes what a fingerprinted scope should produce — a stored fingerprint
+ * cannot see a parser change, so the prefix is what invalidates every scope.
+ * The corruption-rebuild strip reads this same constant, so bumping it keeps
+ * both sides in step.
+ */
+export const MDSYNC_METADATA_KEY_PREFIX = "mdsync:v1:";
+
 // ─── Standing instructions (#121) ───
 // A hard budget, deliberately separate from memoryCharLimit/userCharLimit.
 // These are injected in every mode including policy-only, so the cost has to

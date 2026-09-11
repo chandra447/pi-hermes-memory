@@ -20,9 +20,10 @@ import {
   reconcileMarkdownFailureScopes,
 } from '../../src/store/sqlite-memory-store.js';
 import { MemoryStore } from '../../src/store/memory-store.js';
+import { MDSYNC_METADATA_KEY_PREFIX } from '../../src/constants.js';
 
 function mdsyncKey(target: string, project: string | null): string {
-  return 'mdsync:v1:' + JSON.stringify([target, project]);
+  return MDSYNC_METADATA_KEY_PREFIX + JSON.stringify([target, project]);
 }
 
 function readMdsyncValue(dbManager: DatabaseManager, target: string, project: string | null): string | undefined {
@@ -478,6 +479,45 @@ describe('sqlite-memory-store', () => {
       );
       const rewritten = JSON.parse(readMdsyncValue(dbManager, 'memory', null)!) as { entryCount: number };
       assert.strictEqual(rewritten.entryCount, 1);
+    });
+
+    it('drops the fingerprint when the force path empties a scope', () => {
+      reconcileMarkdownMemoryScope(dbManager, ['force-emptied entry'], 'memory', 'force-emptied');
+      assert.ok(readMdsyncValue(dbManager, 'memory', 'force-emptied'));
+
+      const forced = reconcileMarkdownMemoryScope(dbManager, [], 'memory', 'force-emptied', { force: true });
+
+      assert.strictEqual(forced.removed, 1);
+      assert.equal(
+        readMdsyncValue(dbManager, 'memory', 'force-emptied'),
+        undefined,
+        'the emptied scope must not leave a fingerprint behind',
+      );
+    });
+
+    it('restores search through the force path when the index lost a row', () => {
+      const entries = ['indexed needle entry', 'indexed companion entry'];
+      reconcileMarkdownMemoryScope(dbManager, entries, 'memory', null);
+      assert.strictEqual(searchMemories(dbManager, 'needle').length, 1);
+
+      const lost = dbManager.getDb().prepare(
+        'SELECT id, content FROM memories WHERE content = ?',
+      ).get('indexed needle entry') as { id: number; content: string };
+      dbManager.getDb().prepare(
+        "INSERT INTO memory_fts(memory_fts, rowid, content) VALUES ('delete', ?, ?)",
+      ).run(lost.id, lost.content);
+      assert.strictEqual(searchMemories(dbManager, 'needle').length, 0, 'the index gap must hide the entry');
+
+      // The fingerprint binds markdown bytes, so an unchanged scope keeps
+      // skipping even though search can no longer see the row. That is the
+      // documented boundary; the forced repair is what has to close it.
+      const skipped = reconcileMarkdownMemoryScope(dbManager, entries, 'memory', null);
+      assert.strictEqual(skipped.inserted, 0);
+      assert.strictEqual(searchMemories(dbManager, 'needle').length, 0);
+
+      reconcileMarkdownMemoryScope(dbManager, entries, 'memory', null, { force: true });
+
+      assert.strictEqual(searchMemories(dbManager, 'needle').length, 1, 'force must re-index the scope');
     });
 
     it('drops rows and the fingerprint for an emptied project scope', () => {
