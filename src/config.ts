@@ -115,7 +115,8 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (isNonNegativeNumber(parsed.flushRecentMessages)) config.flushRecentMessages = parsed.flushRecentMessages;
       if (typeof parsed.flushCompactTimeoutMs === "number" && Number.isFinite(parsed.flushCompactTimeoutMs)) {
         config.flushCompactTimeoutMs = parsed.flushCompactTimeoutMs;
-        if (parsed.flushCompactTimeoutMs < DEFAULT_FLUSH_COMPACT_TIMEOUT_MS) {
+        // Zero and below is the documented disable, not a too-low timeout.
+        if (parsed.flushCompactTimeoutMs > 0 && parsed.flushCompactTimeoutMs < DEFAULT_FLUSH_COMPACT_TIMEOUT_MS) {
           console.warn(
             `⚠️ flushCompactTimeoutMs is set to ${parsed.flushCompactTimeoutMs}ms, below the ${DEFAULT_FLUSH_COMPACT_TIMEOUT_MS}ms default.`
             + " Compact flush is one LLM turn over the conversation; local models are routinely cut off below this.",

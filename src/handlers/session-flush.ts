@@ -220,7 +220,14 @@ export function setupSessionFlush(
         const handoff = resolveFlushHandoff(Boolean(signal?.aborted), timeoutMs, now() - started);
         if ("skip" in handoff) {
           if (handoff.skip === "budget_exhausted") {
-            notifyCompactFailure(ctx, kind, `timed out after ${timeoutMs}ms`);
+            const elapsed = Math.max(0, now() - started);
+            notifyCompactFailure(
+              ctx,
+              kind,
+              elapsed >= timeoutMs
+                ? `timed out after ${timeoutMs}ms`
+                : `only ${Math.max(0, timeoutMs - elapsed)}ms left of the ${timeoutMs}ms budget, too little to spawn the fallback`,
+            );
           }
           return;
         }
@@ -241,10 +248,16 @@ export function setupSessionFlush(
             signal,
             timeoutMs: handoff.timeoutMs,
           });
-          // pi.exec resolves {code, killed} on timeout/kill instead of rejecting;
-          // a watchdog-killed child is a miss the same way an exhaust is.
-          if (!signal?.aborted && typeof childResult?.code === "number" && childResult.code !== 0) {
-            notifyCompactFailure(ctx, kind, `child exited with code ${childResult.code}`);
+          // pi.exec resolves {code, killed} on timeout/kill instead of rejecting.
+          // A signal kill can arrive as code 0 with killed true, so both shapes
+          // are misses worth surfacing; a non-zero code is the more specific
+          // report when the child did exit on its own.
+          if (!signal?.aborted) {
+            if (typeof childResult?.code === "number" && childResult.code !== 0) {
+              notifyCompactFailure(ctx, kind, `child exited with code ${childResult.code}`);
+            } else if (childResult?.killed === true) {
+              notifyCompactFailure(ctx, kind, "child was killed before it saved");
+            }
           }
         } catch (err) {
           if (!signal?.aborted) {

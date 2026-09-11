@@ -841,6 +841,36 @@ describe("compact flush budget", () => {
     assert.match(notifications[0].message, /timed out after 60000ms/);
   });
 
+  it("reports the leftover, not a timeout, when the direct call leaves too little budget", async () => {
+    const clock = { t: 0 };
+    const { ctx, notifications } = flushCtxWithNotify();
+    setupSessionFlush(
+      mockPi.pi,
+      mockStore,
+      null,
+      defaultConfig(),
+      null,
+      null,
+      {
+        now: () => clock.t,
+        runDirectMemoryCompletion: async (...args: unknown[]) => {
+          directCalls.push(args);
+          clock.t += 58_000;
+          return { ok: false, appliedCount: 0, fallbackReason: "parse_error" };
+        },
+      },
+    );
+
+    await primeFlushReady(mockPi.handlers);
+    await emit(mockPi.handlers, "session_before_compact", { signal: undefined }, ctx);
+
+    assert.equal(directCalls.length, 1);
+    assert.equal(mockPi.execCalls.length, 0, "2s of leftover is below the spawn floor");
+    assert.equal(notifications.length, 1);
+    assert.match(notifications[0].message, /only 2000ms left of the 60000ms budget/);
+    assert.doesNotMatch(notifications[0].message, /timed out after/);
+  });
+
   it("Esc during compact skips the child silently", async () => {
     const abort = new AbortController();
     const { ctx, notifications } = flushCtxWithNotify();
@@ -1015,6 +1045,27 @@ describe("compact flush budget", () => {
 
     assert.equal(notifications.length, 1);
     assert.match(notifications[0].message, /child exited with code 124/);
+    assert.match(notifications[0].message, /flushCompactTimeoutMs/);
+  });
+
+  it("child killed with a zero exit code still notifies", async () => {
+    const failingPi = createMockPi();
+    // The signal-kill shape pi.exec resolves: Node reports no exit code for a
+    // signalled child, so the flag is the only evidence of the kill.
+    failingPi.pi.exec = async () => ({ code: 0, killed: true, stdout: "", stderr: "" });
+    const { ctx, notifications } = flushCtxWithNotify();
+    setupSessionFlush(
+      failingPi.pi,
+      mockStore,
+      null,
+      defaultConfig({ reviewTransport: "subprocess" }),
+    );
+
+    await primeFlushReady(failingPi.handlers);
+    await emit(failingPi.handlers, "session_before_compact", { signal: undefined }, ctx);
+
+    assert.equal(notifications.length, 1);
+    assert.match(notifications[0].message, /child was killed before it saved/);
     assert.match(notifications[0].message, /flushCompactTimeoutMs/);
   });
 

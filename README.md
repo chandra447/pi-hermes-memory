@@ -587,7 +587,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `failureInjectionMaxAgeDays` | `7` | Legacy mode only: maximum age in days for injected failure memories |
 | `failureInjectionMaxEntries` | `5` | Legacy mode only: maximum number of failure memories to inject |
 | `flushOnCompact` | `true` | Flush memories before Pi compacts context |
-| `flushCompactTimeoutMs` | `60000` | Approximate ceiling in milliseconds for the pre-compaction flush (direct + optional subprocess). Both transports share this one window; the subprocess fallback gets only the remainder, never a second full window. The child's watchdog teardown can add ~5s past the window. Configured values are used verbatim; values below the default warn at startup the same way `consolidationTimeoutMs` does. Raise this for slow/local models; lower it if you would rather compact fast than wait for a save |
+| `flushCompactTimeoutMs` | `60000` | Approximate ceiling in milliseconds for the pre-compaction flush (direct + optional subprocess). Both transports share this one window; the subprocess fallback gets only the remainder, never a second full window. The child's watchdog teardown can add ~5s past the window. Configured values are used verbatim; values below the default warn at startup the same way `consolidationTimeoutMs` does, while `0` or lower silently disables the compact flush. Raise this for slow/local models; lower it if you would rather compact fast than wait for a save |
 | `flushOnShutdown` | `true` | Flush memories when session ends |
 | `flushMinTurns` | `6` | Minimum turns before flush triggers |
 | `flushRecentMessages` | `0` | Recent messages included in session flush (`0` = all) |

@@ -92,6 +92,14 @@ describe("loadConfig", () => {
       );
       assert.strictEqual(warnings.length, 1, "a sub-default value should warn once");
       assert.match(warnings[0], /30000ms.*below the 60000ms default/);
+
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ flushCompactTimeoutMs: 0 }));
+      assert.strictEqual(
+        loadConfig(TEST_CONFIG_PATH).flushCompactTimeoutMs,
+        0,
+        "the disable sentinel must be honored",
+      );
+      assert.strictEqual(warnings.length, 1, "disabling the flush is not a too-low timeout");
     } finally {
       console.warn = originalWarn;
     }
@@ -104,7 +112,9 @@ describe("loadConfig", () => {
     console.warn = (message?: unknown) => { warnings.push(String(message)); };
 
     try {
-      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ flushCompactTimeoutMs: 1e999 }));
+      // Written raw: JSON.stringify turns Infinity into null, so an object
+      // literal would test the string branch instead of the finite guard.
+      fs.writeFileSync(TEST_CONFIG_PATH, '{"flushCompactTimeoutMs": 1e999}');
       assert.strictEqual(loadConfig(TEST_CONFIG_PATH).flushCompactTimeoutMs, 60000);
       assert.deepStrictEqual(warnings, [], "a non-finite value is treated as absent, not warned");
     } finally {
