@@ -23,8 +23,9 @@ import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import {
   CONSOLIDATION_PROMPT,
+  CONSOLIDATION_CHUNK_CHARS_MIN,
   DEFAULT_CONSOLIDATION_CHUNK_CHARS,
-  DEFAULT_CONSOLIDATION_MAX_ROUNDS,
+  MAX_CONSOLIDATION_ROUNDS,
   DEFAULT_CONSOLIDATION_TIMEOUT_MS,
   DIRECT_CONSOLIDATION_SYSTEM_PROMPT,
   ENTRY_DELIMITER,
@@ -40,7 +41,7 @@ type ToolMemoryTarget = MemoryTarget | "project";
 type ConsolidationLlmConfig = Pick<
   MemoryConfig,
   "llmModelOverride" | "llmThinkingOverride" | "reviewTransport"
-  | "consolidationChunkChars" | "consolidationMaxRounds"
+  | "consolidationChunkChars"
 >;
 
 // staleMs is deliberately decoupled from the consolidation timeout. The holder
@@ -195,17 +196,13 @@ function buildConsolidationPrompt(
 
 function chunkCharsFor(config: ConsolidationLlmConfig): number {
   const value = config.consolidationChunkChars;
-  return typeof value === "number" && Number.isFinite(value) && value >= 500
+  return typeof value === "number" && Number.isFinite(value) && value >= CONSOLIDATION_CHUNK_CHARS_MIN
     ? value
     : DEFAULT_CONSOLIDATION_CHUNK_CHARS;
 }
 
-function maxRoundsFor(config: ConsolidationLlmConfig): number {
-  const value = config.consolidationMaxRounds;
-  return typeof value === "number" && Number.isInteger(value) && value >= 1
-    ? value
-    : DEFAULT_CONSOLIDATION_MAX_ROUNDS;
-}
+/** A round shorter than this cannot plausibly boot a child and merge anything. */
+const MIN_ROUND_MS = 10_000;
 
 /**
  * Head entries worth up to chunkChars of prompt text. Whole entries only; an
@@ -325,7 +322,16 @@ export async function triggerConsolidation(
     }
 
     const chunkChars = chunkCharsFor(llmConfig);
-    const maxRounds = maxRoundsFor(llmConfig);
+    // Overall budget = the old single-call budget: a chunked trigger never
+    // blocks the calling memory write longer than the single shot it replaces.
+    // Rounds share the budget; a starved trigger reports partial and the next
+    // one resumes from disk state.
+    const deadline = Date.now() + timeoutMs;
+    // Capacity goal (failure tier = 2× memory limit) — the loop stops there,
+    // not at the prompt budget, so a 2×-tier store is not over-merged down to
+    // one slice size. Direct-call stores without the accessor (tests) fall
+    // back to the prompt budget.
+    const goal = typeof store.capacityGoal === "function" ? store.capacityGoal(target) : chunkChars;
 
     if (promptEntries.join(ENTRY_DELIMITER).length <= chunkChars) {
       // Single-shot path — behavior unchanged from pre-chunking releases.
@@ -344,35 +350,54 @@ export async function triggerConsolidation(
       };
     }
 
+    if (promptEntries.join(ENTRY_DELIMITER).length <= goal) {
+      // Over the prompt budget but already within the target's capacity goal
+      // (e.g. the failure tier): nothing needs to shrink.
+      return {
+        consolidated: false,
+        error: `memory already within its ${goal}-char capacity goal (${promptEntries.join(ENTRY_DELIMITER).length} chars) — nothing to consolidate`,
+      };
+    }
+
     // Chunked path — the store exceeds one child run's prompt budget, and a
     // single whole-store LLM merge is what produced the observed "subprocess
-    // terminated (likely timeout)" failures at cap scale. Split into bounded
-    // rounds: each round consolidates a head slice under its own timeout, then
-    // reloads from disk (the child modified files) and re-evaluates. Resume
-    // needs no cursor: partial progress is already on disk, so the next
-    // trigger continues from current state.
+    // terminated (likely timeout)" failures at cap scale. Rounds: each
+    // consolidates a slice under the shared budget, then reloads from disk
+    // (the child modified files) and re-evaluates. The round that ends with
+    // the remaining store small enough for one prompt runs UNSCOPED — it sees
+    // everything that is left, so the decisive merge keeps whole-store
+    // context. Resume needs no cursor: partial progress is already on disk.
     let completedRounds = 0;
     let failureMessage: string | undefined;
+    let offset = 0;
 
-    while (completedRounds < maxRounds) {
-      if (promptEntries.join(ENTRY_DELIMITER).length <= chunkChars) break;
+    while (completedRounds < MAX_CONSOLIDATION_ROUNDS) {
+      const total = promptEntries.join(ENTRY_DELIMITER).length;
+      if (total <= goal) break; // capacity goal met
       if (signal?.aborted) {
         failureMessage = "aborted between consolidation rounds";
         break;
       }
+      const remaining = deadline - Date.now();
+      if (remaining < MIN_ROUND_MS) {
+        failureMessage = `consolidation time budget (${timeoutMs}ms) exhausted; retrigger consolidation to continue from current state`;
+        break;
+      }
 
-      const totalBefore = promptEntries.join(ENTRY_DELIMITER).length;
-      const batch = takeChunk(promptEntries, chunkChars);
+      const fitsOneChunk = total <= chunkChars;
+      const batch = fitsOneChunk
+        ? promptEntries // decisive round: whole remaining store, full context
+        : takeChunk(promptEntries.slice(offset), chunkChars);
       const batchSet = new Set(batch);
       const beforeRound = promptEntries;
-      const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, batch, true), llmConfig, {
+      const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, batch, !fitsOneChunk), llmConfig, {
         signal,
-        timeoutMs,
+        timeoutMs: Math.min(timeoutMs, remaining),
         retryWithoutOverrides: true,
       }) as { code: number; stdout?: string; stderr?: string; killed?: boolean };
 
       if (result.code !== 0) {
-        failureMessage = describeConsolidationFailure(result, timeoutMs)
+        failureMessage = describeConsolidationFailure(result, Math.min(timeoutMs, remaining))
           + (completedRounds > 0
             ? ` ${completedRounds} earlier round${completedRounds === 1 ? "" : "s"} shrank the store; retrigger consolidation to continue.`
             : "");
@@ -388,31 +413,72 @@ export async function triggerConsolidation(
         break;
       }
 
-      // Detect out-of-scope changes: entries that vanished this round without
-      // being part of the presented slice. The scope instruction makes this
-      // unlikely; the check makes it visible rather than silent.
+      // Out-of-scope changes: entries that vanished this round without being
+      // part of the presented slice. The scope instruction makes this
+      // unlikely (observed in real runs before the guard existed); restore
+      // them so damage does not persist silently.
       const outOfScope = beforeRound.filter(
         (entry) => !batchSet.has(entry) && !promptEntries.includes(entry),
       );
       if (outOfScope.length > 0) {
-        const note = `round ${completedRounds} touched ${outOfScope.length} out-of-scope entr${outOfScope.length === 1 ? "y" : "ies"}`;
+        let restored = 0;
+        for (const entry of outOfScope) {
+          try {
+            const readd = await store.add(target, entry);
+            if (readd.success) restored++;
+          } catch {
+            // best-effort restore; the missing-entry note below still reports
+          }
+        }
+        if (restored > 0) {
+          try {
+            await store.loadFromDisk();
+            promptEntries = entriesForTarget(store, target);
+          } catch {
+            // keep counting against the post-round snapshot
+          }
+        }
+        const stillMissing = outOfScope.length - restored;
+        const note = `round ${completedRounds} touched ${outOfScope.length} out-of-scope entr${outOfScope.length === 1 ? "y" : "ies"}`
+          + (restored > 0 ? `, restored ${restored}` : "")
+          + (stillMissing > 0 ? `, ${stillMissing} could not be restored` : "");
         failureMessage = failureMessage ? `${failureMessage} ${note}` : note;
       }
 
-      if (promptEntries.join(ENTRY_DELIMITER).length >= totalBefore) {
-        // The round consolidated nothing (child exited 0 without shrinking).
-        // Burning the remaining rounds would only repeat this; a later trigger
-        // can try again. The child exited 0, so keep single-shot success
-        // semantics: the run counts as consolidated.
-        break;
+      const totalAfter = promptEntries.join(ENTRY_DELIMITER).length;
+      if (totalAfter >= total) {
+        // This round shrank nothing legitimate. Do not burn the remaining
+        // rounds repeating it: walk to the next slice, or stop when even the
+        // whole-remaining store could not be shrunk.
+        if (fitsOneChunk) {
+          failureMessage = `consolidation could not shrink the remaining ${total} chars (capacity goal ${goal}); entries may be distinct facts worth keeping — consider manual pruning`;
+          break;
+        }
+        offset += batch.length;
+        if (offset >= promptEntries.length) {
+          failureMessage = `no slice of the store could be shrunk toward the ${goal}-char capacity goal (${total} chars remain); entries may be distinct facts worth keeping`;
+          break;
+        }
+        continue;
       }
+
+      offset = 0; // store content changed — walk from the top next round
+      if (totalAfter <= goal) break; // capacity goal met
+      if (fitsOneChunk) break; // decisive round done; another pass starts from the top on the next trigger
     }
 
     if (completedRounds > 0) {
+      const notes: string[] = [];
+      if (failureMessage) notes.push(failureMessage);
+      const totalEnd = promptEntries.join(ENTRY_DELIMITER).length;
+      if (totalEnd > goal) {
+        notes.push(`store still ${totalEnd - goal} chars over its ${goal}-char capacity goal`);
+      }
       return {
         consolidated: true,
+        partial: notes.length > 0,
         rounds: completedRounds,
-        ...(failureMessage ? { error: failureMessage } : {}),
+        ...(notes.length ? { error: notes.join("; ") } : {}),
       };
     }
     return {
@@ -525,7 +591,9 @@ export function registerConsolidateCommand(
 
         if (result.consolidated) {
           await item.store.loadFromDisk();
-          results.push(`${item.label}: ✅ consolidated`);
+          const roundsNote = result.rounds ? ` (${result.rounds} round${result.rounds === 1 ? "" : "s"})` : "";
+          const partialNote = result.partial ? ` ⚠️ partial: ${result.error ?? "incomplete"}` : "";
+          results.push(`${item.label}: ✅ consolidated${roundsNote}${partialNote}`);
         } else {
           results.push(`${item.label}: ❌ ${result.error}`);
         }
