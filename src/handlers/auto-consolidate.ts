@@ -221,6 +221,21 @@ export async function triggerConsolidation(
       if (directResult.ok && directResult.appliedCount > 0) {
         return { consolidated: true };
       }
+      // An empty completion is terminal (#235): the direct model answered
+      // with nothing in either channel, so the subprocess child would run
+      // the same model against the same server-side thinking default and
+      // fail the same way (#197). The success criterion is unchanged — it
+      // must actually shrink — but this case reports instead of acquiring
+      // the consolidation lock and spawning the child.
+      if (directResult.ok && directResult.fallbackReason === "empty_response") {
+        const modelRef = directCtx.model?.provider
+          ? `${directCtx.model.provider}/${directCtx.model.id}`
+          : "model";
+        return {
+          consolidated: false,
+          error: `${modelRef} returned an empty completion; no consolidation attempted`,
+        };
+      }
     } catch {
       // Fall through to subprocess below.
     }

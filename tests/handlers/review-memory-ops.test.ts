@@ -552,6 +552,20 @@ describe("parseReviewOperations", () => {
       );
     }
   });
+
+  it("parses a trailing answer when a fenced non-ops object comes first (#235)", () => {
+    // The fence holds a well-formed object without an `operations` array. It
+    // must be declined so the slice/scan paths can reach the real answer —
+    // claiming it here would recreate the parse_error → subprocess
+    // double-spend on a response that contains a valid answer.
+    const parsed = parseReviewOperations(
+      '```json\n{"note":"no ops here"}\n```\nFinal:\n{"operations":[{"action":"add","target":"user","content":"real answer"}]}',
+    );
+
+    assert.deepStrictEqual(parsed, [
+      { action: "add", target: "user", content: "real answer" },
+    ]);
+  });
 });
 
 describe("applyReviewOperations", () => {
@@ -1223,6 +1237,37 @@ describe("response channel fallbacks (#197)", () => {
     // Whitespace-only text must not mask recoverable thinking output.
     assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty" });
   });
+
+  it("settles empty_response when thinking output parses to nothing on a clean stop (#235)", async () => {
+    const complete = async () => ({
+      stopReason: "stop",
+      content: [
+        { type: "thinking", thinking: 'reasoned about { braces } and "quotes" but produced no operations' },
+      ],
+    });
+
+    const result = await runReview(complete);
+
+    // Brace-heavy prose with no ops object: the answer never left the
+    // reasoning channel, and a subprocess would run the same model against
+    // the same server-side thinking default and fail the same way.
+    assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty_response" });
+  });
+
+  it("keeps parse_error when unparseable thinking output is truncated (#235)", async () => {
+    const complete = async () => ({
+      stopReason: "length",
+      content: [
+        { type: "thinking", thinking: 'reasoned about { braces } and got cut off mid-obj' },
+      ],
+    });
+
+    const result = await runReview(complete);
+
+    // Truncation means the model may not have finished; the chain (next
+    // model / subprocess) must still get a chance to retry.
+    assert.deepStrictEqual(result, { ok: false, appliedCount: 0, fallbackReason: "parse_error" });
+  });
 });
 
 describe("thinking-channel CoT recovery (#197)", () => {
@@ -1274,6 +1319,161 @@ describe("thinking-channel CoT recovery (#197)", () => {
       { completeSimple: complete as never },
     );
 
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.appliedCount, 1);
+    assert.ok(store.getUserEntries().some((entry) => entry.includes("prefers dark mode")));
+  });
+});
+
+describe("thinking-channel trust rules (#235)", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "review-235-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function registry() {
+    return {
+      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "sk-test" }),
+      getAll: () => [mockModel(true)],
+      getAvailable: () => [mockModel(true)],
+    };
+  }
+
+  const makeStore = async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+    return store;
+  };
+
+  async function runThinking(thinking: string, store: MemoryStore) {
+    const complete = async () => ({
+      stopReason: "stop",
+      content: [{ type: "thinking", thinking }],
+    });
+    return runDirectMemoryCompletion(
+      { model: mockModel(true), modelRegistry: registry() } as never,
+      store,
+      null,
+      { userPrompt: "u", systemPrompt: "s", config: {} },
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+  }
+
+  it("picks the trailing answer over an earlier fenced draft, and the draft's remove is not applied", async () => {
+    const store = await makeStore();
+    await applyReviewOperations(store, null, [
+      { action: "add", target: "memory", content: "draft old entry" },
+    ]);
+
+    // The shared cascade would let the fenced draft (a remove) win before
+    // the end-scan runs. The thinking path must pick the trailing answer,
+    // and the draft's remove must never execute.
+    const result = await runThinking(
+      '```json\n{"operations":[{"action":"remove","target":"memory","old_text":"draft old entry"}]}\n```\nFinal answer:\n{"operations":[{"action":"add","target":"user","content":"prefers dark mode"}]}',
+      store,
+    );
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.appliedCount, 1);
+    assert.ok(store.getUserEntries().some((entry) => entry.includes("prefers dark mode")));
+    assert.ok(store.getMemoryEntries().some((entry) => entry.includes("draft old entry")));
+  });
+
+  it("applies only adds from a non-trailing (draft-grade) candidate", async () => {
+    const store = await makeStore();
+    await applyReviewOperations(store, null, [
+      { action: "add", target: "memory", content: "draft old entry" },
+    ]);
+
+    // The candidate is followed by more reasoning, so it is draft-grade:
+    // the add is recovered, the remove is dropped.
+    const result = await runThinking(
+      '{"operations":[{"action":"add","target":"user","content":"prefers dark mode"},{"action":"remove","target":"memory","old_text":"draft old entry"}]}\nOn reflection, keep the store as it is.',
+      store,
+    );
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.appliedCount, 1);
+    assert.ok(store.getUserEntries().some((entry) => entry.includes("prefers dark mode")));
+    assert.ok(store.getMemoryEntries().some((entry) => entry.includes("draft old entry")));
+  });
+
+  it("recovers the answer when an unbalanced brace in prose precedes it", async () => {
+    const store = await makeStore();
+
+    // A top-level-only scanner loses every object after an unclosed brace;
+    // recording balanced regions at any depth still finds the answer.
+    const result = await runThinking(
+      'thinking about { this brace never closes\n{"operations":[{"action":"add","target":"user","content":"prefers dark mode"}]}',
+      store,
+    );
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.appliedCount, 1);
+    assert.ok(store.getUserEntries().some((entry) => entry.includes("prefers dark mode")));
+  });
+
+  it("settles empty when the trailing candidate is empty, without reaching back to an earlier draft", async () => {
+    const store = await makeStore();
+
+    const result = await runThinking(
+      'draft {"operations":[{"action":"add","target":"user","content":"never applied"}]} but finally:\n{"operations":[]}',
+      store,
+    );
+
+    // The trailing empty candidate is the model's final word: applying the
+    // earlier draft would execute an operation it may have rejected.
+    assert.deepStrictEqual(result, { ok: true, appliedCount: 0, fallbackReason: "empty" });
+    assert.ok(!store.getUserEntries().some((entry) => entry.includes("never applied")));
+  });
+
+  it("walks to a healthy fallback model after a silent primary and applies its operations", async () => {
+    const store = await makeStore();
+    const m1 = { id: "m1", provider: "p1", api: "openai-completions", reasoning: true } as Model<Api>;
+    const m2 = { id: "m2", provider: "p2", api: "openai-completions", reasoning: true } as Model<Api>;
+    const chainRegistry = {
+      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "sk-test" }),
+      getAll: () => [m1, m2],
+      getAvailable: () => [m1, m2],
+    };
+    const attempted: string[] = [];
+    const complete = async (model: Model<Api>) => {
+      attempted.push(model.id);
+      if (model.id === "m1") {
+        // Silent primary: clean stop, nothing in either channel.
+        return { stopReason: "stop", content: [] };
+      }
+      return {
+        stopReason: "stop",
+        content: [{ type: "text", text: JSON.stringify({ operations: [{ action: "add", target: "user", content: "prefers dark mode" }] }) }],
+      };
+    };
+
+    const result = await runDirectMemoryCompletion(
+      { model: m1, modelRegistry: chainRegistry } as never,
+      store,
+      null,
+      { userPrompt: "u", systemPrompt: "s", config: { llmModelOverride: "p1/m1", llmFallbackModels: ["p2/m2"] } },
+      null,
+      null,
+      { completeSimple: complete as never },
+    );
+
+    // empty_response walks llmFallbackModels like parse_error does: a silent
+    // primary must not end the review while a configured fallback may answer.
+    assert.deepStrictEqual(attempted, ["m1", "m2"]);
     assert.strictEqual(result.ok, true);
     assert.strictEqual(result.appliedCount, 1);
     assert.ok(store.getUserEntries().some((entry) => entry.includes("prefers dark mode")));

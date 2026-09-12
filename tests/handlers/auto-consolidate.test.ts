@@ -26,8 +26,8 @@ function createDirectCtx(): { model: unknown; modelRegistry: unknown; _tag: stri
 }
 
 function makeDirectDeps(
-  result: { ok: boolean; appliedCount: number } | "throw",
-): { runDirectMemoryCompletion: (...args: unknown[]) => Promise<{ ok: boolean; appliedCount: number }> } {
+  result: { ok: boolean; appliedCount: number; fallbackReason?: string } | "throw",
+): { runDirectMemoryCompletion: (...args: unknown[]) => Promise<{ ok: boolean; appliedCount: number; fallbackReason?: string }> } {
   return {
     runDirectMemoryCompletion: async (...args: unknown[]) => {
       directCalls.push(args);
@@ -554,6 +554,32 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
       assert.strictEqual(result.consolidated, true);
       assert.strictEqual(directCalls.length, 1);
       assert.strictEqual(execCalls.length, 1, "empty direct result must fall back to subprocess");
+    });
+
+    it("returns terminal on empty_response without acquiring the lock or spawning a child (#235)", async () => {
+      const pi = createMockPi();
+      const directCtx = createDirectCtx();
+      const result = await triggerConsolidation(
+        pi,
+        mockStore,
+        "memory",
+        undefined,
+        60000,
+        "memory",
+        directTransportLlmConfig,
+        directCtx,
+        null,
+        null,
+        makeDirectDeps({ ok: true, appliedCount: 0, fallbackReason: "empty_response" }),
+      );
+
+      // An empty completion is terminal: the subprocess child would run the
+      // same model against the same server-side thinking default and fail
+      // the same way (#197), so it must not even be attempted.
+      assert.strictEqual(result.consolidated, false);
+      assert.match(result.error ?? "", /returned an empty completion; no consolidation attempted/);
+      assert.strictEqual(directCalls.length, 1);
+      assert.strictEqual(execCalls.length, 0, "empty completion is terminal — no subprocess");
     });
 
     it("falls back to subprocess when direct transport returns ok false", async () => {
