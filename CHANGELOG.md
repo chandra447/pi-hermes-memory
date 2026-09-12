@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One-time provider misconfiguration notice** ([#197](https://github.com/chandra447/pi-hermes-memory/issues/197)): when a review or consolidation completion comes back with an empty answer channel and the whole payload parked in the thinking channel, the extension logs a single warning per session naming the provider/model, explaining that a server-side thinking default is swallowing the answer and that the thinking-channel recovery is best-effort, and pointing the user to fix the provider (`Ask your Pi to fix this as well.`). Normal answers, redacted-only completions, and fully empty completions never trigger it.
+
 - **Opt-in memory lifecycle timings**: `PI_TIMING=1` now reports startup synchronization and loading, backfill and live-index callbacks, shutdown flush/index/wait/close, and database open/integrity-check/checkpoint durations. Normal runs produce no timing output.
 
 - **Opt-in SQLite session retention** ([#183](https://github.com/chandra447/pi-hermes-memory/issues/183)): new `sessionRetentionDays` setting (default `0`, disabled). When set to a positive value, sessions whose JSONL source file has not been updated within the window are pruned from SQLite at startup — rows only, the JSONL files themselves are never deleted — and both the deferred backfill and `/memory-index-sessions` skip files outside the window, so pruned sessions stay pruned instead of being re-indexed on every startup. With the default `0`, pruning is fully disabled and startup keeps the legacy count-only backfill preflight.

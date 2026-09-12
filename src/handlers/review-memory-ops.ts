@@ -635,6 +635,32 @@ function responseChannelText(content: unknown): { text: string; source: "text" |
   return { text: thinking, source: "thinking" };
 }
 
+const defaultProviderNoticeState = { logged: false };
+
+/** Fired once per process when a provider returns the whole answer in its
+ * thinking channel with an empty answer channel. That signature means the
+ * provider's server-side thinking default is swallowing the output (the #197
+ * report), so thinking-channel recovery is a workaround for a
+ * misconfiguration, not a feature to rely on. */
+function notifyThinkingChannelProvider(
+  model: { provider?: unknown; id?: unknown },
+  deps: { onProviderNotice?: (message: string) => void; providerNoticeState?: { logged: boolean } },
+): void {
+  const state = deps.providerNoticeState ?? defaultProviderNoticeState;
+  if (state.logged) return;
+  state.logged = true;
+  const modelRef = typeof model?.provider === "string" && typeof model?.id === "string"
+    ? `${model.provider}/${model.id}`
+    : "the active model";
+  const sink = deps.onProviderNotice ?? ((message: string) => console.warn(message));
+  sink(
+    `[pi-hermes-memory] Provider misconfiguration: ${modelRef} returned the whole answer in its thinking channel and left the answer channel empty. `
+      + "This usually means server-side thinking is forced on for this provider (for example a vLLM server started with DEFAULT_THINKING=max). "
+      + "Review recovery from the thinking channel is best-effort and can miss saves. "
+      + "Ask your Pi to fix this as well.",
+  );
+}
+
 export async function runDirectMemoryCompletion(
   ctx: Pick<ExtensionContext, "model" | "modelRegistry">,
   store: MemoryStore,
@@ -642,7 +668,13 @@ export async function runDirectMemoryCompletion(
   options: RunDirectMemoryCompletionOptions,
   dbManager: DatabaseManager | null = null,
   projectName?: string | null,
-  deps: { completeSimple?: typeof completeSimple } = {},
+  deps: {
+    completeSimple?: typeof completeSimple;
+    /** Test seam: replaces the console.warn sink for the provider notice. */
+    onProviderNotice?: (message: string) => void;
+    /** Test seam: dedupe state for the provider notice; omit for the process default. */
+    providerNoticeState?: { logged: boolean };
+  } = {},
 ): Promise<DirectReviewResult> {
   const complete = deps.completeSimple ?? completeSimple;
   const aborted = (): DirectReviewResult => ({ ok: false, appliedCount: 0, fallbackReason: "aborted" });
@@ -738,6 +770,13 @@ export async function runDirectMemoryCompletion(
       }
 
       const { text, source } = responseChannelText(response.content);
+      // The thinking-only signature means the provider's server-side thinking
+      // default is swallowing the answer channel (#197). Recovery works, but
+      // it is best-effort; surface the misconfiguration once per process so
+      // the user can fix the provider instead of relying on the recovery.
+      if (source === "thinking" && text.trim() !== "") {
+        notifyThinkingChannelProvider(model, deps);
+      }
 
       // Thinking-sourced text takes its own extraction (#235): candidates are
       // validated on their `operations` array and scanned from the end, and

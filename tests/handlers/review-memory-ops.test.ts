@@ -1193,6 +1193,68 @@ describe("response channel fallbacks (#197)", () => {
     assert.deepStrictEqual(result, { ok: false, appliedCount: 0, fallbackReason: "parse_error" });
   });
 
+  it("logs the provider-misconfiguration notice once per state for thinking-only answers", async () => {
+    const complete = async () => ({
+      stopReason: "stop",
+      content: [{ type: "thinking", thinking: JSON.stringify({ operations: [] }) }],
+    });
+    const lines: string[] = [];
+    const state = { logged: false };
+    const runWithDeps = (overrides: Record<string, unknown> = {}) =>
+      runDirectMemoryCompletion(
+        { model: mockModel(true), modelRegistry: registry() } as never,
+        null as never,
+        null,
+        { userPrompt: "u", systemPrompt: "s", config: {} },
+        null,
+        null,
+        {
+          completeSimple: complete as never,
+          onProviderNotice: (message: string) => lines.push(message),
+          providerNoticeState: state,
+          ...overrides,
+        },
+      );
+
+    await runWithDeps();
+    assert.strictEqual(lines.length, 1);
+    assert.match(lines[0]!, /Provider misconfiguration/);
+    assert.match(lines[0]!, /thinking channel/);
+    assert.match(lines[0]!, /Ask your Pi to fix this as well/);
+
+    // A second review sharing the state stays silent: the notice is log-once.
+    await runWithDeps();
+    assert.strictEqual(lines.length, 1);
+
+    // A fresh state (a new process or session) logs again.
+    await runWithDeps({ providerNoticeState: { logged: false } });
+    assert.strictEqual(lines.length, 2);
+  });
+
+  it("does not log the provider notice for a normal text-channel answer", async () => {
+    const complete = async () => ({
+      stopReason: "stop",
+      content: [{ type: "text", text: JSON.stringify({ operations: [] }) }],
+    });
+    const lines: string[] = [];
+
+    await runDirectMemoryCompletion(
+      { model: mockModel(true), modelRegistry: registry() } as never,
+      null as never,
+      null,
+      { userPrompt: "u", systemPrompt: "s", config: {} },
+      null,
+      null,
+      {
+        completeSimple: complete as never,
+        onProviderNotice: (message: string) => lines.push(message),
+        providerNoticeState: { logged: false },
+      },
+    );
+
+    assert.strictEqual(lines.length, 0);
+  });
+
   it("treats a redacted-only completion as empty_response, not parse_error", async () => {
     const complete = async () => ({
       stopReason: "stop",
