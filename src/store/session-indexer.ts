@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { DEFAULT_MAX_MESSAGE_CONTENT_LENGTH } from '../constants.js';
 import { DatabaseManager } from './db.js';
-import { parseSessionFile, getSessionFiles, type ParsedSession } from './session-parser.js';
+import { parseSessionFile, getSessionFiles, isSessionFile, type ParsedSession } from './session-parser.js';
 
 export const LAST_SESSION_BACKFILL_KEY = 'last_session_backfill';
 export const SESSION_BACKFILL_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -27,6 +27,12 @@ export interface BulkIndexResult {
   reachedLimit?: boolean;
   /** Session files skipped because their mtime is outside the retention window. */
   expiredSkipped?: number;
+  /**
+   * JSONL files skipped because their first line is not a `{"type":"session"}`
+   * header (see isSessionFile). Non-session extension artifacts living in the
+   * shared sessions directory land here instead of surfacing as parse errors.
+   */
+  nonSessionSkipped?: number;
 }
 
 interface SessionFileMetadata {
@@ -47,6 +53,12 @@ export interface IncrementalIndexOptions {
    * startup. Omit/0 to index every file (backwards-compatible default).
    */
   retentionCutoffMs?: number;
+  /**
+   * First-level directory names (exact or `*` globs) under the sessions root
+   * to skip entirely, from the `sessionIndexExclude` config. Applies only to
+   * the all-projects scan; an explicit projectDir is never filtered.
+   */
+  excludeDirs?: string[];
 }
 
 /**
@@ -339,7 +351,15 @@ function emptyBulkIndexResult(): BulkIndexResult {
   };
 }
 
-function indexSessionFile(dbManager: DatabaseManager, file: string, result: BulkIndexResult): void {
+function indexSessionFile(dbManager: DatabaseManager, file: string, result: BulkIndexResult, alreadySniffed = false): void {
+  if (!alreadySniffed && !isSessionFile(file)) {
+    // Not a session JSONL (extension artifact in the shared sessions dir):
+    // skip silently — this is expected content, not an indexing failure, and
+    // not even a "processed" candidate file.
+    result.nonSessionSkipped = (result.nonSessionSkipped ?? 0) + 1;
+    return;
+  }
+
   result.sessionsProcessed++;
 
   const session = parseSessionFile(file);
@@ -376,8 +396,9 @@ export function indexAllSessions(
   sessionsDir: string,
   projectDir?: string,
   retentionCutoffMs = 0,
+  excludeDirs: string[] = [],
 ): BulkIndexResult {
-  const files = getSessionFiles(sessionsDir, projectDir);
+  const files = getSessionFiles(sessionsDir, projectDir, excludeDirs);
   const result = emptyBulkIndexResult();
   let expiredSkipped = 0;
 
@@ -419,7 +440,7 @@ export function indexChangedSessions(
   sessionsDir: string,
   options: IncrementalIndexOptions = {},
 ): BulkIndexResult {
-  const files = getSessionFiles(sessionsDir, options.projectDir);
+  const files = getSessionFiles(sessionsDir, options.projectDir, options.excludeDirs);
   const maxFilesToIndex = options.maxFilesToIndex ?? 50;
   const result = emptyBulkIndexResult();
 
@@ -443,6 +464,14 @@ export function indexChangedSessions(
         result.sessionsSkipped++;
         continue;
       }
+      if (!isSessionFile(file)) {
+        // Extension artifacts in the shared sessions dir: never queued, never
+        // counted against the per-startup cap, never surfaced as errors.
+        // Sniffed only here — indexSessionFile below is told it's already done,
+        // and steady-state (stored-match) files never pay the sniff at all.
+        result.nonSessionSkipped = (result.nonSessionSkipped ?? 0) + 1;
+        continue;
+      }
       changed.push(metadata);
     } catch (err) {
       result.errors.push(`Error indexing ${file}: ${err instanceof Error ? err.message : String(err)}`);
@@ -457,7 +486,7 @@ export function indexChangedSessions(
       break;
     }
     try {
-      indexSessionFile(dbManager, metadata.path, result);
+      indexSessionFile(dbManager, metadata.path, result, true);
     } catch (err) {
       result.errors.push(`Error indexing ${metadata.path}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -468,9 +497,11 @@ export function indexChangedSessions(
 
 /**
  * Cheaply count session JSONL files in the same scope indexAllSessions scans.
+ * sessionOnly (default true) applies the same sniffing + exclusions the
+ * indexing paths use, so the count never overstates work that will be skipped.
  */
-export function countSessionFiles(sessionsDir: string): number {
-  return getSessionFiles(sessionsDir).length;
+export function countSessionFiles(sessionsDir: string, excludeDirs: string[] = [], sessionOnly = true): number {
+  return getSessionFiles(sessionsDir, undefined, excludeDirs, sessionOnly).length;
 }
 
 function getLastBackfillTimestamp(dbManager: DatabaseManager): string | null {
@@ -497,23 +528,31 @@ export function needsBackfill(
   sessionsDir: string,
   now = new Date(),
   retentionCutoffMs = 0,
+  excludeDirs: string[] = [],
 ): boolean {
-  const db = dbManager.getDb();
-  const files = getSessionFiles(sessionsDir);
-  const indexed = db.prepare('SELECT COUNT(*) as count FROM sessions').get() as { count: number };
+  // Enumerate WITHOUT sniffing: the sniff belongs to the per-file loop below so
+  // it only runs for files that actually lack a stored-match. Mirrors
+  // indexChangedSessions' I/O ordering: a steady-state startup (everything
+  // indexed) stays a readdir + stat + cheap DB lookup pass — no open + read
+  // per session file inside session_start. Excluded dirs are dropped here.
+  const files = getSessionFiles(sessionsDir, undefined, excludeDirs, false);
 
   if (retentionCutoffMs <= 0) {
-    // Retention disabled: keep the historical cheap path — a plain file-count
-    // vs row-count comparison decides before any per-file stat work, so
-    // large session directories stay fast on startup.
-    if (files.length > indexed.count) {
-      return true;
-    }
-
+    // Retention disabled. The historical `files.length > indexed.count` fast
+    // path is deliberately gone: with non-session artifacts in the tree it
+    // over-counts files that will never receive session_files rows, so it
+    // returned true on every startup — the exact churn this preflight must
+    // terminate. The metadata loop below is stat + indexed-DB lookups only
+    // for steady state, which is cheap enough to always pay.
     for (const file of files) {
       try {
         const metadata = getSessionFileMetadata(file);
         if (storedSessionFileMatches(dbManager, metadata)) continue;
+        // Unstamped or changed: only now is the sniff worth its cost. A
+        // non-session artifact never gets a stamp, so it must not demand a
+        // backfill (continue = non-work) — otherwise artifact-heavy machines
+        // would reschedule the deferred pass on every launch forever.
+        if (!isSessionFile(file)) continue;
         return true;
       } catch {
         // An unreadable or malformed session file still needs indexing.
@@ -529,14 +568,19 @@ export function needsBackfill(
   // the window there is no work at all. Returning here (instead of falling
   // through to the periodic timestamp check) keeps an all-expired store from
   // scheduling an empty backfill on every startup before a timestamp is ever
-  // written.
+  // written. hasRetainedFile keeps its raw meaning (any retained, non-excluded
+  // file, artifacts included) so the periodic-timestamp behavior is unchanged.
   let hasRetainedFile = false;
   for (const file of files) {
     try {
       const metadata = getSessionFileMetadata(file);
       if (!isWithinRetention(metadata.mtimeMs, retentionCutoffMs)) continue;
       hasRetainedFile = true;
-      if (!storedSessionFileMatches(dbManager, metadata)) return true;
+      if (!storedSessionFileMatches(dbManager, metadata)) {
+        // Sniff only unstamped files (same ordering as the branch above):
+        // artifacts are non-work and must not demand a backfill.
+        if (isSessionFile(file)) return true;
+      }
     } catch {
       return true;
     }
