@@ -120,6 +120,16 @@ export class MemoryStore {
     if (target === "failure") return this.config.memoryCharLimit * 2; // Failures get more space
     return target === "user" ? this.config.userCharLimit : this.config.memoryCharLimit;
   }
+
+  /**
+   * Public read for consolidation tooling: the char budget this target is held
+   * to (failure tier is 2× the memory limit). Chunked consolidation stops at
+   * this goal instead of its own prompt budget, so a 2×-tier store is not
+   * over-merged down to a single slice size.
+   */
+  capacityGoal(target: "memory" | "user" | "failure"): number {
+    return this.charLimit(target);
+  }
   private get capEnforced(): boolean {
     return this.config.memoryMode !== "policy-only";
   }
@@ -327,7 +337,10 @@ export class MemoryStore {
 
     const retried = await this.addWithConsolidation(target, content, signal, retriesLeft - 1, addedMessage, project);
     if (retried.success || !retried.error?.startsWith("Memory at ")) return retried;
-    return { ...retried, error: `${retried.error} Auto-consolidation ran but did not free enough space.` };
+    const partialNote = consolidation.partial
+      ? ` Consolidation is incomplete: ${consolidation.error ?? "retrigger consolidation to continue"}.`
+      : " Auto-consolidation ran but did not free enough space.";
+    return { ...retried, error: `${retried.error}${partialNote}` };
   }
 
   private async fifoEvictAndAdd(

@@ -55,8 +55,15 @@ export const DEFAULT_FLUSH_SHUTDOWN_TIMEOUT_MS = 10_000;
  * sane single-call timeout at cap scale.
  */
 export const DEFAULT_CONSOLIDATION_CHUNK_CHARS = 4000;
-/** Max subprocess consolidation rounds per trigger (chunked path only). */
-export const DEFAULT_CONSOLIDATION_MAX_ROUNDS = 4;
+/** Floor for the consolidationChunkChars config value. */
+export const CONSOLIDATION_CHUNK_CHARS_MIN = 500;
+/**
+ * Safety cap on subprocess consolidation rounds per trigger. In practice the
+ * loop exits earlier: capacity goal met, overall budget exhausted (the trigger
+ * never blocks longer than the old single call — consolidationTimeoutMs), a
+ * round that shrinks nothing, or a child failure.
+ */
+export const MAX_CONSOLIDATION_ROUNDS = 6;
 /** Wall-clock grace after overflow before an automatic consolidation may run. */
 export const DEFAULT_OVERFLOW_GRACE_MS = 180000;
 export const DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS = 7;

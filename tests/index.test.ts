@@ -27,4 +27,21 @@ describe("shouldWarnAutoConsolidationFailure", () => {
       false,
     );
   });
+
+  it("warns for a partial consolidation even when progress was made", () => {
+    assert.strictEqual(
+      shouldWarnAutoConsolidationFailure(true, true, true),
+      true,
+    );
+    assert.strictEqual(
+      shouldWarnAutoConsolidationFailure(false, true, true),
+      false,
+      "the warning flag still governs",
+    );
+    assert.strictEqual(
+      shouldWarnAutoConsolidationFailure(true, true, false),
+      false,
+      "a clean successful run stays quiet",
+    );
+  });
 });

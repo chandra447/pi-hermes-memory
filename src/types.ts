@@ -95,12 +95,11 @@ export interface MemoryConfig {
   consolidationTimeoutMs: number;
   /**
    * Entries joined above this many chars split subprocess consolidation into
-   * multiple child runs, each with its own consolidationTimeoutMs. Has no
+   * multiple child runs, each with its own consolidationTimeoutMs; the whole
+   * trigger is additionally bounded by consolidationTimeoutMs in total. Has no
    * effect on the direct (in-process) transport. Default: 4000
    */
   consolidationChunkChars?: number;
-  /** Maximum subprocess consolidation rounds per trigger. Default: 4 */
-  consolidationMaxRounds?: number;
   /** Log failed auto-consolidation attempts to the session console. Default: true */
   autoConsolidationWarnOnFailure: boolean;
   /** Inject pinned STANDING.md instructions into every session. Default: true */
@@ -158,6 +157,13 @@ export interface ConsolidationResult {
   consolidated: boolean;
   /** Error message if consolidation failed */
   error?: string;
+  /**
+   * True when at least one round completed but the run ended with a failure
+   * or the store is still over its capacity goal. Progress is real and on
+   * disk; retriggering continues from current state. Consumers should
+   * surface `error` alongside the success path when this is set.
+   */
+  partial?: boolean;
   /**
    * Number of subprocess consolidation rounds that completed successfully
    * (chunked path only; absent for single-shot runs).

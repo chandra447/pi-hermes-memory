@@ -49,20 +49,20 @@ describe("loadConfig", () => {
     assert.strictEqual(config.quickCheckOnOpen, true);
   });
 
-  it("honors consolidationChunkChars and consolidationMaxRounds", () => {
+  it("honors consolidationChunkChars", () => {
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ consolidationChunkChars: 6000, consolidationMaxRounds: 2 }));
-    const config = loadConfig(TEST_CONFIG_PATH);
-    assert.strictEqual(config.consolidationChunkChars, 6000);
-    assert.strictEqual(config.consolidationMaxRounds, 2);
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ consolidationChunkChars: 6000 }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).consolidationChunkChars, 6000);
   });
 
-  it("ignores out-of-range consolidation chunking values", () => {
+  it("ignores out-of-range consolidationChunkChars values", () => {
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ consolidationChunkChars: 100, consolidationMaxRounds: 0 }));
-    const config = loadConfig(TEST_CONFIG_PATH);
-    assert.strictEqual(config.consolidationChunkChars, undefined, "below the 500-char floor should be ignored");
-    assert.strictEqual(config.consolidationMaxRounds, undefined, "below 1 round should be ignored");
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ consolidationChunkChars: 100 }));
+    assert.strictEqual(
+      loadConfig(TEST_CONFIG_PATH).consolidationChunkChars,
+      undefined,
+      "below the 500-char floor should be ignored",
+    );
   });
 
   it("honors a configured consolidationTimeoutMs, warning only when it is below the default", () => {
