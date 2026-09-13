@@ -1547,3 +1547,64 @@ describe("chunked consolidation in legacy-inject mode", () => {
     assert.strictEqual(removed.length, 2);
   });
 });
+
+describe("/memory-consolidate partial display", () => {
+  it("shows ⚠️ partial with the reason when a round fails after earlier progress", async () => {
+    const memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-consolidation-partial-ui-"));
+    try {
+      const store = new MemoryStore({
+        memoryCharLimit: 5000,
+        userCharLimit: 100,
+        memoryMode: "policy-only",
+        nudgeInterval: 10,
+        reviewEnabled: false,
+        flushOnCompact: false,
+        flushOnShutdown: false,
+        flushMinTurns: 6,
+        autoConsolidate: false,
+        correctionDetection: false,
+        nudgeToolCalls: 15,
+        memoryDir,
+      });
+      await store.loadFromDisk();
+      for (let i = 0; i < 11; i++) {
+        await store.add("memory", `partial-ui-${i}-${"x".repeat(580)}`); // ≈ 6663 chars > 5000 goal
+      }
+
+      execCalls = [];
+      let handler: ManualCommandHandler | undefined;
+      const pi = {
+        on: () => {},
+        exec: async (...args: any[]) => {
+          execCalls.push(captureExecArgs(args));
+          const round = execCalls.length;
+          if (round === 1) {
+            const prompt = execCalls[0][1].at(-1) as string;
+            const batch = parsePromptBatch(prompt);
+            await removeEntryFromDisk(store, batch[0]);
+            return { code: 0, stdout: "ok", stderr: "" };
+          }
+          return { code: 124, stdout: "", stderr: "", killed: true };
+        },
+        registerTool: () => {},
+        registerCommand: (_name: string, command: { handler: ManualCommandHandler }) => {
+          handler = command.handler;
+        },
+      } as unknown as Parameters<typeof registerConsolidateCommand>[0];
+
+      registerConsolidateCommand(pi, store, DEFAULT_CONSOLIDATION_TIMEOUT_MS, null, null, {
+        consolidationChunkChars: 2500,
+      });
+      assert.ok(handler, "command handler should be registered");
+
+      const notifications: string[] = [];
+      await handler!({}, { signal: undefined, ui: { notify: (msg: string) => notifications.push(msg) } });
+
+      const summary = notifications[notifications.length - 1] ?? "";
+      assert.ok(summary.includes("memory: ✅ consolidated (1 round) ⚠️ partial:"), summary);
+      assert.ok(summary.includes("terminated"), summary);
+    } finally {
+      await fs.rm(memoryDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
