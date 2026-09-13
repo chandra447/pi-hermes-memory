@@ -95,9 +95,9 @@ export interface MemoryConfig {
   consolidationTimeoutMs: number;
   /**
    * Entries joined above this many chars split subprocess consolidation into
-   * multiple child runs, each with its own consolidationTimeoutMs; the whole
-   * trigger is additionally bounded by consolidationTimeoutMs in total. Has no
-   * effect on the direct (in-process) transport. Default: 4000
+   * multiple child runs that share one overall time budget
+   * (consolidationTimeoutMs); the loop stops at the target's capacity goal.
+   * Has no effect on the direct (in-process) transport. Default: 4000
    */
   consolidationChunkChars?: number;
   /** Log failed auto-consolidation attempts to the session console. Default: true */
