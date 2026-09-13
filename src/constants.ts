@@ -49,10 +49,11 @@ export const DEFAULT_FLUSH_SHUTDOWN_TIMEOUT_MS = 10_000;
 /**
  * Above this many chars of (metadata-stripped) entries in one consolidation
  * prompt, the subprocess path splits the work into multiple child runs
- * ("rounds"), each bounded by its own consolidationTimeoutMs, reloading from
- * disk between rounds. Stores at or below the threshold keep today's
- * single-shot child run. #P1: one whole-store LLM merge routinely exceeds any
- * sane single-call timeout at cap scale.
+ * ("rounds") that share one overall time budget (consolidationTimeoutMs),
+ * reloading from disk between rounds; the loop stops at the target's capacity
+ * goal. Stores at or below the threshold keep today's single-shot child run.
+ * #P1: one whole-store LLM merge routinely exceeds any sane single-call
+ * timeout at cap scale.
  */
 export const DEFAULT_CONSOLIDATION_CHUNK_CHARS = 4000;
 /** Floor for the consolidationChunkChars config value. */

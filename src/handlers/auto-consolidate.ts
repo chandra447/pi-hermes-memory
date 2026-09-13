@@ -352,35 +352,38 @@ export async function triggerConsolidation(
 
     if (promptEntries.join(ENTRY_DELIMITER).length <= goal) {
       // Over the prompt budget but already within the target's capacity goal
-      // (e.g. the failure tier): nothing needs to shrink.
-      return {
-        consolidated: false,
-        error: `memory already within its ${goal}-char capacity goal (${promptEntries.join(ENTRY_DELIMITER).length} chars) — nothing to consolidate`,
-      };
+      // (e.g. the failure tier, or a manual trigger on a healthy store):
+      // nothing needs to shrink. A clean no-op, not a failure.
+      return { consolidated: true, rounds: 0 };
     }
 
     // Chunked path — the store exceeds one child run's prompt budget, and a
     // single whole-store LLM merge is what produced the observed "subprocess
-    // terminated (likely timeout)" failures at cap scale. Rounds: each
-    // consolidates a slice under the shared budget, then reloads from disk
-    // (the child modified files) and re-evaluates. The round that ends with
-    // the remaining store small enough for one prompt runs UNSCOPED — it sees
-    // everything that is left, so the decisive merge keeps whole-store
+    // terminated (likely timeout)" failures at cap scale. Rounds share the
+    // overall budget (deadline): each consolidates a slice, then reloads from
+    // disk (the child modified files) and re-evaluates. The round that ends
+    // with the remaining store small enough for one prompt runs UNSCOPED — it
+    // sees everything that is left, so the decisive merge keeps whole-store
     // context. Resume needs no cursor: partial progress is already on disk.
     let completedRounds = 0;
-    let failureMessage: string | undefined;
+    const notes: string[] = [];
     let offset = 0;
+    let roundsSinceProgress = 0;
 
     while (completedRounds < MAX_CONSOLIDATION_ROUNDS) {
       const total = promptEntries.join(ENTRY_DELIMITER).length;
       if (total <= goal) break; // capacity goal met
+      // Removals in earlier rounds shift indices left; the walk offset may
+      // point past the (now shorter) store — wrap it instead of slicing an
+      // empty batch.
+      if (offset >= promptEntries.length) offset = 0;
       if (signal?.aborted) {
-        failureMessage = "aborted between consolidation rounds";
+        notes.push("aborted between consolidation rounds");
         break;
       }
       const remaining = deadline - Date.now();
       if (remaining < MIN_ROUND_MS) {
-        failureMessage = `consolidation time budget (${timeoutMs}ms) exhausted; retrigger consolidation to continue from current state`;
+        notes.push(`consolidation time budget (${timeoutMs}ms) exhausted; retrigger consolidation to continue from current state`);
         break;
       }
 
@@ -397,10 +400,10 @@ export async function triggerConsolidation(
       }) as { code: number; stdout?: string; stderr?: string; killed?: boolean };
 
       if (result.code !== 0) {
-        failureMessage = describeConsolidationFailure(result, Math.min(timeoutMs, remaining))
+        notes.push(describeConsolidationFailure(result, Math.min(timeoutMs, remaining))
           + (completedRounds > 0
             ? ` ${completedRounds} earlier round${completedRounds === 1 ? "" : "s"} shrank the store; retrigger consolidation to continue.`
-            : "");
+            : ""));
         break;
       }
 
@@ -409,81 +412,69 @@ export async function triggerConsolidation(
         await store.loadFromDisk();
         promptEntries = entriesForTarget(store, target);
       } catch {
-        failureMessage = "could not reload memory after a consolidation round";
+        notes.push("could not reload memory after a consolidation round");
         break;
       }
 
       // Out-of-scope changes: entries that vanished this round without being
-      // part of the presented slice. The scope instruction makes this
-      // unlikely (observed in real runs before the guard existed); restore
-      // them so damage does not persist silently.
+      // part of the presented slice. The child can see the whole store through
+      // its tools, and a concurrent session may delete entries in this window
+      // too — the parent cannot tell a rogue deletion from a legitimate
+      // cross-slice dedup or a concurrent one, so out-of-scope disappearances
+      // are REPORTED, never resurrected (resurrection would fight legitimate
+      // dedup and ping-pong across triggers; the store's recovery snapshots
+      // remain the repair path for real damage).
       const outOfScope = beforeRound.filter(
         (entry) => !batchSet.has(entry) && !promptEntries.includes(entry),
       );
       if (outOfScope.length > 0) {
-        let restored = 0;
-        for (const entry of outOfScope) {
-          try {
-            const readd = await store.add(target, entry);
-            if (readd.success) restored++;
-          } catch {
-            // best-effort restore; the missing-entry note below still reports
-          }
-        }
-        if (restored > 0) {
-          try {
-            await store.loadFromDisk();
-            promptEntries = entriesForTarget(store, target);
-          } catch {
-            // keep counting against the post-round snapshot
-          }
-        }
-        const stillMissing = outOfScope.length - restored;
-        const note = `round ${completedRounds} touched ${outOfScope.length} out-of-scope entr${outOfScope.length === 1 ? "y" : "ies"}`
-          + (restored > 0 ? `, restored ${restored}` : "")
-          + (stillMissing > 0 ? `, ${stillMissing} could not be restored` : "");
-        failureMessage = failureMessage ? `${failureMessage} ${note}` : note;
+        notes.push(`round ${completedRounds} coincided with ${outOfScope.length} out-of-scope entr${outOfScope.length === 1 ? "y" : "ies"} disappearing (by the child or a concurrent writer) — inspect memory if that was not intended`);
       }
 
       const totalAfter = promptEntries.join(ENTRY_DELIMITER).length;
       if (totalAfter >= total) {
-        // This round shrank nothing legitimate. Do not burn the remaining
-        // rounds repeating it: walk to the next slice, or stop when even the
-        // whole-remaining store could not be shrunk.
+        // This round shrank nothing. Walk to the next slice rather than
+        // repeating it; when nothing in the walk yields, report the honest
+        // dead end.
+        roundsSinceProgress++;
         if (fitsOneChunk) {
-          failureMessage = `consolidation could not shrink the remaining ${total} chars (capacity goal ${goal}); entries may be distinct facts worth keeping — consider manual pruning`;
+          notes.push(`consolidation could not shrink the remaining ${total} chars (capacity goal ${goal}); entries may be distinct facts worth keeping — consider manual pruning`);
           break;
         }
-        offset += batch.length;
-        if (offset >= promptEntries.length) {
-          failureMessage = `no slice of the store could be shrunk toward the ${goal}-char capacity goal (${total} chars remain); entries may be distinct facts worth keeping`;
+        offset = (offset + batch.length) % Math.max(promptEntries.length, 1);
+        if (roundsSinceProgress >= MAX_CONSOLIDATION_ROUNDS) {
+          notes.push(`no slice of the store could be shrunk toward the ${goal}-char capacity goal (${total} chars remain); entries may be distinct facts worth keeping`);
           break;
         }
         continue;
       }
 
-      offset = 0; // store content changed — walk from the top next round
+      // Progress: keep walking forward past the slice this round consumed
+      // (removals shift indices left, so this is approximate) — resetting to
+      // the top would let a store whose head always yields a little progress
+      // starve the tail forever.
+      roundsSinceProgress = 0;
+      offset = (offset + batch.length) % Math.max(promptEntries.length, 1);
       if (totalAfter <= goal) break; // capacity goal met
-      if (fitsOneChunk) break; // decisive round done; another pass starts from the top on the next trigger
+      if (fitsOneChunk) break; // decisive round done; the next trigger starts a fresh pass
     }
 
     if (completedRounds > 0) {
-      const notes: string[] = [];
-      if (failureMessage) notes.push(failureMessage);
+      const roundNotes = [...notes];
       const totalEnd = promptEntries.join(ENTRY_DELIMITER).length;
       if (totalEnd > goal) {
-        notes.push(`store still ${totalEnd - goal} chars over its ${goal}-char capacity goal`);
+        roundNotes.push(`store still ${totalEnd - goal} chars over its ${goal}-char capacity goal`);
       }
       return {
         consolidated: true,
-        partial: notes.length > 0,
+        partial: roundNotes.length > 0,
         rounds: completedRounds,
-        ...(notes.length ? { error: notes.join("; ") } : {}),
+        ...(roundNotes.length ? { error: roundNotes.join("; ") } : {}),
       };
     }
     return {
       consolidated: false,
-      error: failureMessage ?? "consolidation produced no progress",
+      error: notes.join("; ") || "consolidation produced no progress",
     };
 } catch (err) {
     const message = String(err);
