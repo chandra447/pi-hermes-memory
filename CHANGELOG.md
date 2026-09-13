@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Chunked subprocess consolidation**: stores above `consolidationChunkChars` (new, default `4000`) consolidate in bounded rounds — a head slice of entries per child run, reloading from disk between rounds, so a killed run resumes from partial progress instead of restarting. The rounds share one overall time budget (`consolidationTimeoutMs`, same worst case as the single call this replaces), the loop stops at the target's capacity goal (failure memory is a 2× tier and is no longer over-merged down to the slice size), a slice that cannot shrink is skipped rather than blocking later slices, and when a target's capacity goal sits below the chunk size (small caps), the final round — once the remaining store fits one prompt — runs with the whole remaining store for full context. Partial runs report `partial: true` with the reason and are surfaced by the warning path, the store's add-retry error, and `/memory-consolidate`; disappearances outside a round's slice (rogue child deletions, legitimate cross-slice dedup, or concurrent writers — indistinguishable to the parent) are detected and reported rather than resurrected, because re-adding through the cap-enforcing add path cannot converge and resurrection ping-pongs across triggers. An over-chunk store already within its capacity goal is a clean no-op. Single-shot behavior below the threshold is unchanged.
+
 ### Added
 
 - **One-time provider misconfiguration notice** ([#197](https://github.com/chandra447/pi-hermes-memory/issues/197)): when a review or consolidation completion comes back with an empty answer channel and the whole payload parked in the thinking channel, the extension logs a single warning per session naming the provider/model, explaining that a server-side thinking default is swallowing the answer and that the thinking-channel recovery is best-effort, and pointing the user to fix the provider (`Ask your Pi to fix this as well.`). Normal answers, redacted-only completions, and fully empty completions never trigger it.

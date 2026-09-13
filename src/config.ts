@@ -13,6 +13,7 @@ import {
   DEFAULT_FLUSH_RECENT_MESSAGES,
   DEFAULT_CONSOLIDATION_TIMEOUT_MS,
   DEFAULT_FLUSH_COMPACT_TIMEOUT_MS,
+  CONSOLIDATION_CHUNK_CHARS_MIN,
   DEFAULT_OVERFLOW_GRACE_MS,
   DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
   DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
@@ -145,6 +146,11 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
             + " Consolidation spawns a child agent turn and is routinely killed mid-run at lower values.",
           );
         }
+      }
+      if (typeof parsed.consolidationChunkChars === "number"
+        && Number.isFinite(parsed.consolidationChunkChars)
+        && parsed.consolidationChunkChars >= CONSOLIDATION_CHUNK_CHARS_MIN) {
+        config.consolidationChunkChars = parsed.consolidationChunkChars;
       }
       if (typeof parsed.autoConsolidationWarnOnFailure === "boolean") {
         config.autoConsolidationWarnOnFailure = parsed.autoConsolidationWarnOnFailure;
