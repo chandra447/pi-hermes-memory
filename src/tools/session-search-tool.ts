@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { DatabaseManager } from '../store/db.js';
 import { searchSessions, getIndexedMessageCount } from '../store/session-search.js';
+import { collectNaturalLanguageTerms } from '../store/fts-query.js';
 import { searchSessionAnchors } from '../store/session-anchor-search.js';
 import type { SessionAnchorRange, SessionAnchorSearchResult } from '../store/session-anchor-search.js';
 import type { SessionSearchConfig } from '../types.js';
@@ -31,11 +32,63 @@ const DEFAULT_SESSIONS_DIR = path.join(AGENT_ROOT, 'sessions');
 const DEFAULT_LEGACY_SNIPPET_CHARS = 1_200;
 const MAX_LEGACY_SNIPPET_CHARS = 4_000;
 const MAX_LEGACY_OUTPUT_CHARS = 50 * 1024;
+// Context kept ahead of the anchor hit when a snippet is windowed. Kept next
+// to the other legacy truncation caps so the truncation family lives in one
+// place (snippetChars above, the indexer's 100 KB content cap in
+// session-indexer.ts, getMessageText's 500 in types.ts).
+const LEGACY_SNIPPET_LEAD_CHARS = 200;
 
-function truncateLegacySnippet(text: string, maxChars: number): { text: string; truncated: boolean } {
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/**
+ * Truncate a long legacy snippet to maxChars by windowing around the first
+ * hit of the effective search terms (the same stop-word-filtered term set the
+ * FTS5 path matched on) instead of a blunt head-slice, so the caller sees the
+ * matched region of a multi-MB row, not its preamble. When no anchor term
+ * matches the body — an all-stop-word query, or a row the LIKE fallback
+ * matched on raw terms — the window falls back to the head, the previous
+ * behavior, and the truncation note still reports the true total length.
+ */
+function truncateLegacySnippet(
+  text: string,
+  maxChars: number,
+  anchorTerms: string[],
+): { text: string; truncated: boolean } {
   if (text.length <= maxChars) return { text, truncated: false };
+
+  // One lowercase pass for the whole body, not one per term: on the multi-MB
+  // legacy rows this truncation exists for, per-term lowercasing multiplied
+  // the full-body scan by the term count.
+  const lowerText = text.toLowerCase();
+  let hit = -1;
+  for (const term of anchorTerms) {
+    const i = lowerText.indexOf(term.toLowerCase());
+    if (i !== -1 && (hit === -1 || i < hit)) hit = i;
+  }
+
+  let start = hit === -1 ? 0 : Math.max(0, hit - LEGACY_SNIPPET_LEAD_CHARS);
+  let end = Math.min(text.length, start + maxChars);
+
+  // UTF-16 units, not code points: a window edge landing between the halves
+  // of a surrogate pair would render one corrupted character, so nudge such
+  // edges by one unit.
+  if (start > 0 && isHighSurrogate(text.charCodeAt(start - 1)) && isLowSurrogate(text.charCodeAt(start))) {
+    start += 1;
+  }
+  if (end < text.length && isHighSurrogate(text.charCodeAt(end - 1)) && isLowSurrogate(text.charCodeAt(end))) {
+    end -= 1;
+  }
+
+  const suffix = `\n... (truncated, ${text.length} chars total — refine the query or increase snippetChars)`;
+  const prefix = start > 0 ? '… ' : '';
   return {
-    text: `${text.slice(0, maxChars)}\n... (truncated, ${text.length} chars total — refine the query or increase snippetChars)`,
+    text: `${prefix}${text.slice(start, end)}${suffix}`,
     truncated: true,
   };
 }
@@ -154,7 +207,7 @@ Examples:
 - "Find the PR where we fixed the test hang"
 - "What approach did we take for the database migration?"
 
-Returns bounded conversation snippets with session dates and project context. Large messages are truncated with their original character count.`,
+Returns bounded conversation snippets with session dates and project context. Long messages are truncated to a window around the first query-term hit, with their original character count.`,
     promptSnippet: 'Search past conversations for relevant context',
     promptGuidelines: [
       'Use session_search when the user asks about previous discussions or past work.',
@@ -198,6 +251,12 @@ Returns bounded conversation snippets with session dates and project context. La
         return { content: [{ type: 'text' as const, text: result.message! }], details: result };
       }
 
+      // The window anchor is the effective term set of the query — quoted
+      // phrases kept, connectors and #184 stop words dropped — the same set
+      // normalizeFts5Query builds the FTS5 match from. Anchoring on raw
+      // tokens would let a stop word near the head of a long body pin the
+      // window at the start, exactly what windowing exists to avoid.
+      const anchorTerms = collectNaturalLanguageTerms(query);
       const results = searchSessions(dbManager, query, { project, role, limit });
 
       if (results.length === 0) {
@@ -222,7 +281,7 @@ Returns bounded conversation snippets with session dates and project context. La
           day: 'numeric',
         });
 
-        const snippet = truncateLegacySnippet(r.snippet, snippetChars);
+        const snippet = truncateLegacySnippet(r.snippet, snippetChars, anchorTerms);
         if (snippet.truncated) truncatedCount += 1;
         blocks.push([
           '---',

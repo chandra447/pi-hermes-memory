@@ -256,6 +256,126 @@ describe("registerSessionSearchTool", () => {
     }
   });
 
+  it("windows an oversized legacy snippet around the first effective term hit, not the head", async () => {
+    let captured: any;
+    const mockPi = {
+      registerTool: (def: any) => { captured = def; },
+    } as any;
+    const memoryDir = makeSessionsDir();
+    const dbManager = new DatabaseManager(memoryDir);
+    // 'the' lands near the head, the real needle ~4 KB deep: a window anchored
+    // on raw tokens (stop words kept) would show the head; the effective term
+    // set must anchor the window on the needle's region.
+    const windowedContent =
+      `the preamble filler. ${"a".repeat(4_000)} ` +
+      `zz-camera-restart-marker zz-restart ` +
+      `${"b".repeat(4_000)}`;
+
+    try {
+      const db = dbManager.getDb();
+      db.prepare(`
+        INSERT INTO sessions (id, project, cwd, started_at, ended_at, message_count)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        "windowed-session",
+        "windowed-project",
+        "/work/windowed",
+        "2026-07-11T00:00:00.000Z",
+        null,
+        1,
+      );
+      db.prepare(`
+        INSERT INTO messages (id, session_id, role, content, timestamp)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        "windowed-message",
+        "windowed-session",
+        "assistant",
+        windowedContent,
+        "2026-07-11T00:01:00.000Z",
+      );
+      registerSessionSearchTool(mockPi, dbManager);
+
+      const result = await captured.execute("tc-windowed", {
+        query: "the camera restart",
+      });
+      const output = result.content[0].text as string;
+
+      assert.ok(output.includes("zz-camera-restart-marker"), "window must include the anchor hit region");
+      assert.ok(output.startsWith("Found 1 results"));
+      const snippetLine = output.split("\n").find((line: string) => line.startsWith("… "));
+      assert.ok(snippetLine, "a mid-body window must be marked as elided");
+      assert.ok(!snippetLine.includes("camera preamble filler"), "window must not start at the message head");
+      assert.match(output, /truncated/);
+      assert.match(output, /chars total/);
+      assert.strictEqual(result.details.truncatedCount, 1);
+      assert.ok(output.length <= 50 * 1024, `expected <= 50 KiB, got ${output.length}`);
+    } finally {
+      dbManager.close();
+    }
+  });
+
+  it("keeps surrogate pairs whole at window edges", async () => {
+    let captured: any;
+    const mockPi = {
+      registerTool: (def: any) => { captured = def; },
+    } as any;
+    const memoryDir = makeSessionsDir();
+    const dbManager = new DatabaseManager(memoryDir);
+    // The needle sits just past a long emoji run: hit - LEAD lands mid-run,
+    // on an odd UTF-16 offset — inside a surrogate pair unless the window is
+    // nudged. Each emoji is 2 UTF-16 units; 3_999 emojis end at an odd offset.
+    const emojiRun = "\u{1F600}".repeat(3_999);
+    // One filler unit after the run puts the needle on an odd offset, so the
+    // window start (hit - 200) lands on the LOW half of an emoji pair, and an
+    // odd snippetChars puts the window end on a LOW half too — both edge
+    // nudges must fire for the sliced text to contain only whole code points.
+    const surrogateContent = `needl ${emojiRun} x tail-needle`;
+
+    try {
+      const db = dbManager.getDb();
+      db.prepare(`
+        INSERT INTO sessions (id, project, cwd, started_at, ended_at, message_count)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        "surrogate-session",
+        "surrogate-project",
+        "/work/surrogate",
+        "2026-07-11T00:00:00.000Z",
+        null,
+        1,
+      );
+      db.prepare(`
+        INSERT INTO messages (id, session_id, role, content, timestamp)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        "surrogate-message",
+        "surrogate-session",
+        "assistant",
+        surrogateContent,
+        "2026-07-11T00:01:00.000Z",
+      );
+      registerSessionSearchTool(mockPi, dbManager);
+
+      const result = await captured.execute("tc-surrogate", {
+        query: "tail-needle",
+        snippetChars: 101,
+      });
+      const output = result.content[0].text as string;
+
+      const snippetLine = output.split("\n").find((line: string) => line.startsWith("… "))!;
+      // The elided prefix means the window started mid-body; after it every
+      // character must be a complete code point — no lone surrogate halves.
+      const windowText = snippetLine.slice(2).split("\n...")[0];
+      assert.ok(windowText.length > 0);
+      const completeUnits = /^(?:[\u0000-\uD7FF\uE000-\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF])*$/.test(windowText);
+      assert.ok(completeUnits, "window edge must not split a surrogate pair");
+      assert.match(output, /truncated/);
+    } finally {
+      dbManager.close();
+    }
+  });
+
   it("bounds the zero-result response without echoing an oversized query", async () => {
     let captured: any;
     const mockPi = {
