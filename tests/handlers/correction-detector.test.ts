@@ -13,6 +13,7 @@ import { getMemories } from "../../src/store/sqlite-memory-store.js";
 import { MemoryStore } from "../../src/store/memory-store.js";
 import { registerMemoryTool } from "../../src/tools/memory-tool.js";
 import { isCorrection, setupCorrectionDetector } from "../../src/handlers/correction-detector.js";
+import { createLazyEventQualifier } from "../../src/lazy-event-qualifier.js";
 import { resolveWatchedChildPiInvocation } from "../../src/handlers/pi-child-process.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { MemoryConfig } from "../../src/types.js";
@@ -153,6 +154,13 @@ describe("isCorrection", () => {
 
     it("does NOT match 'please continue'", () => {
       assert.strictEqual(isCorrection("please continue"), false);
+    });
+
+    it("does NOT qualify a correction marker after the 500-character window", () => {
+      const qualify = createLazyEventQualifier({ correctionDetection: true } as MemoryConfig);
+      assert.equal(qualify("message_end", {
+        message: { role: "user", content: [{ type: "text", text: "x".repeat(500) + " don't do that" }] },
+      }), false);
     });
   });
 
@@ -397,6 +405,14 @@ describe("setupCorrectionDetector handler", () => {
       cmdArgs.slice(0, 6),
       ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off"],
     );
+  });
+
+  it("uses the same 500-character window as runtime message handling", async () => {
+    const pi = createMockPi();
+    setupCorrectionDetector(pi, mockStore, null, config);
+    fireMessageEnd("user", "x".repeat(500) + " don't do that");
+    await fireTurnEnd();
+    assert.equal(execCalls.length, 0);
   });
 
   it("does NOT trigger on normal messages", async () => {
