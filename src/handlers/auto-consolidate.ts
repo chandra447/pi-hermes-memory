@@ -279,6 +279,7 @@ export async function triggerConsolidation(
       }
     }
 
+    const promptContentLength = promptEntries.join(ENTRY_DELIMITER).length;
     const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, promptEntries), llmConfig, {
       signal,
       timeoutMs,
@@ -286,7 +287,7 @@ export async function triggerConsolidation(
       retryWithFallbackModels: true,
       hasPersistedProgress: async () => {
         await store.loadFromDisk();
-        return entriesForTarget(store, target).join(ENTRY_DELIMITER).length < currentContent.length;
+        return entriesForTarget(store, target).join(ENTRY_DELIMITER).length < promptContentLength;
       },
     }) as { code: number; stdout?: string; stderr?: string; killed?: boolean };
 

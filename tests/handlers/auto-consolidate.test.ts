@@ -297,6 +297,68 @@ describe("triggerConsolidation", () => {
     });
   });
 
+  it("does not retry after shrinking the larger snapshot loaded following contention", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-consolidation-growth-"));
+    const config = { memoryDir: root, memoryCharLimit: 5000, userCharLimit: 5000 };
+    const writer = new MemoryStore(config);
+    const waitingStore = new MemoryStore(config);
+    const prototype = AtomicLockCoordinator.prototype;
+    const originalTryAcquire = prototype.tryAcquire;
+    let markContended!: () => void;
+    const contended = new Promise<void>((resolve) => { markContended = resolve; });
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    prototype.tryAcquire = function (...args) {
+      const lease = originalTryAcquire.apply(this, args);
+      if (!lease) markContended();
+      return lease;
+    };
+    try {
+      await writer.loadFromDisk();
+      await writer.add("memory", "a".repeat(100));
+      await waitingStore.loadFromDisk();
+      const initialLength = waitingStore.getMemoryEntries().join(ENTRY_DELIMITER).length;
+      let grownLength = 0;
+      let calls = 0;
+      const pi = {
+        exec: async (...args: any[]) => {
+          calls++;
+          if (calls === 1) {
+            markStarted();
+            await contended;
+            await writer.add("memory", "b".repeat(200));
+            grownLength = writer.getMemoryEntries().join(ENTRY_DELIMITER).length;
+            return { code: 0, stdout: "", stderr: "" };
+          }
+          if (calls === 2) {
+            assert.ok(childPrompt(captureExecArgs(args)).includes("b".repeat(200)));
+            const childStore = new MemoryStore(config);
+            await childStore.loadFromDisk();
+            await childStore.replace("memory", "b".repeat(200), "c".repeat(100));
+          }
+          return { code: 1, stdout: "", stderr: "provider overloaded" };
+        },
+      } as any;
+      await withLockWait("2000", async () => {
+        const first = triggerConsolidation(pi, writer, "memory");
+        await started;
+        const second = triggerConsolidation(pi, waitingStore, "memory", undefined, 60_000, "memory", {
+          llmModelOverride: "test/primary", llmFallbackModels: ["test/fallback"],
+        });
+        const results = await Promise.all([first, second]);
+        assert.ok(results.every((result) => result.consolidated));
+      });
+      assert.equal(calls, 2);
+      await waitingStore.loadFromDisk();
+      const finalLength = waitingStore.getMemoryEntries().join(ENTRY_DELIMITER).length;
+      assert.ok(finalLength > initialLength);
+      assert.ok(finalLength < grownLength);
+    } finally {
+      prototype.tryAcquire = originalTryAcquire;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("allows the same project target to consolidate concurrently in distinct stores", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-consolidation-stores-"));
     const stores = ["project-a", "project-b"].map((name) => new MemoryStore({
