@@ -1,1 +1,1 @@
-LOAD_FROM:/workspace/payload_files/tests__handlers__auto-consolidate.test.ts
+@/workspace/READY_TEST
