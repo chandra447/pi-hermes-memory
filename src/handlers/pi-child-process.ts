@@ -7,7 +7,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { MemoryConfig, ThinkingLevel } from "../types.js";
 import { AGENT_ROOT } from "../paths.js";
 
-type ChildLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride" | "childExtensionPaths">;
+type ChildLlmConfig = Pick<
+  MemoryConfig,
+  "llmModelOverride" | "llmFallbackModels" | "llmThinkingOverride" | "childExtensionPaths"
+>;
 
 interface PiExecResult {
   code: number;
@@ -35,6 +38,9 @@ interface ExecChildPromptOptions {
   model?: ChildPiModel;
   timeoutMs: number;
   retryWithoutOverrides?: boolean;
+  /** Try configured fallback models after retryable provider/transport failures. */
+  retryWithFallbackModels?: boolean;
+  hasPersistedProgress?: () => Promise<boolean>;
 }
 
 interface ExecChildPromptDependencies {
@@ -65,6 +71,26 @@ interface ResolveChildPiInvocationOptions {
 
 const OVERRIDE_FAILURE_SUBJECT = /\b(model|provider|thinking)\b/i;
 const OVERRIDE_FAILURE_REASON = /\b(not found|unknown|invalid|unsupported|unavailable|unrecognized|no match|no matches|cannot resolve|failed to resolve)\b/i;
+const RETRYABLE_PROVIDER_FAILURE = new RegExp([
+  String.raw`\boverloaded\b`,
+  String.raw`\bover[ -]?capacity\b`,
+  String.raw`\brate[ -]?limit(?:ed| exceeded)?\b`,
+  String.raw`\btoo many requests\b`,
+  String.raw`\btemporar(?:y|ily) unavailable\b`,
+  String.raw`\bservice unavailable\b`,
+  String.raw`\bbad gateway\b`,
+  String.raw`\bgateway timeout\b`,
+  String.raw`\b(?:HTTP\s*)?(?:401|403|408|429|500|502|503|504)\b`,
+  String.raw`\b(?:unauthorized|forbidden)\b`,
+  String.raw`\binvalid[\s_-]*api[\s_-]*key\b`,
+  String.raw`\bauthentication[\s_-]*(?:failed|error)\b`,
+  String.raw`\b(?:invalid|empty|malformed) response\b`,
+  String.raw`\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN)\b`,
+  String.raw`\bsocket hang up\b`,
+  String.raw`\bconnection (?:reset|refused|closed)\b`,
+  String.raw`\bnetwork (?:error|failure)\b`,
+  String.raw`\btimed out\b`,
+].join("|"), "i");
 
 // Resolve the path to pi-hermes-memory's own extension entry point.
 // Used to pass -e <path> to child subprocesses so they only load this
@@ -406,6 +432,27 @@ function shouldRetryWithoutOverridesForError(error: unknown): boolean {
   return shouldRetryWithoutOverridesFromText(String(error));
 }
 
+function shouldRetryWithFallbackFromText(text: string | undefined): boolean {
+  return !!text && RETRYABLE_PROVIDER_FAILURE.test(text);
+}
+
+function shouldRetryWithFallback(result: PiExecResult): boolean {
+  return shouldRetryWithFallbackFromText(result.stderr);
+}
+
+function fallbackModelConfigs(config: ChildLlmConfig): ChildLlmConfig[] {
+  const primary = normalizedModelOverride(config);
+  const seen = new Set(primary ? [primary] : []);
+  const configs: ChildLlmConfig[] = [];
+  for (const raw of config.llmFallbackModels ?? []) {
+    const model = raw.trim();
+    if (!model || seen.has(model)) continue;
+    seen.add(model);
+    configs.push({ ...config, llmModelOverride: model, llmFallbackModels: [] });
+  }
+  return configs;
+}
+
 async function writePromptToTemporaryFile(prompt: string): Promise<{ dir: string; filePath: string }> {
   const dir = await fs.mkdtemp(join(os.tmpdir(), "pi-hermes-prompt-"));
   const filePath = join(dir, "prompt.md");
@@ -443,31 +490,65 @@ export async function execChildPrompt(
   }
 
   try {
-    try {
-      const invocation = resolveWatchedChildPiInvocation(
-        resolveChildPiInvocation(buildChildPiPromptArgs(promptReference, config, process.argv.slice(2), options.model)),
-        options.timeoutMs,
-        cancellationPath,
-      );
-      const result = await pi.exec(invocation.command, invocation.args, execOptions) as PiExecResult;
-      if (
-        result.code === 0 ||
-        !options.retryWithoutOverrides ||
-        !hasChildLlmOverrides(config) ||
-        !shouldRetryWithoutOverrides(result)
-      ) {
-        return result;
+    const attemptConfigs = [
+      config,
+      ...(options.retryWithFallbackModels ? fallbackModelConfigs(config) : []),
+    ];
+    let retryWithoutOverrides = false;
+
+    for (let index = 0; index < attemptConfigs.length; index++) {
+      if (index > 0) {
+        options.signal?.throwIfAborted();
+        if (await options.hasPersistedProgress?.()) {
+          return { code: 0, stdout: "", stderr: "" };
+        }
       }
-    } catch (error) {
-      if (
-        !options.retryWithoutOverrides ||
-        !hasChildLlmOverrides(config) ||
-        !shouldRetryWithoutOverridesForError(error)
-      ) {
-        throw error;
+      const attemptConfig = attemptConfigs[index]!;
+      const hasFallback = index < attemptConfigs.length - 1;
+      try {
+        const invocation = resolveWatchedChildPiInvocation(
+          resolveChildPiInvocation(buildChildPiPromptArgs(promptReference, attemptConfig, process.argv.slice(2), options.model)),
+          options.timeoutMs,
+          cancellationPath,
+        );
+        const result = await pi.exec(invocation.command, invocation.args, execOptions) as PiExecResult;
+        if (result.code === 0) return result;
+
+        const overrideResolutionFailure = shouldRetryWithoutOverrides(result);
+        if (hasFallback && (overrideResolutionFailure || shouldRetryWithFallback(result))) {
+          continue;
+        }
+        retryWithoutOverrides = !!options.retryWithoutOverrides
+          && hasChildLlmOverrides(config)
+          && overrideResolutionFailure;
+        if (!retryWithoutOverrides) {
+          if (await options.hasPersistedProgress?.()) {
+            return { code: 0, stdout: "", stderr: "" };
+          }
+          return result;
+        }
+      } catch (error) {
+        const overrideResolutionFailure = shouldRetryWithoutOverridesForError(error);
+        if (hasFallback && (overrideResolutionFailure || shouldRetryWithFallbackFromText(String(error)))) {
+          continue;
+        }
+        retryWithoutOverrides = !!options.retryWithoutOverrides
+          && hasChildLlmOverrides(config)
+          && overrideResolutionFailure;
+        if (!retryWithoutOverrides) {
+          if (await options.hasPersistedProgress?.()) {
+            return { code: 0, stdout: "", stderr: "" };
+          }
+          throw error;
+        }
       }
+      break;
     }
 
+    options.signal?.throwIfAborted();
+    if (await options.hasPersistedProgress?.()) {
+      return { code: 0, stdout: "", stderr: "" };
+    }
     const retryInvocation = resolveWatchedChildPiInvocation(
       resolveChildPiInvocation(basePromptArgs(promptReference, config, options.model)),
       options.timeoutMs,
