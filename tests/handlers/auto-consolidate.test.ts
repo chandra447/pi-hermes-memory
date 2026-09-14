@@ -20,6 +20,14 @@ import { DEFAULT_CONSOLIDATION_TIMEOUT_MS, ENTRY_DELIMITER } from "../../src/con
 let execCalls: any[];
 let directCalls: unknown[][];
 
+// Opt-in product evidence: command notifications, transport attempts, and disk state.
+async function recordEvidence(name: string, data: unknown): Promise<void> {
+  const directory = process.env.PI_HERMES_TEST_EVIDENCE_DIR;
+  if (!directory) return;
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, `${name}.json`), JSON.stringify(data, null, 2) + "\n");
+}
+
 const directTransportLlmConfig = { reviewTransport: "direct" as const };
 
 function createDirectCtx(): { model: unknown; modelRegistry: unknown; _tag: string } {
@@ -353,6 +361,10 @@ describe("triggerConsolidation", () => {
       const finalLength = waitingStore.getMemoryEntries().join(ENTRY_DELIMITER).length;
       assert.ok(finalLength > initialLength);
       assert.ok(finalLength < grownLength);
+      await recordEvidence("contention-growth-no-double-spend", {
+        initialLength, grownLength, finalLength, childAttempts: calls,
+        persisted: waitingStore.getMemoryEntries(),
+      });
     } finally {
       prototype.tryAcquire = originalTryAcquire;
       await fs.rm(root, { recursive: true, force: true });
@@ -555,6 +567,43 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
     assert.ok(logicalChildArgs(execCalls[1]).includes("anthropic/claude-sonnet-4-5"));
   });
 
+  for (const failure of ["HTTP 429 too many requests", "HTTP 503 service unavailable", "ECONNRESET", "request timed out"]) {
+    it(`recovers project consolidation after ${failure}`, async () => {
+      const pi = {
+        exec: async (...args: any[]) => {
+          execCalls.push(captureExecArgs(args));
+          if (execCalls.length === 1) throw new Error(failure);
+          return { code: 0, stdout: "Consolidated", stderr: "" };
+        },
+      } as any;
+      const result = await triggerConsolidation(pi, mockStore, "memory", undefined, 60000, "project", {
+        llmModelOverride: "test/primary", llmFallbackModels: ["test/primary", " ", "test/fallback", "test/fallback"],
+      });
+      assert.equal(result.consolidated, true);
+      assert.equal(execCalls.length, 2);
+      assert.ok(logicalChildArgs(execCalls[1]).includes("test/fallback"));
+      assert.equal(childPrompt(execCalls[0]), childPrompt(execCalls[1]));
+      assert.match(childPrompt(execCalls[1]), /project/);
+    });
+  }
+
+  it("does not launch a fallback after cancellation during an overloaded primary", async () => {
+    const controller = new AbortController();
+    const pi = {
+      exec: async (...args: any[]) => {
+        execCalls.push(captureExecArgs(args));
+        controller.abort();
+        return { code: 1, stdout: "", stderr: "provider overloaded" };
+      },
+    } as any;
+    const result = await triggerConsolidation(pi, mockStore, "memory", controller.signal, 60000, "memory", {
+      llmModelOverride: "test/primary", llmFallbackModels: ["test/fallback"],
+    });
+    assert.equal(result.consolidated, false);
+    assert.equal(execCalls.length, 1);
+    await recordEvidence("cancelled-fallback", { result, attempts: execCalls.length });
+  });
+
   it("reports the final provider error when every configured consolidation model is overloaded", async () => {
     const pi = {
       on: () => {},
@@ -583,6 +632,7 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
     assert.strictEqual(result.consolidated, false);
     assert.strictEqual(execCalls.length, 2);
     assert.match(result.error!, /fallback provider overloaded/);
+    await recordEvidence("all-models-failed", { result, attempts: execCalls.map(logicalChildArgs) });
   });
 
   it("does not try configured fallbacks for a non-retryable consolidation failure", async () => {
@@ -612,6 +662,7 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
     assert.strictEqual(result.consolidated, false);
     assert.match(result.error!, /memory tool returned no changes/);
     assert.strictEqual(execCalls.length, 1, "should not retry non-retryable consolidation failures");
+    await recordEvidence("non-retryable-failure", { result, attempts: execCalls.map(logicalChildArgs) });
   });
 
   it("handles empty entries gracefully", async () => {
@@ -1042,11 +1093,23 @@ describe("MemoryStore auto-consolidation integration", () => {
     ));
 
     await store.add("memory", "a".repeat(60));
+    const before = [...store.getMemoryEntries()];
     const result = await store.add("memory", "b".repeat(20));
 
     assert.strictEqual(result.success, true);
     assert.strictEqual(calls.length, 2);
     assert.ok(logicalChildArgs(calls[1]).includes("anthropic/claude-sonnet-4-5"));
+    const persisted = new MemoryStore({
+      memoryDir: path.join(MEMORY_DIR, "provider-fallback"), memoryCharLimit: 120, userCharLimit: 120,
+    });
+    await persisted.loadFromDisk();
+    assert.equal(persisted.getMemoryEntries().length, 1);
+    assert.ok(persisted.getMemoryEntries()[0].includes("b".repeat(20)));
+    await recordEvidence("automatic-over-capacity", {
+      surface: "MemoryStore.add after capacity overflow", transport: "isolated fake pi.exec",
+      primaryError: "Codex error: Our servers are currently overloaded. Please try again later.",
+      before, result, attempts: calls.map(logicalChildArgs), persisted: persisted.getMemoryEntries(),
+    });
   });
 
   for (const failure of ["overload", "timeout", "throw"] as const) {
@@ -1084,6 +1147,7 @@ describe("MemoryStore auto-consolidation integration", () => {
       await store.loadFromDisk();
       assert.equal(store.getMemoryEntries().length, 1);
       assert.ok(store.getMemoryEntries()[0].includes("b".repeat(20)));
+      await recordEvidence(`no-double-spend-${failure}`, { failureAfterPersistedShrink: failure, attempts: calls, result, persisted: store.getMemoryEntries() });
     });
   }
 
@@ -1139,6 +1203,11 @@ describe("MemoryStore auto-consolidation integration", () => {
     assert.ok(persisted.getMemoryEntries().join(ENTRY_DELIMITER).length < before);
     assert.ok(persisted.getMemoryEntries()[0].includes("Durable preference"));
     assert.ok(notifications.at(-1)?.includes("memory: ✅ consolidated"));
+    await recordEvidence("manual-direct-fallback", {
+      surface: "/memory-consolidate", transport: "real direct completion helper with isolated fake completion/auth",
+      primaryError: "provider overloaded", models: calls, authCalls, subprocessCalls,
+      beforeCharacters: before, persisted: persisted.getMemoryEntries(), notifications,
+    });
   });
 
   it("add() skips consolidation when autoConsolidate is false", async () => {
