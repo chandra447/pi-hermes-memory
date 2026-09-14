@@ -460,7 +460,69 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
     assert.strictEqual(typeof retryArgs[retryArgs.length - 1], "string", "fallback retry should keep prompt as final arg");
   });
 
-  it("does not retry generic consolidation failures that are unrelated to override resolution", async () => {
+  it("uses a configured fallback model when the primary subprocess provider is overloaded", async () => {
+    const pi = {
+      on: () => {},
+      exec: async (...args: any[]) => {
+        execCalls.push(captureExecArgs(args));
+        return execCalls.length === 1
+          ? { code: 1, stdout: "", stderr: "Codex error: Our servers are currently overloaded. Please try again later." }
+          : { code: 0, stdout: "Consolidated", stderr: "" };
+      },
+      registerTool: () => {},
+      registerCommand: () => {},
+    } as any;
+
+    const result = await triggerConsolidation(
+      pi,
+      mockStore,
+      "memory",
+      undefined,
+      60000,
+      "memory",
+      {
+        llmModelOverride: "openai-codex/gpt-5.3-codex",
+        llmFallbackModels: ["anthropic/claude-sonnet-4-5"],
+      },
+    );
+
+    assert.strictEqual(result.consolidated, true);
+    assert.strictEqual(execCalls.length, 2);
+    assert.ok(logicalChildArgs(execCalls[0]).includes("openai-codex/gpt-5.3-codex"));
+    assert.ok(logicalChildArgs(execCalls[1]).includes("anthropic/claude-sonnet-4-5"));
+  });
+
+  it("reports the final provider error when every configured consolidation model is overloaded", async () => {
+    const pi = {
+      on: () => {},
+      exec: async (...args: any[]) => {
+        execCalls.push(captureExecArgs(args));
+        const model = execCalls.length === 1 ? "primary" : "fallback";
+        return { code: 1, stdout: "", stderr: `${model} provider overloaded` };
+      },
+      registerTool: () => {},
+      registerCommand: () => {},
+    } as any;
+
+    const result = await triggerConsolidation(
+      pi,
+      mockStore,
+      "memory",
+      undefined,
+      60000,
+      "memory",
+      {
+        llmModelOverride: "openai-codex/gpt-5.3-codex",
+        llmFallbackModels: ["anthropic/claude-sonnet-4-5"],
+      },
+    );
+
+    assert.strictEqual(result.consolidated, false);
+    assert.strictEqual(execCalls.length, 2);
+    assert.match(result.error!, /fallback provider overloaded/);
+  });
+
+  it("does not try configured fallbacks for a non-retryable consolidation failure", async () => {
     const pi = {
       on: () => {},
       exec: async (...args: any[]) => {
@@ -478,11 +540,15 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
       undefined,
       60000,
       "memory",
-      { llmModelOverride: "openrouter/deepseek/deepseek-v4-flash" },
+      {
+        llmModelOverride: "openrouter/deepseek/deepseek-v4-flash",
+        llmFallbackModels: ["anthropic/claude-sonnet-4-5"],
+      },
     );
 
     assert.strictEqual(result.consolidated, false);
-    assert.strictEqual(execCalls.length, 1, "should not retry generic consolidation failures");
+    assert.match(result.error!, /memory tool returned no changes/);
+    assert.strictEqual(execCalls.length, 1, "should not retry non-retryable consolidation failures");
   });
 
   it("handles empty entries gracefully", async () => {
@@ -779,7 +845,11 @@ describe("registerConsolidateCommand", () => {
       60000,
       null,
       null,
-      directTransportLlmConfig,
+      {
+        ...directTransportLlmConfig,
+        llmModelOverride: "openai-codex/gpt-5.3-codex",
+        llmFallbackModels: ["anthropic/claude-sonnet-4-5"],
+      },
       null,
       makeDirectDeps({ ok: true, appliedCount: 2 }),
     );
@@ -791,6 +861,12 @@ describe("registerConsolidateCommand", () => {
     assert.strictEqual(execCalls.length, 0, "successful direct consolidation should not spawn subprocess");
     for (const call of directCalls) {
       assert.strictEqual(call[0], commandCtx, "runDirectMemoryCompletion must receive the command ctx");
+      const options = call[3] as { config: { llmFallbackModels?: string[] } };
+      assert.deepStrictEqual(
+        options.config.llmFallbackModels,
+        ["anthropic/claude-sonnet-4-5"],
+        "manual direct consolidation must receive the configured fallback chain",
+      );
     }
 
     const finalNotification = notifications[notifications.length - 1] ?? "";
@@ -856,6 +932,58 @@ describe("MemoryStore auto-consolidation integration", () => {
     assert.strictEqual(consolidatorTarget, "memory");
     // After consolidation removes entries, the new entry should fit
     assert.ok(result.success, "add should succeed after consolidation");
+  });
+
+  it("add() completes automatic over-capacity consolidation through a configured fallback model", async () => {
+    const store = new MemoryStore({
+      memoryCharLimit: 120,
+      userCharLimit: 120,
+      nudgeInterval: 10,
+      reviewEnabled: false,
+      flushOnCompact: false,
+      flushOnShutdown: false,
+      flushMinTurns: 6,
+      autoConsolidate: true,
+      overflowGraceMs: 0,
+      correctionDetection: false,
+      nudgeToolCalls: 15,
+      memoryDir: path.join(MEMORY_DIR, "provider-fallback"),
+    } as any);
+    await store.loadFromDisk();
+
+    const calls: any[][] = [];
+    const pi = {
+      exec: async (...args: any[]) => {
+        calls.push(captureExecArgs(args));
+        if (calls.length === 1) {
+          return { code: 1, stdout: "", stderr: "Codex error: Our servers are currently overloaded. Please try again later." };
+        }
+        for (const entry of [...store.getMemoryEntries()]) {
+          await store.remove("memory", entry);
+        }
+        return { code: 0, stdout: "Consolidated", stderr: "" };
+      },
+    } as any;
+
+    store.setConsolidator((target, signal) => triggerConsolidation(
+      pi,
+      store,
+      target,
+      signal,
+      60_000,
+      target,
+      {
+        llmModelOverride: "openai-codex/gpt-5.3-codex",
+        llmFallbackModels: ["anthropic/claude-sonnet-4-5"],
+      },
+    ));
+
+    await store.add("memory", "a".repeat(60));
+    const result = await store.add("memory", "b".repeat(20));
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(calls.length, 2);
+    assert.ok(logicalChildArgs(calls[1]).includes("anthropic/claude-sonnet-4-5"));
   });
 
   it("add() skips consolidation when autoConsolidate is false", async () => {

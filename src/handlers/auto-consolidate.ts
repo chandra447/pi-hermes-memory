@@ -35,12 +35,15 @@ import { AtomicLockCoordinator } from "../store/atomic-lock-coordinator.js";
 
 type MemoryTarget = "memory" | "user" | "failure";
 type ToolMemoryTarget = MemoryTarget | "project";
-type ConsolidationLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride" | "reviewTransport">;
+type ConsolidationLlmConfig = Pick<
+  MemoryConfig,
+  "llmModelOverride" | "llmFallbackModels" | "llmThinkingOverride" | "reviewTransport" | "childExtensionPaths"
+>;
 
 // staleMs is deliberately decoupled from the consolidation timeout. The holder
 // beats every CONSOLIDATION_LOCK_HEARTBEAT_MS while its child runs, so a
-// legitimately slow consolidation (up to 2x timeoutMs once retryWithoutOverrides
-// fires) never loses its lease, while a holder that stops making progress is
+// legitimately slow consolidation (including bounded fallback-model attempts)
+// never loses its lease, while a holder that stops making progress is
 // reclaimable after seconds instead of after its worst-case runtime (#144).
 const CONSOLIDATION_LOCK_STALE_MS = 45_000;
 const CONSOLIDATION_LOCK_HEARTBEAT_MS = 10_000;
@@ -280,6 +283,7 @@ export async function triggerConsolidation(
       signal,
       timeoutMs,
       retryWithoutOverrides: true,
+      retryWithFallbackModels: true,
     }) as { code: number; stdout?: string; stderr?: string; killed?: boolean };
 
     if (result.code === 0) {
