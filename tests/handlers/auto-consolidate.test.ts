@@ -11,6 +11,7 @@ import * as os from "node:os";
 import { registerConsolidateCommand, triggerConsolidation } from "../../src/handlers/auto-consolidate.js";
 import { resolveWatchedChildPiInvocation } from "../../src/handlers/pi-child-process.js";
 import { MemoryStore } from "../../src/store/memory-store.js";
+import { runDirectMemoryCompletion } from "../../src/handlers/review-memory-ops.js";
 import { AtomicLockCoordinator } from "../../src/store/atomic-lock-coordinator.js";
 import { DEFAULT_CONSOLIDATION_TIMEOUT_MS, ENTRY_DELIMITER } from "../../src/constants.js";
 
@@ -984,6 +985,98 @@ describe("MemoryStore auto-consolidation integration", () => {
     assert.strictEqual(result.success, true);
     assert.strictEqual(calls.length, 2);
     assert.ok(logicalChildArgs(calls[1]).includes("anthropic/claude-sonnet-4-5"));
+  });
+
+  for (const failure of ["overload", "timeout", "throw"] as const) {
+    it(`does not replay consolidation after persisted shrink followed by ${failure}`, async () => {
+      const config = {
+        memoryDir: path.join(MEMORY_DIR, `persisted-${failure}`),
+        memoryCharLimit: 120,
+        userCharLimit: 120,
+        autoConsolidate: true,
+        overflowGraceMs: 0,
+      };
+      const store = new MemoryStore(config);
+      await store.loadFromDisk();
+      await store.add("memory", "a".repeat(60));
+      let calls = 0;
+      const pi = {
+        exec: async () => {
+          calls++;
+          const childStore = new MemoryStore(config);
+          await childStore.loadFromDisk();
+          for (const entry of childStore.getMemoryEntries()) {
+            await childStore.remove("memory", entry);
+          }
+          if (failure === "throw") throw new Error("provider overloaded");
+          return { code: failure === "timeout" ? 124 : 1, stdout: "", stderr: failure === "timeout" ? "request timed out" : "provider overloaded" };
+        },
+      } as any;
+      store.setConsolidator((target, signal) => triggerConsolidation(
+        pi, store, target, signal, 60_000, target,
+        { llmModelOverride: "test/primary", llmFallbackModels: ["test/fallback"] },
+      ));
+      const result = await store.add("memory", "b".repeat(20));
+      assert.equal(result.success, true);
+      assert.equal(calls, 1);
+      await store.loadFromDisk();
+      assert.equal(store.getMemoryEntries().length, 1);
+      assert.ok(store.getMemoryEntries()[0].includes("b".repeat(20)));
+    });
+  }
+
+  it("manual consolidation applies atomic shrink through the real direct fallback chain", async () => {
+    const config = { memoryDir: path.join(MEMORY_DIR, "manual-fallback"), memoryCharLimit: 5000, userCharLimit: 5000 };
+    const store = new MemoryStore(config);
+    await store.loadFromDisk();
+    await store.add("memory", "A durable preference with a unnecessarily verbose description".repeat(3));
+    const before = store.getMemoryEntries().join(ENTRY_DELIMITER).length;
+    const models = ["primary", "fallback"].map((id) => ({ provider: "test", id, reasoning: false }));
+    const calls: string[] = [];
+    const authCalls: string[] = [];
+    const notifications: string[] = [];
+    let handler: any;
+    let subprocessCalls = 0;
+    const pi = {
+      registerCommand: (_name: string, command: any) => { handler = command.handler; },
+      exec: async () => { subprocessCalls++; throw new Error("unexpected subprocess"); },
+    } as any;
+    registerConsolidateCommand(pi, store, 60_000, null, null, {
+      reviewTransport: "direct",
+      llmModelOverride: "test/primary",
+      llmFallbackModels: ["test/fallback"],
+    }, null, {
+      runDirectMemoryCompletion: (...args) => runDirectMemoryCompletion(...args, {
+        completeSimple: (async (model: { id: string }) => {
+          calls.push(model.id);
+          if (model.id === "primary") throw new Error("provider overloaded");
+          assert.equal(store.getMemoryEntries().join(ENTRY_DELIMITER).length, before);
+          return { stopReason: "stop", content: [{ type: "text", text: JSON.stringify({ operations: [
+            { action: "replace", target: "memory", old_text: store.getMemoryEntries()[0], content: "Durable preference" },
+          ] }) }] };
+        }) as never,
+      }),
+    });
+    await handler({}, {
+      model: models[0],
+      modelRegistry: {
+        getAll: () => models,
+        getAvailable: () => models,
+        getApiKeyAndHeaders: async (model: { id: string }) => {
+          authCalls.push(model.id);
+          return { ok: true, apiKey: "isolated-test-key" };
+        },
+      },
+      ui: { notify: (message: string) => notifications.push(message) },
+    });
+    assert.deepEqual(calls, ["primary", "fallback"]);
+    assert.deepEqual(authCalls, ["primary", "fallback"]);
+    assert.equal(subprocessCalls, 0);
+    const persisted = new MemoryStore(config);
+    await persisted.loadFromDisk();
+    assert.ok(persisted.getMemoryEntries().join(ENTRY_DELIMITER).length < before);
+    assert.ok(persisted.getMemoryEntries()[0].includes("Durable preference"));
+    assert.ok(notifications.at(-1)?.includes("memory: ✅ consolidated"));
   });
 
   it("add() skips consolidation when autoConsolidate is false", async () => {

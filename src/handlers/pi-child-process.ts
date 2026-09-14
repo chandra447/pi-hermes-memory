@@ -40,6 +40,7 @@ interface ExecChildPromptOptions {
   retryWithoutOverrides?: boolean;
   /** Try configured fallback models after retryable provider/transport failures. */
   retryWithFallbackModels?: boolean;
+  hasPersistedProgress?: () => Promise<boolean>;
 }
 
 interface ExecChildPromptDependencies {
@@ -496,6 +497,12 @@ export async function execChildPrompt(
     let retryWithoutOverrides = false;
 
     for (let index = 0; index < attemptConfigs.length; index++) {
+      if (index > 0) {
+        options.signal?.throwIfAborted();
+        if (await options.hasPersistedProgress?.()) {
+          return { code: 0, stdout: "", stderr: "" };
+        }
+      }
       const attemptConfig = attemptConfigs[index]!;
       const hasFallback = index < attemptConfigs.length - 1;
       try {
@@ -528,6 +535,10 @@ export async function execChildPrompt(
       break;
     }
 
+    options.signal?.throwIfAborted();
+    if (await options.hasPersistedProgress?.()) {
+      return { code: 0, stdout: "", stderr: "" };
+    }
     const retryInvocation = resolveWatchedChildPiInvocation(
       resolveChildPiInvocation(basePromptArgs(promptReference, config, options.model)),
       options.timeoutMs,

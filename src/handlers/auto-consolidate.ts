@@ -284,6 +284,10 @@ export async function triggerConsolidation(
       timeoutMs,
       retryWithoutOverrides: true,
       retryWithFallbackModels: true,
+      hasPersistedProgress: async () => {
+        await store.loadFromDisk();
+        return entriesForTarget(store, target).join(ENTRY_DELIMITER).length < currentContent.length;
+      },
     }) as { code: number; stdout?: string; stderr?: string; killed?: boolean };
 
     if (result.code === 0) {
