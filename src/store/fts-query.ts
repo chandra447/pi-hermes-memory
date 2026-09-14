@@ -30,7 +30,15 @@ export function hasExplicitFts5Operator(query: string): boolean {
   return FTS5_OPERATOR_PATTERN.test(query.trim());
 }
 
-function collectNaturalLanguageTerms(query: string): string[] {
+/**
+ * Collect the effective search terms of a natural-language query: quoted
+ * phrases are preserved, natural-language connectors and the #184 stop-word
+ * list are dropped. This is the term set normalizeFts5Query builds its FTS5
+ * query from, and the same set snippet windowing anchors on — anchoring on the
+ * raw token stream instead would let a stop word near the head of a long
+ * message pin the window at the start, defeating the window entirely.
+ */
+export function collectNaturalLanguageTerms(query: string): string[] {
   const terms: string[] = [];
 
   for (const match of query.matchAll(FTS5_TOKEN_PATTERN)) {

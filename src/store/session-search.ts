@@ -49,7 +49,6 @@ function mapRows(rows: Array<{
   role: string;
   content: string;
   timestamp: string;
-  snippet: string;
 }>): SessionSearchResult[] {
   return rows.map(row => ({
     sessionId: row.session_id,
@@ -57,7 +56,7 @@ function mapRows(rows: Array<{
     role: row.role,
     content: row.content,
     timestamp: row.timestamp,
-    snippet: row.snippet,
+    snippet: row.content,
   }));
 }
 
@@ -122,14 +121,17 @@ export function searchSessions(
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    // m.content is selected once and mapped to both `content` and `snippet`:
+    // the two are identical by contract (the tool owns truncation), and a
+    // second column would materialize the full body a second time — on
+    // multi-MB legacy rows that is real memory, times the result count.
     const sql = `
       SELECT
         m.session_id,
         s.project,
         m.role,
         m.content,
-        m.timestamp,
-        m.content as snippet
+        m.timestamp
       FROM messages m
       JOIN sessions s ON s.id = m.session_id
       ${whereClause}
@@ -144,7 +146,6 @@ export function searchSessions(
         role: string;
         content: string;
         timestamp: string;
-        snippet: string;
       }>;
 
       return mapRows(rows);
