@@ -62,7 +62,7 @@ const SKILL_TOOL_PARAMETERS = Type.Object({
   })),
   skill_id: Type.Optional(SKILL_ID_PARAM),
   description: Type.Optional(Type.String({
-    description: "One-line description of when to use this skill. Required for create; optional for update/edit.",
+    description: "Discovery-only summary of what the skill does and when to use it. Include the trigger signals a user would actually type (error strings, symptoms, phrasings) — Pi indexes skills by this field alone. Required for create; optional for update/edit; max 1024 chars.",
   })),
   scope: Type.Optional(StringEnum(["global", "project"] as const, {
     description: "Required for create. Use 'global' for portable procedures and 'project' for repo-specific workflows.",
@@ -74,7 +74,7 @@ const SKILL_TOOL_PARAMETERS = Type.Object({
     description: "Raw markdown body for create/update/edit, or Markdown section body for patch. Prefer structured fields over free-form content when possible. For patch, JSON arrays are auto-coerced for list sections; JSON objects are rejected.",
   })),
   when_to_use: Type.Optional(Type.String({
-    description: "Structured create/update/edit field, or structured patch body when section is 'When to Use'.",
+    description: "Structured create/update/edit field, or structured patch body when section is 'When to Use'. Renders into the skill body only — it does not participate in Pi's skill index, so discoverable trigger signals belong in 'description'.",
   })),
   procedure_steps: Type.Optional(Type.Array(Type.String(), {
     description: "Structured create/update/edit field, or structured patch body when section is 'Procedure'. Ordered concrete steps.",
@@ -99,7 +99,7 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore): void {
       "Use the skill_manage tool after completing complex tasks that required trial and error or multiple tool calls.",
       "Use 'create' to save a new reusable procedure, 'patch' to update a section of an existing skill by skill_id, and 'update' for a full rewrite.",
       "Scope is required on create: choose scope='global' for transferable procedures and scope='project' when the workflow depends on this repo's paths, scripts, conventions, or deploy steps.",
-      "Prefer structured fields for create/update/patch: when_to_use, procedure_steps, pitfalls, and verification_steps. The tool renders valid SKILL.md sections for you.",
+      "Prefer structured fields for create/update/patch: when_to_use, procedure_steps, pitfalls, and verification_steps. The tool renders valid SKILL.md sections for you. Put the trigger signals a user would type in 'description' — Pi indexes skills by that field alone.",
       "For patch, pass section plus the matching structured field (e.g. section='Procedure' with procedure_steps). Avoid free-form content that is a JSON array/object string.",
       "Prefer 'update' for multi-section rewrites when patch content would be large or format-unstable.",
       "Use 'view' before patching or updating when you need to inspect an existing skill.",

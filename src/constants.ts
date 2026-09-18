@@ -125,7 +125,7 @@ If memory conflicts with current evidence, prefer current evidence and mention t
 Procedural skills:
 - Use the skill_manage tool during normal work when a task reveals a reusable how-to workflow, or when the user asks you to remember how to do something later.
 - Always pass scope explicitly on create: scope="global" for portable procedures, scope="project" for workflows tied to this repo's paths, scripts, architecture, deploy steps, or conventions.
-- Prefer structured fields for create/update/patch: when_to_use, procedure_steps, pitfalls, verification_steps. Use patch with the matching structured field for one section, update for a full rewrite, and view before changing an existing skill.
+- Prefer structured fields for create/update/patch: when_to_use, procedure_steps, pitfalls, verification_steps. Use patch with the matching structured field for one section, update for a full rewrite, and view before changing an existing skill. Write the trigger signals a user would actually type into \`description\`: it is the only field Pi indexes for skill discovery, and \`when_to_use\` renders into the body only.
 - Do not create skills for one-off task state, generic summaries, or overly file-specific notes that will create noisy future matches.
 
 Do not use memory_search for generic questions, one-off examples, or explanations where durable memory would not help.
@@ -404,10 +404,10 @@ WHEN TO UPDATE A SKILL:
 
 SKILL FORMAT:
 - name: short, descriptive (e.g., "debug-typescript-errors")
-- description: one-line summary of when to use it
+- description: what the skill does and the trigger signals a user would type (error strings, symptoms, phrasings). Pi indexes skills by this field alone, so body-only triggers never surface at discovery time.
 - body: structured with sections — ## When to Use, ## Procedure, ## Pitfalls, ## Verification
 - Prefer structured fields over raw markdown when possible:
-  - when_to_use: trigger conditions and boundaries
+  - when_to_use: expanded trigger conditions and boundaries. Renders into the skill body and does not participate in Pi's skill index — discoverable trigger signals belong in description.
   - procedure_steps: ordered concrete steps
   - pitfalls: caveats or failure modes
   - verification_steps: checks that prove success
@@ -417,9 +417,9 @@ ONE-SHOT EXAMPLE:
 {
   "action": "create",
   "name": "debug-typescript-errors",
-  "description": "Debug TypeScript build failures in this repo",
+  "description": "Debug TypeScript build failures in this repo: tsc --noEmit errors, type-check failures in the workspace or CI.",
   "scope": "project",
-  "when_to_use": "Use when TypeScript fails in this repo's workspace or CI.",
+  "when_to_use": "Use when pnpm tsc --noEmit fails locally or in CI, or when asked to fix TypeScript build errors here. Not for runtime-only type issues.",
   "procedure_steps": [
     "Run pnpm tsc --noEmit to get the full error list.",
     "Fix dependency or config errors before leaf-module errors.",

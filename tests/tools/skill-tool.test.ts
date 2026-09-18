@@ -476,3 +476,54 @@ describe("registerSkillTool", () => {
     await cleanup();
   });
 });
+
+describe("skill discovery wording (issue #244)", () => {
+  async function captureTool(): Promise<any> {
+    let captured: any;
+    const mockPi = {
+      registerTool: (def: any) => { captured = def; },
+    } as any;
+
+    const store = await makeStore();
+    registerSkillTool(mockPi, store);
+    return captured;
+  }
+
+  it("description param carries the discovery requirement, when_to_use notes the index boundary", async () => {
+    const captured = await captureTool();
+    const props = captured.parameters.properties;
+
+    const descriptionHelp: string = props.description.description;
+    assert.match(descriptionHelp, /Pi indexes skills by this field alone/);
+    assert.match(descriptionHelp, /trigger signals/);
+    assert.match(descriptionHelp, /1024/);
+
+    const whenToUseHelp: string = props.when_to_use.description;
+    assert.match(whenToUseHelp, /does not participate in Pi's skill index/);
+
+    await cleanup();
+  });
+
+  it("tool description states the mechanism and demonstrates it in the example", async () => {
+    const captured = await captureTool();
+    const text: string = captured.description;
+
+    assert.match(text, /Pi indexes skills by this field alone/);
+    assert.match(text, /discoverable trigger signals belong in description/);
+    assert.match(text, /"description": "Debug TypeScript build failures in this repo: tsc --noEmit errors/);
+
+    await cleanup();
+  });
+
+  it("prompt guidelines point trigger signals at description", async () => {
+    const captured = await captureTool();
+    const guidelines: string[] = captured.promptGuidelines;
+
+    assert.ok(
+      guidelines.some((g) => /Put the trigger signals a user would type in 'description'/.test(g)),
+      "expected a guideline directing trigger signals to description",
+    );
+
+    await cleanup();
+  });
+});
