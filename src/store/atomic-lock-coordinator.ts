@@ -97,7 +97,15 @@ function probeProcessIncarnation(pid: number): string | null {
   return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
-const currentProcessIncarnation = probeProcessIncarnation(process.pid);
+// Deferred: probing our own incarnation spawns a helper process (powershell.exe
+// costs ~1.4s on Windows) and is only needed once a lock is actually taken.
+let currentProcessIncarnation: string | null | undefined;
+function selfIncarnation(): string | null {
+  if (currentProcessIncarnation === undefined) {
+    currentProcessIncarnation = probeProcessIncarnation(process.pid);
+  }
+  return currentProcessIncarnation;
+}
 const RELEASE_ATTEMPTS = 3;
 // Opportunistic dead-row GC: a row must be older than the grace period before
 // a dead pid makes it collectable (guards against a pid we cannot observe, and
@@ -118,7 +126,7 @@ export class AtomicLockCoordinator {
   constructor(private readonly dbPath: string, options: AtomicLockCoordinatorOptions = {}) {
     this.pid = options.pid ?? process.pid;
     this.probeIncarnation = options.probeIncarnation
-      ?? ((pid) => pid === process.pid ? currentProcessIncarnation : probeProcessIncarnation(pid));
+      ?? ((pid) => pid === process.pid ? selfIncarnation() : probeProcessIncarnation(pid));
     this.incarnation = options.incarnation
       ?? this.probeIncarnation(this.pid)
       ?? null;

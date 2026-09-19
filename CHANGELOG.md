@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`memory_search` ranks by relevance instead of recency** ([#118](https://github.com/chandra447/pi-hermes-memory/pull/118)): FTS5 matches were ordered by `last_referenced DESC` alone, so a long note that mentions a query term once outranked a short memory that is entirely about it, purely because it had been touched more recently. The match now joins `memory_fts` and orders by `bm25(memory_fts)` ascending with `last_referenced DESC` as the tie-break, so the densest match wins and recency only decides between equally relevant rows. Result *sets* are unchanged; only their order is.
 
+### Performance
+
+- **The process-incarnation probe no longer runs at extension load** ([#245](https://github.com/chandra447/pi-hermes-memory/issues/245)): `AtomicLockCoordinator` probed its own incarnation at module scope, so merely importing the module — which happens on every Pi launch, before any hermes code runs — paid a `spawnSync` for a lock most sessions never take. On Windows that is `powershell.exe`, measured at **515ms of the 2108ms** `pi-hermes-memory` module import (`PI_TIMING=1`, six extensions loaded). The probe is now memoized and deferred to the first coordinator construction; `AtomicLockCoordinator.shared()` already builds the coordinator on first lock use and the session-start path takes no lock, so the same profile drops to **1466ms** with no change in locking behavior. Separately, the 500ms `timeout` means the probe always returns `null` where PowerShell takes longer than that to start, which this change does not address.
+
 ## [0.9.4] - 2026-08-08
 
 ### Added
