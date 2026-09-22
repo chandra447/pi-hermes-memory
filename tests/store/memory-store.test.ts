@@ -228,6 +228,42 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.equal(projectStore.getRawEntriesForSync("memory").length, 1);
     });
 
+    it("reports count-only usage in policy-only mode", async () => {
+      const config = makeConfig({
+        memoryMode: "policy-only",
+        memoryCharLimit: 50,
+      });
+      const store = new MemoryStore(config);
+      const projectStore = new MemoryStore({
+        ...config,
+        memoryDir: path.join(MEMORY_DIR, "project"),
+      });
+      await store.loadFromDisk();
+      await projectStore.loadFromDisk();
+
+      const result = await store.add("memory", `${TEST_MARKER} policy-only over-cap ${"x".repeat(100)}`);
+      const projectResult = await projectStore.add("memory", `${TEST_MARKER} policy-only project over-cap ${"x".repeat(100)}`);
+      await settle();
+
+      assert.equal(result.success, true, result.error);
+      assert.match(result.usage ?? "", /^\d+ chars$/);
+      assert.ok(!(result.usage ?? "").includes("%"), "policy-only usage should not report a percentage");
+
+      assert.equal(projectResult.success, true, projectResult.error);
+      assert.match(projectResult.usage ?? "", /^\d+ chars$/);
+    });
+
+    it("keeps the percentage usage when the cap is enforced", async () => {
+      const store = new MemoryStore(makeConfig({ memoryCharLimit: 5000 }));
+      await store.loadFromDisk();
+
+      const result = await store.add("memory", `${TEST_MARKER} enforced`);
+      await settle();
+
+      assert.equal(result.success, true, result.error);
+      assert.match(result.usage ?? "", /^\d+% — \d+\/5000 chars$/);
+    });
+
 
     it("rejects without consolidation when memoryOverflowStrategy is reject", async () => {
       let consolidatorCalled = false;

@@ -715,7 +715,10 @@ export class MemoryStore {
     const resp: MemoryResult = {
       success: true,
       target,
-      usage: `${pct}% — ${current}/${limit} chars`,
+      // policy-only does not enforce the cap, so a percentage would name a
+      // ceiling that is intentionally not applied; report the count alone,
+      // matching memoryFullError's shape.
+      usage: this.capEnforced ? `${pct}% — ${current}/${limit} chars` : `${current} chars`,
       entry_count: entries.length,
     };
     if (message) resp.message = message;
