@@ -369,8 +369,9 @@ describe("setupSessionFlush", () => {
   // ── Exec args verification ──────────────────────────────────────────
 
   it("Flush uses pi.exec with correct args", async () => {
+    const clock = { t: 0 };
     const config = defaultConfig();
-    setupSessionFlush(mockPi.pi, mockStore, null, config);
+    setupSessionFlush(mockPi.pi, mockStore, null, config, null, null, { now: () => clock.t });
 
     await emitUserTurns(mockPi.handlers, 8);
 
@@ -970,6 +971,7 @@ describe("compact flush budget", () => {
   });
 
   it("subprocess transport takes one child at the full compact ceiling", async () => {
+    const clock = { t: 0 };
     const { ctx, notifications } = flushCtxWithNotify();
     setupSessionFlush(
       mockPi.pi,
@@ -978,7 +980,7 @@ describe("compact flush budget", () => {
       defaultConfig({ reviewTransport: "subprocess" }),
       null,
       null,
-      makeDirectDeps({ ok: true, appliedCount: 99 }),
+      { ...makeDirectDeps({ ok: true, appliedCount: 99 }), now: () => clock.t },
     );
 
     await primeFlushReady(mockPi.handlers);
@@ -1113,6 +1115,7 @@ describe("shutdown flush budget", () => {
   });
 
   it("uses 10s independent of flushCompactTimeoutMs and does not notify", async () => {
+    const clock = { t: 0 };
     const { ctx, notifications } = flushCtxWithNotify();
     setupSessionFlush(
       mockPi.pi,
@@ -1122,6 +1125,9 @@ describe("shutdown flush budget", () => {
         flushCompactTimeoutMs: 120_000,
         reviewTransport: "subprocess",
       }),
+      null,
+      null,
+      { now: () => clock.t },
     );
 
     await primeFlushReady(mockPi.handlers);
