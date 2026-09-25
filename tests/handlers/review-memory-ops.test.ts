@@ -105,6 +105,8 @@ describe("provider auth resolution", () => {
         ok: true as const,
         headers: headers[Math.min(authCalls++, headers.length - 1)],
       }),
+      hasConfiguredAuth: () => false,
+      isUsingOAuth: () => false,
       getAll: () => [mockModel(false)],
       getAvailable: () => [mockModel(false)],
       get authCalls() { return authCalls; },
@@ -188,6 +190,38 @@ describe("provider auth resolution", () => {
       assert.strictEqual(completionCalls, 0);
     });
   }
+
+  // Pi resolves ambient credentials (amazon-bedrock via AWS_PROFILE/SSO) to
+  // `{ ok: true }` with no apiKey, headers, or env; the provider SDK signs the
+  // request itself.
+  function ambientRegistry(isUsingOAuth: boolean) {
+    return {
+      getApiKeyAndHeaders: async () => ({ ok: true as const }),
+      hasConfiguredAuth: () => true,
+      isUsingOAuth: () => isUsingOAuth,
+      getAll: () => [mockModel(false)],
+      getAvailable: () => [mockModel(false)],
+    };
+  }
+
+  it("runs direct review for providers with ambient credentials", async () => {
+    const { usedKeys, complete } = completionStub(() => emptyOperations);
+
+    const result = await runReview(ambientRegistry(false), complete);
+
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(usedKeys, [undefined]);
+  });
+
+  it("rejects configured OAuth that resolves to no credentials", async () => {
+    const { usedKeys, complete } = completionStub(() => emptyOperations);
+
+    const result = await runReview(ambientRegistry(true), complete);
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.fallbackReason, "no_auth");
+    assert.deepStrictEqual(usedKeys, []);
+  });
 
   it("re-resolves credentials after a provider auth rejection", async () => {
     const { modelRegistry } = registryWithAuthResponses("revoked-key", "rotated-key");

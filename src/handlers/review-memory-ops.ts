@@ -197,11 +197,23 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function hasRequestAuth(auth: DirectReviewAuth): boolean {
+/**
+ * Some providers authenticate inside their SDK (amazon-bedrock with an AWS
+ * profile or SSO session), so Pi resolves request auth with no apiKey and no
+ * credential header. Trust Pi's own configured-auth check for those, as Pi does
+ * before a prompt. OAuth is excluded: empty OAuth auth means a failed refresh.
+ */
+function hasRequestAuth(
+  modelRegistry: ReviewModelRegistry,
+  model: Model<Api>,
+  auth: DirectReviewAuth,
+): boolean {
   if (isNonEmptyString(auth.apiKey)) return true;
-  return Object.entries(auth.headers ?? {}).some(
+  const hasCredentialHeader = Object.entries(auth.headers ?? {}).some(
     ([key, value]) => CREDENTIAL_HEADER_NAMES.has(key.toLowerCase()) && isNonEmptyString(value),
   );
+  if (hasCredentialHeader) return true;
+  return modelRegistry.hasConfiguredAuth(model) && !modelRegistry.isUsingOAuth(model);
 }
 
 function sameStringRecord(
@@ -697,7 +709,7 @@ export async function runDirectMemoryCompletion(
     if (options.signal?.aborted) return aborted();
     const auth = await resolveRequestAuth(ctx.modelRegistry, model);
     if (options.signal?.aborted) return aborted();
-    if (!auth.ok || !hasRequestAuth(auth)) {
+    if (!auth.ok || !hasRequestAuth(ctx.modelRegistry, model, auth)) {
       lastResult = {
         ok: false,
         appliedCount: 0,
@@ -753,7 +765,7 @@ export async function runDirectMemoryCompletion(
         // this is a real auth problem and the subprocess fallback should handle
         // it (#139).
         const rotated = await resolveRequestAuth(ctx.modelRegistry, model);
-        if (!rotated.ok || !hasRequestAuth(rotated) || sameRequestAuth(rotated, requestAuth)) throw err;
+        if (!rotated.ok || !hasRequestAuth(ctx.modelRegistry, model, rotated) || sameRequestAuth(rotated, requestAuth)) throw err;
 
         requestAuth = { apiKey: rotated.apiKey, headers: rotated.headers, env: rotated.env };
         response = await completeOnce();
