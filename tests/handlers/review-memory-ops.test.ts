@@ -191,9 +191,7 @@ describe("provider auth resolution", () => {
     });
   }
 
-  // Pi resolves ambient credentials (amazon-bedrock via AWS_PROFILE/SSO) to
-  // `{ ok: true }` with no apiKey, headers, or env; the provider SDK signs the
-  // request itself.
+  // real shape for amazon-bedrock with AWS_PROFILE: pi returns { ok: true } and nothing else
   function ambientRegistry(isUsingOAuth: boolean) {
     return {
       getApiKeyAndHeaders: async () => ({ ok: true as const }),

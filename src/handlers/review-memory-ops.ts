@@ -197,12 +197,8 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-/**
- * Some providers authenticate inside their SDK (amazon-bedrock with an AWS
- * profile or SSO session), so Pi resolves request auth with no apiKey and no
- * credential header. Trust Pi's own configured-auth check for those, as Pi does
- * before a prompt. OAuth is excluded: empty OAuth auth means a failed refresh.
- */
+// Bedrock (AWS profile/SSO) signs inside its SDK, so empty auth is normal there.
+// Not for OAuth: empty OAuth auth means the token refresh failed.
 function hasRequestAuth(
   modelRegistry: ReviewModelRegistry,
   model: Model<Api>,
