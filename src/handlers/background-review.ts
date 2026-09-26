@@ -16,6 +16,7 @@ import {
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import type { MemoryConfig } from "../types.js";
+import type { LazyEventState } from "../lazy-event-qualifier.js";
 import type { EnsureMemoryReady } from "../memory-initialization.js";
 import { applyRecentMessageLimit, collectMessageParts } from "./message-parts.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
@@ -25,6 +26,8 @@ import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type Proj
 export interface BackgroundReviewOptions {
   ensureMemoryReady?: EnsureMemoryReady;
   dbManager?: DatabaseManager | null;
+  /** State counted by the thin lazy entrypoint before the first replayed event. */
+  initialState?: Pick<LazyEventState, "userTurnCount" | "turnsSinceReview" | "toolCallsSinceReview">;
   projectName?: ProjectNameRef;
   deps?: BackgroundReviewDeps;
 }
@@ -161,7 +164,7 @@ export function setupBackgroundReview(
   projectStore: ProjectStoreRef,
   config: MemoryConfig,
   options: BackgroundReviewOptions = {},
-): void {
+): (state: Pick<LazyEventState, "userTurnCount" | "turnsSinceReview" | "toolCallsSinceReview">) => void {
   const dbManager = options.dbManager ?? null;
   const projectName = options.projectName ?? null;
   const runDirectReview = options.deps?.runDirectReview ?? runDirectMemoryCompletion;
@@ -169,9 +172,9 @@ export function setupBackgroundReview(
   const onReviewSettled = options.deps?.onReviewSettled;
   const shutdownGraceMs = options.deps?.shutdownGraceMs ?? SESSION_REVIEW_SHUTDOWN_GRACE_MS;
 
-  let turnsSinceReview = 0;
-  let toolCallsSinceReview = 0;
-  let userTurnCount = 0;
+  let turnsSinceReview = options.initialState?.turnsSinceReview ?? 0;
+  let toolCallsSinceReview = options.initialState?.toolCallsSinceReview ?? 0;
+  let userTurnCount = options.initialState?.userTurnCount ?? 0;
   let activeReview: Promise<void> | undefined;
   const sessionAbort = new AbortController();
   let shutdownPromise: Promise<void> | undefined;
@@ -355,4 +358,10 @@ export function setupBackgroundReview(
         onReviewSettled?.();
       });
   });
+
+  return (state: Pick<LazyEventState, "userTurnCount" | "turnsSinceReview" | "toolCallsSinceReview">) => {
+    userTurnCount = state.userTurnCount;
+    turnsSinceReview = state.turnsSinceReview;
+    toolCallsSinceReview = state.toolCallsSinceReview;
+  };
 }

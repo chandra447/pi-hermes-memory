@@ -35,6 +35,7 @@ import {
   FLUSH_PROMPT,
 } from "../constants.js";
 import type { MemoryConfig } from "../types.js";
+import type { LazyEventState } from "../lazy-event-qualifier.js";
 import type { EnsureMemoryReady } from "../memory-initialization.js";
 import { measureLifecycle } from "../lifecycle-timing.js";
 import { collectMessageParts } from "./message-parts.js";
@@ -149,9 +150,11 @@ export function setupSessionFlush(
     runDirectMemoryCompletion?: typeof runDirectMemoryCompletion;
     now?: () => number;
     ensureMemoryReady?: EnsureMemoryReady;
+    /** User turns counted by the thin lazy entrypoint before replay. */
+    initialUserTurnCount?: LazyEventState["userTurnCount"];
   } = {},
-): void {
-  let userTurnCount = 0;
+): (state: Pick<LazyEventState, "userTurnCount">) => void {
+  let userTurnCount = deps.initialUserTurnCount ?? 0;
   const now = deps.now ?? Date.now;
   const runDirect = deps.runDirectMemoryCompletion ?? runDirectMemoryCompletion;
 
@@ -287,4 +290,8 @@ export function setupSessionFlush(
       flush(ctx, undefined, DEFAULT_FLUSH_SHUTDOWN_TIMEOUT_MS, "shutdown"),
     );
   });
+
+  return (state: Pick<LazyEventState, "userTurnCount">) => {
+    userTurnCount = state.userTurnCount;
+  };
 }
