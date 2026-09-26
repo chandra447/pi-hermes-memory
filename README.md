@@ -300,6 +300,8 @@ For `create` and `update`, the preferred shape is structured input instead of ha
 
 The tool renders these into a valid `SKILL.md` body with `## When to Use`, `## Procedure`, `## Pitfalls`, and `## Verification` automatically. Raw `content` is still supported for compatibility, but structured fields are the recommended path.
 
+Pi discovers skills by the frontmatter `description` alone — `when_to_use` and the other structured fields render into the body, which Pi reads only after the skill has been selected. Put the trigger phrasings a user would actually type (symptoms, error strings, tool names) in `description`.
+
 Global skill creation also has duplicate/similarity guards:
 
 - exact slug match → blocked (update existing via `patch`/`update`)
@@ -311,13 +313,13 @@ Each skill uses a structured `SKILL.md` body:
 ```markdown
 ---
 name: debug-typescript-errors
-description: Step-by-step approach to debugging TS errors in monorepos
+description: Debug TypeScript errors in a monorepo — tsc --noEmit failures, type-check errors in CI, tsconfig extends-chain breakage
 version: 1
 created: 2026-04-26
 updated: 2026-04-26
 ---
 ## When to Use
-When you see TypeScript compilation errors, especially in monorepo setups.
+TypeScript compilation errors in this workspace, especially monorepo setups. Not for runtime-only type issues.
 
 ## Procedure
 1. Read the error message carefully
