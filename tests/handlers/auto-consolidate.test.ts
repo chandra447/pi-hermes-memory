@@ -11,6 +11,7 @@ import * as os from "node:os";
 import { registerConsolidateCommand, triggerConsolidation } from "../../src/handlers/auto-consolidate.js";
 import { resolveWatchedChildPiInvocation } from "../../src/handlers/pi-child-process.js";
 import { MemoryStore } from "../../src/store/memory-store.js";
+import { runDirectMemoryCompletion } from "../../src/handlers/review-memory-ops.js";
 import { AtomicLockCoordinator } from "../../src/store/atomic-lock-coordinator.js";
 import { DEFAULT_CONSOLIDATION_TIMEOUT_MS, ENTRY_DELIMITER } from "../../src/constants.js";
 
@@ -18,6 +19,14 @@ import { DEFAULT_CONSOLIDATION_TIMEOUT_MS, ENTRY_DELIMITER } from "../../src/con
 
 let execCalls: any[];
 let directCalls: unknown[][];
+
+// Opt-in product evidence: command notifications, transport attempts, and disk state.
+async function recordEvidence(name: string, data: unknown): Promise<void> {
+  const directory = process.env.PI_HERMES_TEST_EVIDENCE_DIR;
+  if (!directory) return;
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, `${name}.json`), JSON.stringify(data, null, 2) + "\n");
+}
 
 const directTransportLlmConfig = { reviewTransport: "direct" as const };
 
@@ -296,6 +305,72 @@ describe("triggerConsolidation", () => {
     });
   });
 
+  it("does not retry after shrinking the larger snapshot loaded following contention", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-consolidation-growth-"));
+    const config = { memoryDir: root, memoryCharLimit: 5000, userCharLimit: 5000 };
+    const writer = new MemoryStore(config);
+    const waitingStore = new MemoryStore(config);
+    const prototype = AtomicLockCoordinator.prototype;
+    const originalTryAcquire = prototype.tryAcquire;
+    let markContended!: () => void;
+    const contended = new Promise<void>((resolve) => { markContended = resolve; });
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    prototype.tryAcquire = function (...args) {
+      const lease = originalTryAcquire.apply(this, args);
+      if (!lease) markContended();
+      return lease;
+    };
+    try {
+      await writer.loadFromDisk();
+      await writer.add("memory", "a".repeat(100));
+      await waitingStore.loadFromDisk();
+      const initialLength = waitingStore.getMemoryEntries().join(ENTRY_DELIMITER).length;
+      let grownLength = 0;
+      let calls = 0;
+      const pi = {
+        exec: async (...args: any[]) => {
+          calls++;
+          if (calls === 1) {
+            markStarted();
+            await contended;
+            await writer.add("memory", "b".repeat(200));
+            grownLength = writer.getMemoryEntries().join(ENTRY_DELIMITER).length;
+            return { code: 0, stdout: "", stderr: "" };
+          }
+          if (calls === 2) {
+            assert.ok(childPrompt(captureExecArgs(args)).includes("b".repeat(200)));
+            const childStore = new MemoryStore(config);
+            await childStore.loadFromDisk();
+            await childStore.replace("memory", "b".repeat(200), "c".repeat(100));
+          }
+          return { code: 1, stdout: "", stderr: "provider overloaded" };
+        },
+      } as any;
+      await withLockWait("2000", async () => {
+        const first = triggerConsolidation(pi, writer, "memory");
+        await started;
+        const second = triggerConsolidation(pi, waitingStore, "memory", undefined, 60_000, "memory", {
+          llmModelOverride: "test/primary", llmFallbackModels: ["test/fallback"],
+        });
+        const results = await Promise.all([first, second]);
+        assert.ok(results.every((result) => result.consolidated));
+      });
+      assert.equal(calls, 2);
+      await waitingStore.loadFromDisk();
+      const finalLength = waitingStore.getMemoryEntries().join(ENTRY_DELIMITER).length;
+      assert.ok(finalLength > initialLength);
+      assert.ok(finalLength < grownLength);
+      await recordEvidence("contention-growth-no-double-spend", {
+        initialLength, grownLength, finalLength, childAttempts: calls,
+        persisted: waitingStore.getMemoryEntries(),
+      });
+    } finally {
+      prototype.tryAcquire = originalTryAcquire;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("allows the same project target to consolidate concurrently in distinct stores", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-consolidation-stores-"));
     const stores = ["project-a", "project-b"].map((name) => new MemoryStore({
@@ -460,7 +535,107 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
     assert.strictEqual(typeof retryArgs[retryArgs.length - 1], "string", "fallback retry should keep prompt as final arg");
   });
 
-  it("does not retry generic consolidation failures that are unrelated to override resolution", async () => {
+  it("uses a configured fallback model when the primary subprocess provider is overloaded", async () => {
+    const pi = {
+      on: () => {},
+      exec: async (...args: any[]) => {
+        execCalls.push(captureExecArgs(args));
+        return execCalls.length === 1
+          ? { code: 1, stdout: "", stderr: "Codex error: Our servers are currently overloaded. Please try again later." }
+          : { code: 0, stdout: "Consolidated", stderr: "" };
+      },
+      registerTool: () => {},
+      registerCommand: () => {},
+    } as any;
+
+    const result = await triggerConsolidation(
+      pi,
+      mockStore,
+      "memory",
+      undefined,
+      60000,
+      "memory",
+      {
+        llmModelOverride: "openai-codex/gpt-5.3-codex",
+        llmFallbackModels: ["anthropic/claude-sonnet-4-5"],
+      },
+    );
+
+    assert.strictEqual(result.consolidated, true);
+    assert.strictEqual(execCalls.length, 2);
+    assert.ok(logicalChildArgs(execCalls[0]).includes("openai-codex/gpt-5.3-codex"));
+    assert.ok(logicalChildArgs(execCalls[1]).includes("anthropic/claude-sonnet-4-5"));
+  });
+
+  for (const failure of ["HTTP 429 too many requests", "HTTP 503 service unavailable", "ECONNRESET", "request timed out"]) {
+    it(`recovers project consolidation after ${failure}`, async () => {
+      const pi = {
+        exec: async (...args: any[]) => {
+          execCalls.push(captureExecArgs(args));
+          if (execCalls.length === 1) throw new Error(failure);
+          return { code: 0, stdout: "Consolidated", stderr: "" };
+        },
+      } as any;
+      const result = await triggerConsolidation(pi, mockStore, "memory", undefined, 60000, "project", {
+        llmModelOverride: "test/primary", llmFallbackModels: ["test/primary", " ", "test/fallback", "test/fallback"],
+      });
+      assert.equal(result.consolidated, true);
+      assert.equal(execCalls.length, 2);
+      assert.ok(logicalChildArgs(execCalls[1]).includes("test/fallback"));
+      assert.equal(childPrompt(execCalls[0]), childPrompt(execCalls[1]));
+      assert.match(childPrompt(execCalls[1]), /project/);
+    });
+  }
+
+  it("does not launch a fallback after cancellation during an overloaded primary", async () => {
+    const controller = new AbortController();
+    const pi = {
+      exec: async (...args: any[]) => {
+        execCalls.push(captureExecArgs(args));
+        controller.abort();
+        return { code: 1, stdout: "", stderr: "provider overloaded" };
+      },
+    } as any;
+    const result = await triggerConsolidation(pi, mockStore, "memory", controller.signal, 60000, "memory", {
+      llmModelOverride: "test/primary", llmFallbackModels: ["test/fallback"],
+    });
+    assert.equal(result.consolidated, false);
+    assert.equal(execCalls.length, 1);
+    await recordEvidence("cancelled-fallback", { result, attempts: execCalls.length });
+  });
+
+  it("reports the final provider error when every configured consolidation model is overloaded", async () => {
+    const pi = {
+      on: () => {},
+      exec: async (...args: any[]) => {
+        execCalls.push(captureExecArgs(args));
+        const model = execCalls.length === 1 ? "primary" : "fallback";
+        return { code: 1, stdout: "", stderr: `${model} provider overloaded` };
+      },
+      registerTool: () => {},
+      registerCommand: () => {},
+    } as any;
+
+    const result = await triggerConsolidation(
+      pi,
+      mockStore,
+      "memory",
+      undefined,
+      60000,
+      "memory",
+      {
+        llmModelOverride: "openai-codex/gpt-5.3-codex",
+        llmFallbackModels: ["anthropic/claude-sonnet-4-5"],
+      },
+    );
+
+    assert.strictEqual(result.consolidated, false);
+    assert.strictEqual(execCalls.length, 2);
+    assert.match(result.error!, /fallback provider overloaded/);
+    await recordEvidence("all-models-failed", { result, attempts: execCalls.map(logicalChildArgs) });
+  });
+
+  it("does not try configured fallbacks for a non-retryable consolidation failure", async () => {
     const pi = {
       on: () => {},
       exec: async (...args: any[]) => {
@@ -478,11 +653,16 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
       undefined,
       60000,
       "memory",
-      { llmModelOverride: "openrouter/deepseek/deepseek-v4-flash" },
+      {
+        llmModelOverride: "openrouter/deepseek/deepseek-v4-flash",
+        llmFallbackModels: ["anthropic/claude-sonnet-4-5"],
+      },
     );
 
     assert.strictEqual(result.consolidated, false);
-    assert.strictEqual(execCalls.length, 1, "should not retry generic consolidation failures");
+    assert.match(result.error!, /memory tool returned no changes/);
+    assert.strictEqual(execCalls.length, 1, "should not retry non-retryable consolidation failures");
+    await recordEvidence("non-retryable-failure", { result, attempts: execCalls.map(logicalChildArgs) });
   });
 
   it("handles empty entries gracefully", async () => {
@@ -779,7 +959,11 @@ describe("registerConsolidateCommand", () => {
       60000,
       null,
       null,
-      directTransportLlmConfig,
+      {
+        ...directTransportLlmConfig,
+        llmModelOverride: "openai-codex/gpt-5.3-codex",
+        llmFallbackModels: ["anthropic/claude-sonnet-4-5"],
+      },
       null,
       makeDirectDeps({ ok: true, appliedCount: 2 }),
     );
@@ -791,6 +975,12 @@ describe("registerConsolidateCommand", () => {
     assert.strictEqual(execCalls.length, 0, "successful direct consolidation should not spawn subprocess");
     for (const call of directCalls) {
       assert.strictEqual(call[0], commandCtx, "runDirectMemoryCompletion must receive the command ctx");
+      const options = call[3] as { config: { llmFallbackModels?: string[] } };
+      assert.deepStrictEqual(
+        options.config.llmFallbackModels,
+        ["anthropic/claude-sonnet-4-5"],
+        "manual direct consolidation must receive the configured fallback chain",
+      );
     }
 
     const finalNotification = notifications[notifications.length - 1] ?? "";
@@ -856,6 +1046,168 @@ describe("MemoryStore auto-consolidation integration", () => {
     assert.strictEqual(consolidatorTarget, "memory");
     // After consolidation removes entries, the new entry should fit
     assert.ok(result.success, "add should succeed after consolidation");
+  });
+
+  it("add() completes automatic over-capacity consolidation through a configured fallback model", async () => {
+    const store = new MemoryStore({
+      memoryCharLimit: 120,
+      userCharLimit: 120,
+      nudgeInterval: 10,
+      reviewEnabled: false,
+      flushOnCompact: false,
+      flushOnShutdown: false,
+      flushMinTurns: 6,
+      autoConsolidate: true,
+      overflowGraceMs: 0,
+      correctionDetection: false,
+      nudgeToolCalls: 15,
+      memoryDir: path.join(MEMORY_DIR, "provider-fallback"),
+    } as any);
+    await store.loadFromDisk();
+
+    const calls: any[][] = [];
+    const pi = {
+      exec: async (...args: any[]) => {
+        calls.push(captureExecArgs(args));
+        if (calls.length === 1) {
+          return { code: 1, stdout: "", stderr: "Codex error: Our servers are currently overloaded. Please try again later." };
+        }
+        for (const entry of [...store.getMemoryEntries()]) {
+          await store.remove("memory", entry);
+        }
+        return { code: 0, stdout: "Consolidated", stderr: "" };
+      },
+    } as any;
+
+    store.setConsolidator((target, signal) => triggerConsolidation(
+      pi,
+      store,
+      target,
+      signal,
+      60_000,
+      target,
+      {
+        llmModelOverride: "openai-codex/gpt-5.3-codex",
+        llmFallbackModels: ["anthropic/claude-sonnet-4-5"],
+      },
+    ));
+
+    await store.add("memory", "a".repeat(60));
+    const before = [...store.getMemoryEntries()];
+    const result = await store.add("memory", "b".repeat(20));
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(calls.length, 2);
+    assert.ok(logicalChildArgs(calls[1]).includes("anthropic/claude-sonnet-4-5"));
+    const persisted = new MemoryStore({
+      memoryDir: path.join(MEMORY_DIR, "provider-fallback"), memoryCharLimit: 120, userCharLimit: 120,
+    });
+    await persisted.loadFromDisk();
+    assert.equal(persisted.getMemoryEntries().length, 1);
+    assert.ok(persisted.getMemoryEntries()[0].includes("b".repeat(20)));
+    await recordEvidence("automatic-over-capacity", {
+      surface: "MemoryStore.add after capacity overflow", transport: "isolated fake pi.exec",
+      primaryError: "Codex error: Our servers are currently overloaded. Please try again later.",
+      before, result, attempts: calls.map(logicalChildArgs), persisted: persisted.getMemoryEntries(),
+    });
+  });
+
+  for (const failure of ["overload", "timeout", "throw"] as const) {
+    it(`does not replay consolidation after persisted shrink followed by ${failure}`, async () => {
+      const config = {
+        memoryDir: path.join(MEMORY_DIR, `persisted-${failure}`),
+        memoryCharLimit: 120,
+        userCharLimit: 120,
+        autoConsolidate: true,
+        overflowGraceMs: 0,
+      };
+      const store = new MemoryStore(config);
+      await store.loadFromDisk();
+      await store.add("memory", "a".repeat(60));
+      let calls = 0;
+      const pi = {
+        exec: async () => {
+          calls++;
+          const childStore = new MemoryStore(config);
+          await childStore.loadFromDisk();
+          for (const entry of childStore.getMemoryEntries()) {
+            await childStore.remove("memory", entry);
+          }
+          if (failure === "throw") throw new Error("provider overloaded");
+          return { code: failure === "timeout" ? 124 : 1, stdout: "", stderr: failure === "timeout" ? "request timed out" : "provider overloaded" };
+        },
+      } as any;
+      store.setConsolidator((target, signal) => triggerConsolidation(
+        pi, store, target, signal, 60_000, target,
+        { llmModelOverride: "test/primary", llmFallbackModels: ["test/fallback"] },
+      ));
+      const result = await store.add("memory", "b".repeat(20));
+      assert.equal(result.success, true);
+      assert.equal(calls, 1);
+      await store.loadFromDisk();
+      assert.equal(store.getMemoryEntries().length, 1);
+      assert.ok(store.getMemoryEntries()[0].includes("b".repeat(20)));
+      await recordEvidence(`no-double-spend-${failure}`, { failureAfterPersistedShrink: failure, attempts: calls, result, persisted: store.getMemoryEntries() });
+    });
+  }
+
+  it("manual consolidation applies atomic shrink through the real direct fallback chain", async () => {
+    const config = { memoryDir: path.join(MEMORY_DIR, "manual-fallback"), memoryCharLimit: 5000, userCharLimit: 5000 };
+    const store = new MemoryStore(config);
+    await store.loadFromDisk();
+    await store.add("memory", "A durable preference with a unnecessarily verbose description".repeat(3));
+    const before = store.getMemoryEntries().join(ENTRY_DELIMITER).length;
+    const models = ["primary", "fallback"].map((id) => ({ provider: "test", id, reasoning: false }));
+    const calls: string[] = [];
+    const authCalls: string[] = [];
+    const notifications: string[] = [];
+    let handler: any;
+    let subprocessCalls = 0;
+    const pi = {
+      registerCommand: (_name: string, command: any) => { handler = command.handler; },
+      exec: async () => { subprocessCalls++; throw new Error("unexpected subprocess"); },
+    } as any;
+    registerConsolidateCommand(pi, store, 60_000, null, null, {
+      reviewTransport: "direct",
+      llmModelOverride: "test/primary",
+      llmFallbackModels: ["test/fallback"],
+    }, null, {
+      runDirectMemoryCompletion: (...args) => runDirectMemoryCompletion(...args, {
+        completeSimple: (async (model: { id: string }) => {
+          calls.push(model.id);
+          if (model.id === "primary") throw new Error("provider overloaded");
+          assert.equal(store.getMemoryEntries().join(ENTRY_DELIMITER).length, before);
+          return { stopReason: "stop", content: [{ type: "text", text: JSON.stringify({ operations: [
+            { action: "replace", target: "memory", old_text: store.getMemoryEntries()[0], content: "Durable preference" },
+          ] }) }] };
+        }) as never,
+      }),
+    });
+    await handler({}, {
+      model: models[0],
+      modelRegistry: {
+        getAll: () => models,
+        getAvailable: () => models,
+        getApiKeyAndHeaders: async (model: { id: string }) => {
+          authCalls.push(model.id);
+          return { ok: true, apiKey: "isolated-test-key" };
+        },
+      },
+      ui: { notify: (message: string) => notifications.push(message) },
+    });
+    assert.deepEqual(calls, ["primary", "fallback"]);
+    assert.deepEqual(authCalls, ["primary", "fallback"]);
+    assert.equal(subprocessCalls, 0);
+    const persisted = new MemoryStore(config);
+    await persisted.loadFromDisk();
+    assert.ok(persisted.getMemoryEntries().join(ENTRY_DELIMITER).length < before);
+    assert.ok(persisted.getMemoryEntries()[0].includes("Durable preference"));
+    assert.ok(notifications.at(-1)?.includes("memory: ✅ consolidated"));
+    await recordEvidence("manual-direct-fallback", {
+      surface: "/memory-consolidate", transport: "real direct completion helper with isolated fake completion/auth",
+      primaryError: "provider overloaded", models: calls, authCalls, subprocessCalls,
+      beforeCharacters: before, persisted: persisted.getMemoryEntries(), notifications,
+    });
   });
 
   it("add() skips consolidation when autoConsolidate is false", async () => {
