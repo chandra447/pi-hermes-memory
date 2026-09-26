@@ -11,6 +11,8 @@ import {
   DEFAULT_NUDGE_TOOL_CALLS,
   DEFAULT_REVIEW_RECENT_MESSAGES,
   DEFAULT_FLUSH_RECENT_MESSAGES,
+  DEFAULT_CONSOLIDATION_CHUNKING,
+  DEFAULT_CONSOLIDATION_CHUNK_CHARS,
   DEFAULT_CONSOLIDATION_TIMEOUT_MS,
   DEFAULT_FLUSH_COMPACT_TIMEOUT_MS,
   CONSOLIDATION_CHUNK_CHARS_MIN,
@@ -65,6 +67,8 @@ const DEFAULT_CONFIG: MemoryConfig = {
   failureInjectionEnabled: true,
   failureInjectionMaxAgeDays: DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
   failureInjectionMaxEntries: DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
+  consolidationChunking: DEFAULT_CONSOLIDATION_CHUNKING,
+  consolidationChunkChars: DEFAULT_CONSOLIDATION_CHUNK_CHARS,
   consolidationTimeoutMs: DEFAULT_CONSOLIDATION_TIMEOUT_MS,
   autoConsolidationWarnOnFailure: true,
   nudgeToolCalls: DEFAULT_NUDGE_TOOL_CALLS,
@@ -146,6 +150,9 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
             + " Consolidation spawns a child agent turn and is routinely killed mid-run at lower values.",
           );
         }
+      }
+      if (typeof parsed.consolidationChunking === "boolean") {
+        config.consolidationChunking = parsed.consolidationChunking;
       }
       if (typeof parsed.consolidationChunkChars === "number"
         && Number.isFinite(parsed.consolidationChunkChars)

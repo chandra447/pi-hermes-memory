@@ -41,7 +41,7 @@ type ToolMemoryTarget = MemoryTarget | "project";
 type ConsolidationLlmConfig = Pick<
   MemoryConfig,
   "llmModelOverride" | "llmThinkingOverride" | "reviewTransport"
-  | "consolidationChunkChars"
+  | "consolidationChunking" | "consolidationChunkChars"
 >;
 
 // staleMs is deliberately decoupled from the consolidation timeout. The holder
@@ -287,29 +287,11 @@ export async function triggerConsolidation(
   }
 
     const chunkChars = chunkCharsFor(llmConfig);
-    // Overall budget = the old single-call budget: a chunked trigger never
-    // blocks the calling memory write longer than the single shot it replaces.
-    // Rounds share the budget; a starved trigger reports partial and the next
-    // one resumes from disk state.
-    // Capacity goal and usage are measured in the SAME units the cap enforces
-    // (encoded entries, metadata included) — prompt-side chars are
-    // metadata-stripped and under-report by ~40 chars per entry, which let a
-    // run declare success while the triggering add still failed. Prompt-side
-    // chars remain the unit for slice sizing (fitsOneChunk), because that is
-    // what the child actually receives. Direct-call stores without the
-    // accessors (tests) fall back to prompt-side measures.
+    const chunkingEnabled = llmConfig.consolidationChunking === true;
     const hasUsage = typeof (store as any).capacityUsage === "function";
     const usageOf = (list: string[]): number =>
       hasUsage ? (store as any).capacityUsage(target) : list.join(ENTRY_DELIMITER).length;
     const goal = typeof store.capacityGoal === "function" ? store.capacityGoal(target) : chunkChars;
-
-    if (entries.length === 0 || usageOf(entries) <= goal) {
-      // Within the target's capacity goal (encoded units, same as the cap):
-      // nothing needs to shrink toward the goal — a clean no-op, not a
-      // failure. Covers healthy stores of any size, the failure tier, and
-      // manual triggers on stores that do not need consolidation.
-      return { consolidated: true, rounds: 0 };
-    }
 
     let lock: ConsolidationLock | null = null;
 
@@ -345,6 +327,36 @@ export async function triggerConsolidation(
         }
       }
 
+      if (!chunkingEnabled) {
+        // Legacy single-shot path — the flag default. Byte-identical to
+        // pre-chunking releases for stores of any size. When an oversized
+        // store times out, the error names the remedy keys so the failure
+        // teaches the fix.
+        const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, promptEntries), llmConfig, {
+          signal,
+          timeoutMs,
+          retryWithoutOverrides: true,
+        }) as { code: number; stdout?: string; stderr?: string; killed?: boolean };
+
+        if (result.code === 0) {
+          return { consolidated: true };
+        }
+        let error = describeConsolidationFailure(result, timeoutMs);
+        const terminated = result.killed || result.code === 124 || result.code === 143;
+        if (terminated && promptEntries.join(ENTRY_DELIMITER).length > chunkChars) {
+          error += ` This store exceeds consolidationChunkChars (${chunkChars}) — enabling consolidationChunking splits consolidation into bounded rounds.`;
+        }
+        return { consolidated: false, error };
+      }
+
+      if (promptEntries.length === 0 || usageOf(promptEntries) <= goal) {
+        // Within the target's capacity goal (encoded units, same as the cap):
+        // nothing needs to shrink toward the goal — a clean no-op, not a
+        // failure. Covers healthy stores of any size, the failure tier, and
+        // manual triggers on stores that do not need consolidation.
+        return { consolidated: true, rounds: 0 };
+      }
+
       const deadline = Date.now() + timeoutMs;
 
       // Chunked path — the store exceeds one child run's prompt budget, and a
@@ -362,7 +374,8 @@ export async function triggerConsolidation(
 
       while (completedRounds < MAX_CONSOLIDATION_ROUNDS) {
         if (promptEntries.length === 0) break; // everything merged away
-        if (usageOf(promptEntries) <= goal) break; // capacity goal met (cap units)
+        const promptTotal = promptEntries.join(ENTRY_DELIMITER).length;
+        if (promptTotal <= chunkChars && usageOf(promptEntries) <= goal) break; // capacity goal met
         if (signal?.aborted) {
           notes.push("aborted between consolidation rounds");
           break;
@@ -377,7 +390,6 @@ export async function triggerConsolidation(
         // point past the (now shorter) store — wrap it instead of slicing an
         // empty batch.
         if (offset >= promptEntries.length) offset = 0;
-        const promptTotal = promptEntries.join(ENTRY_DELIMITER).length;
 
         const fitsOneChunk = promptTotal <= chunkChars;
         const usageBefore = usageOf(promptEntries);
@@ -476,12 +488,11 @@ export async function triggerConsolidation(
           ...(roundNotes.length ? { error: roundNotes.join("; ") } : {}),
         };
       }
-      notes.push(`consolidation could not shrink the store toward its ${goal}-char capacity goal (${promptEntries.join(ENTRY_DELIMITER).length} chars); entries may be distinct facts worth keeping — consider manual pruning or raising the limit`);
+      notes.push(`consolidation could not shrink the store toward its ${goal}-char capacity goal (${usageOf(promptEntries)} chars); entries may be distinct facts worth keeping — consider manual pruning or raising the limit`);
       return {
         consolidated: false,
         error: notes.join("; "),
       };
-
   } catch (err) {
     const message = String(err);
     if (message.includes("extension ctx is stale")) {

@@ -25,7 +25,7 @@ import { takeChunk } from "../../src/handlers/auto-consolidate.js";
 let execCalls: any[];
 let directCalls: unknown[][];
 
-const directTransportLlmConfig = { reviewTransport: "direct" as const };
+const directTransportLlmConfig = { reviewTransport: "direct" as const, consolidationChunking: true };
 
 function createDirectCtx(): { model: unknown; modelRegistry: unknown; _tag: string } {
   return { model: {}, modelRegistry: {}, _tag: "consolidation-direct-ctx" };
@@ -161,7 +161,7 @@ describe("triggerConsolidation", () => {
 
   it("builds prompt with current entries and calls pi.exec", async () => {
     const pi = createMockPi();
-    await triggerConsolidation(pi, mockStore, "memory");
+    await triggerConsolidation(pi, mockStore, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
 
     assert.strictEqual(execCalls.length, 1, "should call pi.exec once");
     const args = logicalChildArgs(execCalls[0]);
@@ -175,7 +175,7 @@ describe("triggerConsolidation", () => {
 
   it("reports an honest no-shrink result when the child exits 0 without shrinking", async () => {
     const pi = createMockPi({ code: 0, stdout: "Done", stderr: "" });
-    const result = await triggerConsolidation(pi, mockStore, "memory");
+    const result = await triggerConsolidation(pi, mockStore, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
 
     assert.strictEqual(result.consolidated, false, "exit 0 without shrinking is not success");
     assert.ok(result.error?.includes("could not shrink the remaining"), result.error);
@@ -193,8 +193,8 @@ describe("triggerConsolidation", () => {
 
     try {
       const pi = createMockPi();
-      const first = await triggerConsolidation(pi, mockStore, "memory");
-      const second = await triggerConsolidation(pi, mockStore, "memory");
+      const first = await triggerConsolidation(pi, mockStore, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
+      const second = await triggerConsolidation(pi, mockStore, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
 
       assert.strictEqual(first.consolidated, false, "a no-shrink child is honestly reported");
       assert.strictEqual(second.consolidated, false);
@@ -222,9 +222,9 @@ describe("triggerConsolidation", () => {
     } as any;
 
     await withLockWait("0", async () => {
-      const first = triggerConsolidation(pi, mockStore, "memory");
+      const first = triggerConsolidation(pi, mockStore, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
       await execStarted;
-      const second = triggerConsolidation(pi, mockStore, "memory");
+      const second = triggerConsolidation(pi, mockStore, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
       const raced = await Promise.race([
         second.then((result) => ({ result })),
         settle(100).then(() => ({ timeout: true as const })),
@@ -260,9 +260,9 @@ describe("triggerConsolidation", () => {
     } as any;
 
     await withLockWait("2000", async () => {
-      const first = triggerConsolidation(pi, mockStore, "memory");
+      const first = triggerConsolidation(pi, mockStore, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
       await firstExecStarted;
-      const second = triggerConsolidation(pi, mockStore, "memory");
+      const second = triggerConsolidation(pi, mockStore, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
       await settle(20);
       releaseExecs.forEach((release) => release());
 
@@ -306,9 +306,9 @@ describe("triggerConsolidation", () => {
     } as any;
 
     await withLockWait("2000", async () => {
-      const first = triggerConsolidation(pi, shrinkingStore, "memory");
+      const first = triggerConsolidation(pi, shrinkingStore, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
       await firstExecStarted;
-      const second = triggerConsolidation(pi, shrinkingStore, "memory");
+      const second = triggerConsolidation(pi, shrinkingStore, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
       await settle(20);
       releaseExecs.forEach((release) => release());
 
@@ -377,7 +377,7 @@ describe("triggerConsolidation", () => {
 
   it("returns { consolidated: false } on failure (non-zero exit code)", async () => {
     const pi = createMockPi({ code: 1, stdout: "", stderr: "some error" });
-    const result = await triggerConsolidation(pi, mockStore, "memory");
+    const result = await triggerConsolidation(pi, mockStore, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
 
     assert.strictEqual(result.consolidated, false);
     assert.ok(result.error, "should have error message");
@@ -474,7 +474,7 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
       undefined,
       60000,
       "memory",
-      { llmModelOverride: "openrouter/deepseek/deepseek-v4-flash" },
+      { llmModelOverride: "openrouter/deepseek/deepseek-v4-flash", consolidationChunking: true },
     );
 
     assert.strictEqual(result.consolidated, false, "the mock child shrinks nothing — reported honestly");
@@ -512,7 +512,7 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
       undefined,
       60000,
       "memory",
-      { llmModelOverride: "openrouter/deepseek/deepseek-v4-flash" },
+      { llmModelOverride: "openrouter/deepseek/deepseek-v4-flash", consolidationChunking: true },
     );
 
     assert.strictEqual(result.consolidated, false);
@@ -528,7 +528,7 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
     } as any;
 
     const pi = createMockPi();
-    const result = await triggerConsolidation(pi, emptyStore, "memory");
+    const result = await triggerConsolidation(pi, emptyStore, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
 
     assert.strictEqual(execCalls.length, 0, "an empty store spawns no child");
     assert.strictEqual(result.consolidated, true);
@@ -716,7 +716,7 @@ describe("registerConsolidateCommand", () => {
       capacityUsage: () => 100,
     } as any;
 
-    registerConsolidateCommand(pi, mockStore, 60000, projectStore, "demo-project");
+    registerConsolidateCommand(pi, mockStore, 60000, projectStore, "demo-project", { consolidationChunking: true });
     await handler({}, {
       signal: undefined,
       ui: { notify: (message: string) => { notifications.push(message); } },
@@ -1183,7 +1183,7 @@ describe("chunked subprocess consolidation", () => {
     const store = await makeOverChunkStore(2, 20);
     const pi = createMockPi();
 
-    const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS);
+    const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
 
     assert.strictEqual(execCalls.length, 0, "a healthy store spawns no child");
     assert.strictEqual(result.consolidated, true);
@@ -1197,7 +1197,7 @@ describe("chunked subprocess consolidation", () => {
     const store = await makeOverChunkStore(6, 600, 3000);
     const pi = createChunkedChildPi(store, ["shrink"]);
 
-    const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS);
+    const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
 
     assert.strictEqual(execCalls.length, 1, "a store that fits one prompt gets exactly one child");
     const prompt = childPrompt(execCalls[0]);
@@ -1225,7 +1225,7 @@ describe("chunked subprocess consolidation", () => {
       registerCommand: () => {},
     };
 
-    const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS);
+    const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
 
     assert.strictEqual(execCalls.length, 1);
     assert.strictEqual(result.consolidated, true);
@@ -1241,7 +1241,7 @@ describe("chunked subprocess consolidation", () => {
     const store = await makeOverChunkStore(7);
     const pi = createChunkedChildPi(store, ["shrink"]);
 
-    const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS);
+    const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
 
     assert.strictEqual(execCalls.length, 0, "nothing needs to shrink toward the capacity goal");
     assert.strictEqual(result.consolidated, true);
@@ -1254,7 +1254,7 @@ describe("chunked subprocess consolidation", () => {
     const store = await makeOverChunkStore(10); // ≈ 6367 encoded chars > 5000 goal
     const pi = createChunkedChildPi(store, ["shrink", "shrink", "shrink"]);
 
-    const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS);
+    const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
 
     // Each round removes one entry (−647 encoded chars): 6367 → 5730 → 5093 →
     // 4456 ≤ goal. The walk advances past each consumed slice.
@@ -1293,7 +1293,7 @@ describe("chunked subprocess consolidation", () => {
       registerCommand: () => {},
     };
 
-    await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS);
+    await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
 
     assert.ok(batches.length >= 2, "expected multiple rounds");
     // The discriminating check vs an offset-reset mutant: the walk must move
@@ -1310,6 +1310,8 @@ describe("chunked subprocess consolidation", () => {
 
     const first = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", {
       consolidationChunkChars: 2500,
+      consolidationChunking: true,
+      consolidationChunking: true,
     });
 
     assert.strictEqual(execCalls.length, 2, "round 1 succeeds, round 2 is killed");
@@ -1331,7 +1333,7 @@ describe("chunked subprocess consolidation", () => {
       undefined,
       DEFAULT_CONSOLIDATION_TIMEOUT_MS,
       "memory",
-      { consolidationChunkChars: 2500 },
+      { consolidationChunkChars: 2500, consolidationChunking: true },
     );
 
     assert.strictEqual(second.consolidated, true);
@@ -1353,6 +1355,8 @@ describe("chunked subprocess consolidation", () => {
 
     const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", {
       consolidationChunkChars: 2500,
+      consolidationChunking: true,
+      consolidationChunking: true,
     });
 
     assert.strictEqual(execCalls.length, MAX_CONSOLIDATION_ROUNDS, "the round cap fires on a store that never shrinks");
@@ -1368,6 +1372,8 @@ describe("chunked subprocess consolidation", () => {
 
     const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", {
       consolidationChunkChars: 2500,
+      consolidationChunking: true,
+      consolidationChunking: true,
     });
 
     assert.strictEqual(execCalls.length, 1);
@@ -1401,6 +1407,8 @@ describe("chunked subprocess consolidation", () => {
 
     const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", {
       consolidationChunkChars: 2500,
+      consolidationChunking: true,
+      consolidationChunking: true,
     });
 
     assert.strictEqual(execCalls.length, 1);
@@ -1417,6 +1425,8 @@ describe("chunked subprocess consolidation", () => {
 
     const result = await triggerConsolidation(pi, store, "memory", undefined, 5, "memory", {
       consolidationChunkChars: 2500,
+      consolidationChunking: true,
+      consolidationChunking: true,
     });
 
     assert.strictEqual(execCalls.length, 0, "a budget that cannot fit a round spawns no child");
@@ -1467,7 +1477,7 @@ describe("chunked subprocess consolidation", () => {
       registerCommand: () => {},
     };
 
-    await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS);
+    await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
 
     assert.ok(sawUnscopedFullPrompt, "once the remaining store fits one prompt, the round must be unscoped and whole");
   });
@@ -1520,7 +1530,7 @@ describe("chunked prompt scoping", () => {
       registerCommand: () => {},
     } as any;
 
-    await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS);
+    await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
 
     const prompts = execCalls.map((call) => call[1].at(-1) as string);
     assert.ok(prompts.length >= 1, "over-chunk store should run at least one chunked round");
@@ -1642,6 +1652,7 @@ describe("chunked consolidation in legacy-inject mode", () => {
     })();
     const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", {
       consolidationChunkChars: 500,
+      consolidationChunking: true,
     });
 
     assert.strictEqual(result.consolidated, true);
@@ -1701,6 +1712,8 @@ describe("/memory-consolidate partial display", () => {
 
       registerConsolidateCommand(pi, store, DEFAULT_CONSOLIDATION_TIMEOUT_MS, null, null, {
         consolidationChunkChars: 2500,
+      consolidationChunking: true,
+      consolidationChunking: true,
       });
       assert.ok(handler, "command handler should be registered");
 
@@ -1785,6 +1798,8 @@ describe("chunked consolidation edge behavior", () => {
     // NOTE: roundCounter is captured by the closure above via hoisting of let.
     const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", {
       consolidationChunkChars: 2500,
+      consolidationChunking: true,
+      consolidationChunking: true,
     });
 
     assert.strictEqual(result.consolidated, true);
@@ -1808,6 +1823,8 @@ describe("chunked consolidation edge behavior", () => {
 
     const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", {
       consolidationChunkChars: 2500,
+      consolidationChunking: true,
+      consolidationChunking: true,
     });
 
     assert.strictEqual(result.consolidated, false);
@@ -1830,6 +1847,8 @@ describe("chunked consolidation edge behavior", () => {
 
     const result = await triggerConsolidation(pi, store, "memory", controller.signal, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", {
       consolidationChunkChars: 2500,
+      consolidationChunking: true,
+      consolidationChunking: true,
     });
 
     assert.strictEqual(execCalls.length, 1, "abort between rounds must stop the walk");
@@ -1854,6 +1873,8 @@ describe("chunked consolidation edge behavior", () => {
 
     const result = await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", {
       consolidationChunkChars: 2500,
+      consolidationChunking: true,
+      consolidationChunking: true,
     });
 
     assert.strictEqual(result.consolidated, true, "the on-disk shrink is real progress");
@@ -1883,6 +1904,8 @@ describe("chunked consolidation edge behavior", () => {
 
     const result = await triggerConsolidation(pi, store, "memory", undefined, 11500, "memory", {
       consolidationChunkChars: 2500,
+      consolidationChunking: true,
+      consolidationChunking: true,
     });
 
     assert.ok(watchdogTimeouts.length >= 2, "multiple rounds before the budget gate");

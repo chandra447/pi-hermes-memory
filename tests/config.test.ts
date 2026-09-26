@@ -60,8 +60,8 @@ describe("loadConfig", () => {
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ consolidationChunkChars: 100 }));
     assert.strictEqual(
       loadConfig(TEST_CONFIG_PATH).consolidationChunkChars,
-      undefined,
-      "below the 500-char floor should be ignored",
+      4000,
+      "below the 500-char floor falls back to the default",
     );
   });
 

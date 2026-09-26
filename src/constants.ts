@@ -56,6 +56,9 @@ export const DEFAULT_FLUSH_SHUTDOWN_TIMEOUT_MS = 10_000;
  * timeout at cap scale.
  */
 export const DEFAULT_CONSOLIDATION_CHUNK_CHARS = 4000;
+/** Whether chunked subprocess consolidation is enabled. Default OFF — the original single-shot timeout was never reproduced on a fast model; the feature is available for users who hit it. Set consolidationChunking: true to enable. */
+export const DEFAULT_CONSOLIDATION_CHUNKING = false;
+
 /** Floor for the consolidationChunkChars config value. */
 export const CONSOLIDATION_CHUNK_CHARS_MIN = 500;
 /**

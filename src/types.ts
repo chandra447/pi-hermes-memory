@@ -94,11 +94,21 @@ export interface MemoryConfig {
   /** Maximum time in milliseconds for a consolidation run, auto or manual. Default: 180000 */
   consolidationTimeoutMs: number;
   /**
-   * Entries joined above this many chars split subprocess consolidation into
-   * multiple child runs that share one overall time budget
-   * (consolidationTimeoutMs); the loop stops at the target's capacity goal.
-   * Has no effect on the direct (in-process) transport. Default: 4000
+   * Master switch for chunked subprocess consolidation. When false (the
+   * default), the subprocess path keeps the legacy single-shot behavior for
+   * stores of any size. When true, entries joined above
+   * `consolidationChunkChars` split the work into multiple child runs that
+   * share one overall time budget (consolidationTimeoutMs); the loop stops at
+   * the target's capacity goal. Has no effect on the direct (in-process)
+   * transport.
    */
+  /**
+   * Enables chunked subprocess consolidation (bounded rounds with a shared
+   * time budget). Default: false — the legacy single-shot behavior applies
+   * until explicitly enabled. Provisional pending reproduction of the
+   * original timeout on a faster model.
+   */
+  consolidationChunking?: boolean;
   consolidationChunkChars?: number;
   /** Log failed auto-consolidation attempts to the session console. Default: true */
   autoConsolidationWarnOnFailure: boolean;
