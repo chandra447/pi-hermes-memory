@@ -710,19 +710,27 @@ export class MemoryStore {
     const entries = this.entriesFor(target);
     const current = this.charCount(target);
     const limit = this.charLimit(target);
-    const pct = limit > 0 ? Math.min(100, Math.floor((current / limit) * 100)) : 0;
 
     const resp: MemoryResult = {
       success: true,
       target,
-      // policy-only does not enforce the cap, so a percentage would name a
-      // ceiling that is intentionally not applied; report the count alone,
-      // matching memoryFullError's shape.
-      usage: this.capEnforced ? `${pct}% — ${current}/${limit} chars` : `${current} chars`,
+      usage: this.usageLabel(current, limit),
       entry_count: entries.length,
     };
     if (message) resp.message = message;
     return resp;
+  }
+
+  /**
+   * Capacity label shared by tool results and rendered block headers.
+   * policy-only mode does not enforce the cap (#218 / #221), so a percentage
+   * would name a ceiling that is intentionally not applied; report the count
+   * alone. Single source so the report and the gates cannot drift apart.
+   */
+  private usageLabel(current: number, limit: number): string {
+    if (!this.capEnforced) return `${current} chars`;
+    const pct = limit > 0 ? Math.min(100, Math.floor((current / limit) * 100)) : 0;
+    return `${pct}% — ${current}/${limit} chars`;
   }
 
   private renderBlock(target: "memory" | "user", entries: string[]): string {
@@ -730,11 +738,11 @@ export class MemoryStore {
     const limit = this.charLimit(target);
     const content = entries.join(ENTRY_DELIMITER);
     const current = content.length;
-    const pct = limit > 0 ? Math.min(100, Math.floor((current / limit) * 100)) : 0;
+    const usage = this.usageLabel(current, limit);
 
     const header = target === "user"
-      ? `USER PROFILE (who the user is) [${pct}% — ${current}/${limit} chars]`
-      : `MEMORY (your personal notes) [${pct}% — ${current}/${limit} chars]`;
+      ? `USER PROFILE (who the user is) [${usage}]`
+      : `MEMORY (your personal notes) [${usage}]`;
 
     const separator = "═".repeat(46);
     return `${separator}\n${header}\n${separator}\n${content}`;
@@ -764,9 +772,9 @@ export class MemoryStore {
     const limit = this.config.memoryCharLimit;
     const content = entries.join(ENTRY_DELIMITER);
     const current = content.length;
-    const pct = limit > 0 ? Math.min(100, Math.floor((current / limit) * 100)) : 0;
+    const usage = this.usageLabel(current, limit);
 
-    const header = `PROJECT MEMORY: ${projectName} [${pct}% — ${current}/${limit} chars]`;
+    const header = `PROJECT MEMORY: ${projectName} [${usage}]`;
     const separator = "═".repeat(46);
     return `${separator}\n${header}\n${separator}\n${content}`;
   }
