@@ -299,11 +299,11 @@ export async function triggerConsolidation(
     // what the child actually receives. Direct-call stores without the
     // accessors (tests) fall back to prompt-side measures.
     const hasUsage = typeof (store as any).capacityUsage === "function";
-    const usageOf = (): number =>
-      hasUsage ? (store as any).capacityUsage(target) : entries.join(ENTRY_DELIMITER).length;
+    const usageOf = (list: string[]): number =>
+      hasUsage ? (store as any).capacityUsage(target) : list.join(ENTRY_DELIMITER).length;
     const goal = typeof store.capacityGoal === "function" ? store.capacityGoal(target) : chunkChars;
 
-    if (entries.length === 0 || usageOf() <= goal) {
+    if (entries.length === 0 || usageOf(entries) <= goal) {
       // Within the target's capacity goal (encoded units, same as the cap):
       // nothing needs to shrink toward the goal — a clean no-op, not a
       // failure. Covers healthy stores of any size, the failure tier, and
@@ -362,8 +362,7 @@ export async function triggerConsolidation(
 
       while (completedRounds < MAX_CONSOLIDATION_ROUNDS) {
         if (promptEntries.length === 0) break; // everything merged away
-        const promptTotal = promptEntries.join(ENTRY_DELIMITER).length;
-        if (promptTotal <= chunkChars && usageOf() <= goal) break; // capacity goal met
+        if (usageOf(promptEntries) <= goal) break; // capacity goal met (cap units)
         if (signal?.aborted) {
           notes.push("aborted between consolidation rounds");
           break;
@@ -378,9 +377,10 @@ export async function triggerConsolidation(
         // point past the (now shorter) store — wrap it instead of slicing an
         // empty batch.
         if (offset >= promptEntries.length) offset = 0;
+        const promptTotal = promptEntries.join(ENTRY_DELIMITER).length;
 
         const fitsOneChunk = promptTotal <= chunkChars;
-        const usageBefore = usageOf();
+        const usageBefore = usageOf(promptEntries);
         const batch = fitsOneChunk
           ? promptEntries // decisive round: whole remaining store, full context
           : takeChunk(promptEntries.slice(offset), chunkChars);
@@ -416,7 +416,7 @@ export async function triggerConsolidation(
           (entry) => !batchSet.has(entry) && !promptEntries.includes(entry),
         );
 
-        const usageAfter = usageOf();
+        const usageAfter = usageOf(promptEntries);
         const shrank = usageAfter < usageBefore;
 
         if (result.code !== 0) {
@@ -465,7 +465,7 @@ export async function triggerConsolidation(
 
       if (progressRounds > 0) {
         const roundNotes = [...notes];
-        const usageEnd = usageOf();
+        const usageEnd = usageOf(promptEntries);
         if (usageEnd > goal) {
           roundNotes.push(`store still ${usageEnd - goal} chars over its ${goal}-char capacity goal; entries may be distinct facts worth keeping — consider manual pruning or raising the limit`);
         }
@@ -476,7 +476,7 @@ export async function triggerConsolidation(
           ...(roundNotes.length ? { error: roundNotes.join("; ") } : {}),
         };
       }
-      notes.push(`consolidation could not shrink the store toward its ${goal}-char capacity goal (${usageOf()} chars); entries may be distinct facts worth keeping — consider manual pruning or raising the limit`);
+      notes.push(`consolidation could not shrink the store toward its ${goal}-char capacity goal (${promptEntries.join(ENTRY_DELIMITER).length} chars); entries may be distinct facts worth keeping — consider manual pruning or raising the limit`);
       return {
         consolidated: false,
         error: notes.join("; "),
