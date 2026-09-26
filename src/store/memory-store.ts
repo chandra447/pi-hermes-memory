@@ -130,6 +130,18 @@ export class MemoryStore {
   capacityGoal(target: "memory" | "user" | "failure"): number {
     return this.charLimit(target);
   }
+
+  /**
+   * Public read for consolidation tooling: the store's current size in the
+   * SAME units the cap enforces (encoded entries, metadata included). The
+   * chunked loop measures progress against capacityGoal() in these units —
+   * prompt-side chars are metadata-stripped and would under-report by ~40
+   * chars per entry, letting consolidation declare success while the
+   * triggering add still fails.
+   */
+  capacityUsage(target: "memory" | "user" | "failure"): number {
+    return this.charCount(target);
+  }
   private get capEnforced(): boolean {
     return this.config.memoryMode !== "policy-only";
   }
