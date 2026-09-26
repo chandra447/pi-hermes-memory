@@ -295,12 +295,24 @@ export default function (pi: ExtensionAPI) {
   // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
   pi.on("before_agent_start", async (event, _ctx) => {
     const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectNameRef(), standingStore);
+    if (!promptContext) return;
 
-    if (promptContext) {
-      return {
-        systemPrompt: event.systemPrompt + "\n\n" + promptContext,
-      };
+    // pi 0.87+ exposes mutable structured prompt options. Appending through
+    // them keeps the prompt a set of named sections; returning `systemPrompt`
+    // instead forces the rendered text and flattens the sections for every
+    // later handler and for section-aware providers (#251). SDKs before 0.87
+    // do not carry the field, so the replacement path stays for them.
+    const promptOptions = (event as { systemPromptOptions?: { appendSystemPrompt?: string } }).systemPromptOptions;
+    if (promptOptions) {
+      promptOptions.appendSystemPrompt = [promptOptions.appendSystemPrompt, promptContext]
+        .filter(Boolean)
+        .join("\n\n");
+      return;
     }
+
+    return {
+      systemPrompt: event.systemPrompt + "\n\n" + promptContext,
+    };
   });
 
   // ── 3. Register action-specific memory write tools with SQLite sync ──
