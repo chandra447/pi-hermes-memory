@@ -81,7 +81,9 @@ export const SCHEMA_SQL = `
     tool_state TEXT,
     corrected_to TEXT,
     created DATE NOT NULL,
-    last_referenced DATE NOT NULL
+    last_referenced DATE NOT NULL,
+    hit_count INTEGER NOT NULL DEFAULT 0,
+    last_hit_at DATE
   );
 
   -- FTS5 trigram index for memory substring search

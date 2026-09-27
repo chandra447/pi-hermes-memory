@@ -755,8 +755,8 @@ export class DatabaseManager {
 
   private copyMemories(source: DatabaseLike, target: DatabaseLike): number {
     const insert = target.prepare(`
-      INSERT OR IGNORE INTO memories (id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR IGNORE INTO memories (id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced, hit_count, last_hit_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     let copied = 0;
 
@@ -771,6 +771,8 @@ export class DatabaseManager {
       'corrected_to',
       'created',
       'last_referenced',
+      'hit_count',
+      'last_hit_at',
     ])) {
       const id = this.integerOr(row.id, NaN);
       if (!Number.isFinite(id) || typeof row.content !== 'string') continue;
@@ -779,6 +781,8 @@ export class DatabaseManager {
       const category = typeof row.category === 'string' && MEMORY_CATEGORIES.has(row.category) ? row.category : null;
       const created = typeof row.created === 'string' ? row.created : new Date(0).toISOString();
       const lastReferenced = typeof row.last_referenced === 'string' ? row.last_referenced : created;
+      const hitCount = this.integerOr(row.hit_count, 0);
+      const lastHitAt = this.nullableString(row.last_hit_at);
 
       insert.run(
         id,
@@ -791,6 +795,8 @@ export class DatabaseManager {
         this.nullableString(row.corrected_to),
         created,
         lastReferenced,
+        hitCount,
+        lastHitAt,
       );
       copied++;
     }
@@ -947,6 +953,12 @@ export class DatabaseManager {
     if (!names.has('corrected_to')) {
       db.exec('ALTER TABLE memories ADD COLUMN corrected_to TEXT');
     }
+    if (!names.has('hit_count')) {
+      db.exec('ALTER TABLE memories ADD COLUMN hit_count INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!names.has('last_hit_at')) {
+      db.exec('ALTER TABLE memories ADD COLUMN last_hit_at DATE');
+    }
   }
 
   private ensureSessionsColumns(db: DatabaseLike): void {
@@ -1015,13 +1027,15 @@ export class DatabaseManager {
             tool_state TEXT,
             corrected_to TEXT,
             created DATE NOT NULL,
-            last_referenced DATE NOT NULL
+            last_referenced DATE NOT NULL,
+            hit_count INTEGER NOT NULL DEFAULT 0,
+            last_hit_at DATE
           );
         `);
 
         db.exec(`
-          INSERT INTO memories_new (id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced)
-          SELECT id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced
+          INSERT INTO memories_new (id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced, hit_count, last_hit_at)
+          SELECT id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced, hit_count, last_hit_at
           FROM memories;
         `);
 
@@ -1049,13 +1063,15 @@ export class DatabaseManager {
           tool_state TEXT,
           corrected_to TEXT,
           created DATE NOT NULL,
-          last_referenced DATE NOT NULL
+          last_referenced DATE NOT NULL,
+          hit_count INTEGER NOT NULL DEFAULT 0,
+          last_hit_at DATE
         );
       `);
 
       db.exec(`
-          INSERT INTO memories_new (id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced)
-          SELECT id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced
+          INSERT INTO memories_new (id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced, hit_count, last_hit_at)
+          SELECT id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced, hit_count, last_hit_at
           FROM memories;
         `);
 

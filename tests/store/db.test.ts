@@ -374,6 +374,8 @@ describe('DatabaseManager', () => {
       assert.ok(names.includes('failure_reason'));
       assert.ok(names.includes('tool_state'));
       assert.ok(names.includes('corrected_to'));
+      assert.ok(names.includes('hit_count'), 'hit_count must exist after the legacy rebuild');
+      assert.ok(names.includes('last_hit_at'), 'last_hit_at must exist after the legacy rebuild');
 
       migratedManager.close();
     });
