@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseManager } from '../../src/store/db.js';
-import { addMemory } from '../../src/store/sqlite-memory-store.js';
+import { addMemory, getMemoryUsageSignals } from '../../src/store/sqlite-memory-store.js';
 import { normalizeMemoryLookupText } from '../../src/store/memory-lookup.js';
 import { registerMemorySearchTool } from '../../src/tools/memory-search-tool.js';
 
@@ -100,6 +100,83 @@ describe('registerMemorySearchTool', () => {
 
     assert.match(firstResultLine, /scope=project:foo%5D%20bar \[target=project\]/);
     assert.equal(normalizeMemoryLookupText(firstResultLine), 'literal project entry');
+
+    dbManager.close();
+  });
+
+  it('records a usage hit for every returned entry', async () => {
+    const dbManager = makeDbManager();
+    addMemory(dbManager, 'recallable volcano note', 'memory');
+    addMemory(dbManager, 'recallable tide note', 'memory');
+
+    let captured: any;
+    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, dbManager);
+
+    await captured.execute('tc-1', { query: 'recallable' });
+    await captured.execute('tc-2', { query: 'volcano' });
+
+    const signals = getMemoryUsageSignals(dbManager, { target: 'memory', project: null });
+    assert.strictEqual(signals.get('recallable volcano note')?.hits, 2);
+    assert.strictEqual(signals.get('recallable tide note')?.hits, 1);
+
+    dbManager.close();
+  });
+
+  it('records nothing when the search returns no results', async () => {
+    const dbManager = makeDbManager();
+    addMemory(dbManager, 'unmatched entry', 'memory');
+
+    let captured: any;
+    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, dbManager);
+
+    const result = await captured.execute('tc-1', { query: 'zzz-no-match-q' });
+    assert.strictEqual(result.details.count, 0);
+    assert.strictEqual(getMemoryUsageSignals(dbManager, { target: 'memory', project: null }).size, 0);
+
+    dbManager.close();
+  });
+
+  it('skips recording when usage tracking is disabled', async () => {
+    const dbManager = makeDbManager();
+    addMemory(dbManager, 'tracked-off entry', 'memory');
+
+    let captured: any;
+    registerMemorySearchTool(
+      { registerTool: (def: any) => { captured = def; } } as any,
+      dbManager,
+      { usageTrackingEnabled: false },
+    );
+
+    const result = await captured.execute('tc-1', { query: 'tracked-off' });
+    assert.strictEqual(result.details.count, 1);
+    assert.strictEqual(getMemoryUsageSignals(dbManager, { target: 'memory', project: null }).size, 0);
+
+    dbManager.close();
+  });
+
+  it('never breaks the search when hit recording fails (fail-open)', async () => {
+    const dbManager = makeDbManager();
+    addMemory(dbManager, 'resilient entry', 'memory');
+
+    let getDbCalls = 0;
+    const realGetDb = dbManager.getDb.bind(dbManager);
+    const flaky = Object.create(dbManager) as DatabaseManager;
+    flaky.getDb = () => {
+      getDbCalls++;
+      if (getDbCalls > 2) throw new Error('injected recording failure');
+      return realGetDb();
+    };
+
+    let captured: any;
+    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, flaky);
+
+    // getDb calls: getMemoryStats(1) + searchMemories(1) + recordSearchHits(1, throws).
+    const result = await captured.execute('tc-1', { query: 'resilient' });
+    assert.strictEqual(result.details.success, true);
+    assert.strictEqual(result.details.count, 1);
+    assert.match(result.content[0].text, /resilient entry/);
+    // The hit did NOT land (recording failed) but the search succeeded.
+    assert.strictEqual(getMemoryUsageSignals(dbManager, { target: 'memory', project: null }).size, 0);
 
     dbManager.close();
   });

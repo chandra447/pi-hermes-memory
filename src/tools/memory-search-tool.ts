@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { DatabaseManager } from '../store/db.js';
-import { searchMemories, getMemoryStats } from '../store/sqlite-memory-store.js';
+import { searchMemories, getMemoryStats, recordSearchHits } from '../store/sqlite-memory-store.js';
 import type { MemoryCategory } from '../types.js';
 import { createSharedToolResultRenderer } from './shared-output-view.js';
 import { searchResultView } from './tool-result-views.js';
@@ -24,7 +24,11 @@ function scopeLabel(project: string | null): string {
   return project ? `project:${encodeURIComponent(project)}` : "global";
 }
 
-export function registerMemorySearchTool(pi: ExtensionAPI, dbManager: DatabaseManager): void {
+export function registerMemorySearchTool(
+  pi: ExtensionAPI,
+  dbManager: DatabaseManager,
+  options: { usageTrackingEnabled?: boolean } = {},
+): void {
   pi.registerTool({
     name: 'memory_search',
     label: 'Memory Search',
@@ -76,6 +80,16 @@ Returns matching memory entries with their mutation target, scope, and dates. Th
       if (results.length === 0) {
         const result: SearchResult = { success: true, count: 0, message: `No memories found matching "${query}". Try a different search term or broader query.` };
         return { content: [{ type: 'text' as const, text: result.message! }], details: result };
+      }
+
+      // Usage-hit tracking (the promotion-gate data for consolidation): one
+      // batched counter UPDATE per search. Must never break the read path.
+      if (options.usageTrackingEnabled !== false) {
+        try {
+          recordSearchHits(dbManager, results.map((entry) => entry.id));
+        } catch (err) {
+          console.warn(`[pi-hermes-memory] usage-hit recording failed (search result unaffected): ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
 
       let output = `Found ${results.length} memories matching "${query}":\n\n`;
