@@ -427,6 +427,9 @@ export async function triggerConsolidation(
         const outOfScope = beforeRound.filter(
           (entry) => !batchSet.has(entry) && !promptEntries.includes(entry),
         );
+        if (outOfScope.length > 0) {
+          notes.push(`round ${currentRound} coincided with ${outOfScope.length} out-of-scope entr${outOfScope.length === 1 ? "y" : "ies"} disappearing (by the child or a concurrent writer) — inspect memory if that was not intended`);
+        }
 
         const usageAfter = usageOf(promptEntries);
         const shrank = usageAfter < usageBefore;
@@ -449,9 +452,6 @@ export async function triggerConsolidation(
         }
 
         completedRounds++;
-        if (outOfScope.length > 0) {
-          notes.push(`round ${currentRound} coincided with ${outOfScope.length} out-of-scope entr${outOfScope.length === 1 ? "y" : "ies"} disappearing (by the child or a concurrent writer) — inspect memory if that was not intended`);
-        }
 
         if (!shrank) {
           // This round shrank nothing. Walk to the next slice rather than
