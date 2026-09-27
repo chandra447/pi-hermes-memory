@@ -297,13 +297,20 @@ export default function (pi: ExtensionAPI) {
     const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectNameRef(), standingStore);
     if (!promptContext) return;
 
-    // pi 0.87+ exposes mutable structured prompt options. Appending through
-    // them keeps the prompt a set of named sections; returning `systemPrompt`
-    // instead forces the rendered text and flattens the sections for every
-    // later handler and for section-aware providers (#251). SDKs before 0.87
-    // do not carry the field, so the replacement path stays for them.
-    const promptOptions = (event as { systemPromptOptions?: { appendSystemPrompt?: string } }).systemPromptOptions;
-    if (promptOptions) {
+    // pi 0.86+ hands handlers a normalized clone of these options and re-renders
+    // the prompt from it, so appending through `appendSystemPrompt` keeps the
+    // prompt a set of named sections; returning `systemPrompt` instead forces the
+    // rendered text and flattens the sections for every later handler and for
+    // section-aware providers (#251).
+    //
+    // Branch on that mechanism, not on the field: `systemPromptOptions` is on the
+    // event at the 0.80.6 floor too, but 0.80.x-0.85.x pass the raw long-lived
+    // base options and only apply a returned `systemPrompt`, so an append there
+    // reaches no prompt and does not stay private either — it accumulates in the
+    // object `ctx.getSystemPromptOptions()` hands to other extensions. Every
+    // 0.86+ runner normalizes `sections` onto the clone it passes.
+    const promptOptions = event.systemPromptOptions;
+    if (promptOptions && "sections" in promptOptions) {
       promptOptions.appendSystemPrompt = [promptOptions.appendSystemPrompt, promptContext]
         .filter(Boolean)
         .join("\n\n");

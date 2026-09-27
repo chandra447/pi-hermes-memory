@@ -1,11 +1,17 @@
 /**
  * `before_agent_start` prompt injection (#251).
  *
- * pi 0.87 exposes mutable structured prompt options. Appending the memory
- * context through them keeps the prompt a set of named sections for later
- * handlers and section-aware providers; returning `systemPrompt` forces the
- * rendered text instead. Older SDKs have no such field and must keep the
- * replacement path.
+ * pi 0.86+ passes a normalized *clone* of the prompt options and re-renders the
+ * prompt from it, so appending the memory context through `appendSystemPrompt`
+ * keeps the prompt a set of named sections for later handlers and section-aware
+ * providers; returning `systemPrompt` forces the rendered text instead.
+ *
+ * 0.80.6-0.85.x put `systemPromptOptions` on the event too, but they pass the raw
+ * long-lived base options and only apply a returned `systemPrompt` — a mutation
+ * there reaches no prompt and leaks into `ctx.getSystemPromptOptions()`. The two
+ * shapes below are the ones `agent-session.js` actually builds on each side of
+ * that boundary, so the branch is tested against the real inputs rather than a
+ * hand-built `{}` that no SDK version produces.
  */
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
@@ -20,6 +26,39 @@ process.env.PI_CODING_AGENT_DIR = root;
 const { default: registerExtension } = await import("../src/index.js");
 const globalDir = path.join(root, "pi-hermes-memory");
 const cwd = path.join(root, "workspace");
+
+/** Options as 0.86+ normalizes them: `sections` and `forceSystemPrompt` always present. */
+function structuredOptions(overrides: Record<string, unknown> = {}) {
+  return {
+    customPrompt: undefined,
+    forceSystemPrompt: undefined,
+    selectedTools: ["read"],
+    toolSnippets: {},
+    toolGuidelines: {},
+    promptGuidelines: [],
+    appendSystemPrompt: "",
+    sections: {},
+    cwd,
+    contextFiles: [],
+    skills: [],
+    ...overrides,
+  };
+}
+
+/** Options as 0.80.x-0.85.x build them: the raw base object, no `sections`. */
+function legacyOptions(overrides: Record<string, unknown> = {}) {
+  return {
+    cwd,
+    skills: [],
+    contextFiles: [],
+    customPrompt: undefined,
+    appendSystemPrompt: "",
+    selectedTools: ["read"],
+    toolSnippets: {},
+    promptGuidelines: [],
+    ...overrides,
+  };
+}
 
 let handlers: Record<string, Array<(event: any, ctx: any) => any>>;
 let ctx: any;
@@ -82,24 +121,24 @@ after(async () => {
 describe("before_agent_start prompt injection", () => {
   it("appends through structured prompt options instead of forcing the prompt", async () => {
     await registerWith();
-    const event = { systemPrompt: "base prompt", systemPromptOptions: {} as { appendSystemPrompt?: string } };
+    const event = { systemPrompt: "base prompt", systemPromptOptions: structuredOptions() };
 
     const result = await emit("before_agent_start", event);
 
     assert.equal(result, undefined, "structured events must not force a full prompt replacement");
-    assert.match(event.systemPromptOptions.appendSystemPrompt ?? "", /memory-policy/);
+    assert.match(event.systemPromptOptions.appendSystemPrompt, /memory-policy/);
   });
 
   it("appends after an earlier handler's appendSystemPrompt", async () => {
     await registerWith();
     const event = {
       systemPrompt: "base prompt",
-      systemPromptOptions: { appendSystemPrompt: "earlier handler text" },
+      systemPromptOptions: structuredOptions({ appendSystemPrompt: "earlier handler text" }),
     };
 
     await emit("before_agent_start", event);
 
-    const appended = event.systemPromptOptions.appendSystemPrompt ?? "";
+    const appended = event.systemPromptOptions.appendSystemPrompt;
     assert.match(appended, /earlier handler text/);
     assert.match(appended, /memory-policy/);
     assert.ok(
@@ -108,7 +147,22 @@ describe("before_agent_start prompt injection", () => {
     );
   });
 
-  it("keeps the replacement path when the SDK exposes no structured options", async () => {
+  it("reaches the 0.80.x session through the returned prompt, not the options object", async () => {
+    await registerWith();
+    const options = legacyOptions();
+    const event = { systemPrompt: "base prompt", systemPromptOptions: options };
+
+    const result = await emit("before_agent_start", event);
+
+    // 0.80.x-0.85.x apply `result.systemPrompt` or reset to the base prompt
+    // (agent-session.js); the options object is never rendered, and it is the one
+    // `ctx.getSystemPromptOptions()` hands to other extensions.
+    const applied = result?.systemPrompt ?? event.systemPrompt;
+    assert.match(applied, /memory-policy/, "the policy must reach a prompt the session applies");
+    assert.equal(options.appendSystemPrompt, "", "a legacy event must not accumulate into the exposed options");
+  });
+
+  it("keeps the replacement path when the event carries no options at all", async () => {
     await registerWith();
     const result = await emit("before_agent_start", { systemPrompt: "base prompt" });
 
@@ -116,13 +170,15 @@ describe("before_agent_start prompt injection", () => {
     assert.match(result.systemPrompt, /memory-policy/);
   });
 
-  it("leaves structured options untouched when there is no context to inject", async () => {
+  it("leaves the options untouched when there is no context to inject", async () => {
     await registerWith({ memoryPolicyStyle: "none" });
-    const event = { systemPrompt: "base prompt", systemPromptOptions: {} as Record<string, unknown> };
+    const options = structuredOptions();
+    const snapshot = structuredClone(options);
+    const event = { systemPrompt: "base prompt", systemPromptOptions: options };
 
     const result = await emit("before_agent_start", event);
 
     assert.equal(result, undefined);
-    assert.deepEqual(event.systemPromptOptions, {});
+    assert.deepEqual(event.systemPromptOptions, snapshot);
   });
 });
