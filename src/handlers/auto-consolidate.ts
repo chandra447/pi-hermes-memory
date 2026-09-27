@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
+import { getMemoryUsageSignals, type MemoryUsageSignal } from "../store/sqlite-memory-store.js";
 import {
   CONSOLIDATION_PROMPT,
   CONSOLIDATION_CHUNK_CHARS_MIN,
@@ -41,7 +42,7 @@ type ToolMemoryTarget = MemoryTarget | "project";
 type ConsolidationLlmConfig = Pick<
   MemoryConfig,
   "llmModelOverride" | "llmThinkingOverride" | "reviewTransport"
-  | "consolidationChunking" | "consolidationChunkChars"
+  | "consolidationChunking" | "consolidationChunkChars" | "consolidationUsageSignals"
 >;
 
 // staleMs is deliberately decoupled from the consolidation timeout. The holder
@@ -172,15 +173,22 @@ function buildConsolidationPrompt(
   toolTarget: ToolMemoryTarget,
   entries: string[],
   scoped = false,
+  usageSignals: Map<string, MemoryUsageSignal> | null = null,
 ): string {
   const lines = [
     CONSOLIDATION_PROMPT,
     "",
     `--- Current ${labelForTarget(target, toolTarget)} Entries ---`,
     entries.join(ENTRY_DELIMITER) || "(empty)",
+  ];
+  const signalsSection = usageSignalsSectionText(usageSignals, entries);
+  if (signalsSection) {
+    lines.push("", signalsSection);
+  }
+  lines.push(
     "",
     `Use memory_add, memory_replace, or memory_remove to consolidate. Target: '${toolTarget}'`,
-  ];
+  );
   if (scoped) {
     // Chunked rounds present a slice of the store, but the child's memory tools
     // can see everything. Without an explicit scope the model may modify entries
@@ -192,6 +200,84 @@ function buildConsolidationPrompt(
     );
   }
   return lines.join("\n");
+}
+
+/** Longest entry excerpt shown in a usage-signals line. */
+const USAGE_SIGNAL_EXCERPT_CHARS = 80;
+/** Cap for the low-information half (never-recalled lines) so a chunk of many
+ *  small entries cannot balloon a round's prompt past its bounded budget. */
+const USAGE_SIGNAL_NEVER_RECALLED_MAX_LINES = 20;
+
+function usageSignalExcerpt(entry: string): string {
+  const flat = entry.replace(/\s+/g, " ").trim();
+  return flat.length > USAGE_SIGNAL_EXCERPT_CHARS
+    ? `${flat.slice(0, USAGE_SIGNAL_EXCERPT_CHARS - 3)}...`
+    : flat;
+}
+
+/**
+ * Per-entry recall counts from the memory_search read path — the promotion-gate
+ * data telling the model which entries are load-bearing and which have never
+ * earned their place. Null (and therefore absent from prompts) until at least
+ * one presented entry has actually been recalled, so stores without tracking
+ * history keep byte-identical prompts.
+ */
+function usageSignalsSectionText(
+  usageSignals: Map<string, MemoryUsageSignal> | null,
+  entries: string[],
+): string | null {
+  if (!usageSignals || usageSignals.size === 0 || entries.length === 0) return null;
+
+  const trackedLines: string[] = [];
+  const neverRecalledLines: string[] = [];
+  for (const entry of entries) {
+    const signal = usageSignals.get(entry.trim());
+    const excerpt = usageSignalExcerpt(entry);
+    if (signal) {
+      trackedLines.push(`- recalled ${signal.hits}x, last ${signal.lastHit}: "${excerpt}"`);
+    } else {
+      neverRecalledLines.push(`- never recalled: "${excerpt}"`);
+    }
+  }
+  if (trackedLines.length === 0) return null;
+
+  // Every entry with usage history is listed (usage concentrates in few
+  // entries); the never-recalled half is capped with a summary line — it is
+  // the low-information half and must not blow a chunked round's budget.
+  const lines = [
+    "--- Usage Signals (memory_search recall tracking) ---",
+    ...trackedLines,
+    ...neverRecalledLines.slice(0, USAGE_SIGNAL_NEVER_RECALLED_MAX_LINES),
+  ];
+  if (neverRecalledLines.length > USAGE_SIGNAL_NEVER_RECALLED_MAX_LINES) {
+    lines.push(`- (+${neverRecalledLines.length - USAGE_SIGNAL_NEVER_RECALLED_MAX_LINES} more listed entries have no recorded recalls)`);
+  }
+  lines.push(
+    "Treat these as tie-breakers, not removal orders: well-recalled entries are load-bearing (prefer keeping or merging them); never-recalled entries are weaker keep candidates.",
+  );
+  return lines.join("\n");
+}
+
+/**
+ * Scoped recall stats for the store being consolidated, or null when tracking
+ * is off, no database is available, or the lookup fails (fail-open).
+ */
+function loadUsageSignals(
+  dbManager: DatabaseManager | null,
+  llmConfig: ConsolidationLlmConfig,
+  target: MemoryTarget,
+  toolTarget: ToolMemoryTarget,
+  projectName: string | null | undefined,
+): Map<string, MemoryUsageSignal> | null {
+  if (!dbManager || llmConfig.consolidationUsageSignals === false) return null;
+  try {
+    return getMemoryUsageSignals(dbManager, {
+      target,
+      project: toolTarget === "project" ? (projectName ?? null) : null,
+    });
+  } catch {
+    return null;
+  }
 }
 
 function chunkCharsFor(config: ConsolidationLlmConfig): number {
@@ -236,9 +322,12 @@ export async function triggerConsolidation(
   const entries = entriesForTarget(store, target);
   const currentContent = entries.join(ENTRY_DELIMITER);
   const runDirect = deps.runDirectMemoryCompletion ?? runDirectMemoryCompletion;
+  const usageSignals = loadUsageSignals(dbManager, llmConfig, target, toolTarget, projectName);
 
   if (directCtx && usesDirectTransport(llmConfig)) {
     try {
+      const directEntriesHeader = `--- Current ${labelForTarget(target, toolTarget)} Entries (target: '${toolTarget}') ---`;
+      const directSignalsSection = usageSignalsSectionText(usageSignals, entries);
       const directResult = await runDirect(
         directCtx,
         store,
@@ -246,8 +335,9 @@ export async function triggerConsolidation(
         {
           systemPrompt: DIRECT_CONSOLIDATION_SYSTEM_PROMPT,
           userPrompt: [
-            `--- Current ${labelForTarget(target, toolTarget)} Entries (target: '${toolTarget}') ---`,
+            directEntriesHeader,
             currentContent || "(empty)",
+            ...(directSignalsSection ? ["", directSignalsSection] : []),
             "",
             `Only emit operations with "target": "${toolTarget}".`,
           ].join("\n"),
@@ -329,10 +419,11 @@ export async function triggerConsolidation(
 
       if (!chunkingEnabled) {
         // Legacy single-shot path — the flag default. Byte-identical to
-        // pre-chunking releases for stores of any size. When an oversized
-        // store times out, the error names the remedy keys so the failure
-        // teaches the fix.
-        const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, promptEntries), llmConfig, {
+        // pre-chunking releases for stores of any size (usage signals are the
+        // one additive prompt section, and only once tracking data exists).
+        // When an oversized store times out, the error below names the remedy
+        // keys so the failure teaches the fix.
+        const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, promptEntries, false, usageSignals), llmConfig, {
           signal,
           timeoutMs,
           retryWithoutOverrides: true,
@@ -398,7 +489,7 @@ export async function triggerConsolidation(
           : takeChunk(promptEntries.slice(offset), chunkChars);
         const batchSet = new Set(batch);
         const beforeRound = promptEntries;
-        const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, batch, !fitsOneChunk), llmConfig, {
+        const result = await execChildPrompt(pi, buildConsolidationPrompt(target, toolTarget, batch, !fitsOneChunk, usageSignals), llmConfig, {
           signal,
           timeoutMs: Math.min(timeoutMs, remaining),
           retryWithoutOverrides: true,

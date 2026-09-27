@@ -2,7 +2,7 @@
  * Unit tests for auto-consolidation — triggerConsolidation and /memory-consolidate command.
  */
 
-import { describe, it, beforeEach, before, after } from "node:test";
+import { describe, it, beforeEach, afterEach, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -12,6 +12,8 @@ import { registerConsolidateCommand, triggerConsolidation } from "../../src/hand
 import { resolveWatchedChildPiInvocation } from "../../src/handlers/pi-child-process.js";
 import { MemoryStore } from "../../src/store/memory-store.js";
 import { AtomicLockCoordinator } from "../../src/store/atomic-lock-coordinator.js";
+import { DatabaseManager } from "../../src/store/db.js";
+import { addMemory, recordSearchHits } from "../../src/store/sqlite-memory-store.js";
 import {
   DEFAULT_CONSOLIDATION_CHUNK_CHARS,
   MAX_CONSOLIDATION_ROUNDS,
@@ -1916,5 +1918,146 @@ describe("chunked consolidation edge behavior", () => {
       );
     }
     assert.ok(result.error?.includes("time budget (11500ms) exhausted"), result.error);
+  });
+});
+
+// ─── Usage signals (PR-2 promotion gate) ───
+
+const SIGNAL_ENTRY_RECALLED = "usage-signal entry alpha — recalled by search often";
+const SIGNAL_ENTRY_NEVER = "usage-signal entry beta — never recalled by search";
+const SIGNALS_HEADER = "--- Usage Signals (memory_search recall tracking) ---";
+const SIGNALS_GUIDANCE = "Treat these as tie-breakers, not removal orders";
+
+function makeUsageStore(entries: string[]) {
+  return {
+    getMemoryEntries: () => [...entries],
+    getUserEntries: () => [],
+    getAllFailureEntries: () => [],
+    getStorageIdentity: async (target: string) => path.join("usage-store", target),
+    loadFromDisk: async () => {},
+    capacityGoal: () => 10,
+    capacityUsage: () => 1000,
+  } as any;
+}
+
+function todayStr(): string {
+  return new Date().toISOString().split("T")[0];
+}
+
+describe("consolidation usage signals", () => {
+  let usageDb: DatabaseManager;
+  let usageDir = "";
+
+  beforeEach(async () => {
+    // This describe is top-level (appended after the others), so the
+    // triggerConsolidation describe's beforeEach does not apply: reset the
+    // shared exec capture and lock dir here too.
+    execCalls = [];
+    process.env.PI_HERMES_CONSOLIDATION_LOCK_DIR = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pi-consolidation-locks-"),
+    );
+    usageDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-usage-signal-consolidation-"));
+    usageDb = new DatabaseManager(usageDir);
+  });
+
+  afterEach(() => {
+    try { usageDb.close(); } catch { /* already closed by the test */ }
+    try { fs.rmSync(usageDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
+  it("keeps the subprocess prompt byte-identical when the database has no tracking data", async () => {
+    addMemory(usageDb, SIGNAL_ENTRY_NEVER, "memory"); // zero hits → no signals
+    const store = makeUsageStore([SIGNAL_ENTRY_NEVER]);
+
+    const piWithDb = createMockPi();
+    await triggerConsolidation(piWithDb, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true }, null, usageDb);
+    const withDbPrompt = childPrompt(execCalls[0]);
+
+    execCalls = [];
+    const piNoDb = createMockPi();
+    await triggerConsolidation(piNoDb, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true });
+    const noDbPrompt = childPrompt(execCalls[0]);
+
+    assert.strictEqual(withDbPrompt, noDbPrompt, "prompt must be identical with a dataless database attached");
+    assert.ok(!withDbPrompt.includes(SIGNALS_HEADER));
+
+  });
+
+  it("annotates recalled and never-recalled entries once tracking data exists", async () => {
+    const recalledRow = addMemory(usageDb, SIGNAL_ENTRY_RECALLED, "memory");
+    addMemory(usageDb, SIGNAL_ENTRY_NEVER, "memory");
+    recordSearchHits(usageDb, [recalledRow.id]);
+    const store = makeUsageStore([SIGNAL_ENTRY_RECALLED, SIGNAL_ENTRY_NEVER]);
+
+    const pi = createMockPi();
+    await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true }, null, usageDb);
+
+    const prompt = childPrompt(execCalls[0]);
+    assert.ok(prompt.includes(SIGNALS_HEADER), "usage signals header present");
+    assert.ok(prompt.includes(`recalled 1x, last ${todayStr()}: "${SIGNAL_ENTRY_RECALLED}"`), "recalled entry annotated with count + date");
+    assert.ok(prompt.includes(`never recalled: "${SIGNAL_ENTRY_NEVER}"`), "never-recalled entry annotated");
+    assert.ok(prompt.includes(SIGNALS_GUIDANCE), "tie-breaker guidance present");
+    // The real entry list stays untouched (child copies entry text from there).
+    assert.ok(prompt.includes(`--- Current Memory Entries ---\n${SIGNAL_ENTRY_RECALLED}\n§\n${SIGNAL_ENTRY_NEVER}\n\n${SIGNALS_HEADER}`));
+
+  });
+
+  it("omits the section when consolidationUsageSignals is off even with data", async () => {
+    const recalledRow = addMemory(usageDb, SIGNAL_ENTRY_RECALLED, "memory");
+    recordSearchHits(usageDb, [recalledRow.id]);
+    const store = makeUsageStore([SIGNAL_ENTRY_RECALLED]);
+
+    const pi = createMockPi();
+    await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true, consolidationUsageSignals: false }, null, usageDb);
+
+    const prompt = childPrompt(execCalls[0]);
+    assert.ok(!prompt.includes(SIGNALS_HEADER), "kill-switch must suppress the section");
+
+  });
+
+  it("annotates only the presented batch in chunked rounds", async () => {
+    const entries: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      entries.push(`usage chunk entry ${String(i).padStart(2, "0")} — ${"filler prose for sizing ".repeat(3)}end-${i}`);
+    }
+    const store = makeUsageStore(entries);
+    const rows = entries.map((entry) => addMemory(usageDb, entry, "memory"));
+    recordSearchHits(usageDb, [rows[10].id]); // only a TAIL entry has usage data
+
+    const pi = createMockPi();
+    await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", {
+      consolidationChunking: true,
+      consolidationChunkChars: 500,
+    }, null, usageDb);
+
+    assert.ok(execCalls.length >= 3, `expected multiple rounds, got ${execCalls.length}`);
+    const firstPrompt = childPrompt(execCalls[0]);
+    assert.ok(!firstPrompt.includes(SIGNALS_HEADER), "a batch with no tracked entries gets no section");
+    const annotatedAt = execCalls.findIndex((_, i) => childPrompt(execCalls[i]).includes("recalled 1x"));
+    assert.ok(annotatedAt > 0, "the round containing the tracked entry carries the section");
+    const annotatedPrompt = childPrompt(execCalls[annotatedAt]);
+    assert.ok(annotatedPrompt.includes(`recalled 1x, last ${todayStr()}: "${entries[10].slice(0, 77)}...`), "tail entry annotated when it reaches a batch");
+
+  });
+
+  it("embeds the same section in the direct-transport userPrompt", async () => {
+    const recalledRow = addMemory(usageDb, SIGNAL_ENTRY_RECALLED, "memory");
+    recordSearchHits(usageDb, [recalledRow.id]);
+    const store = makeUsageStore([SIGNAL_ENTRY_RECALLED]);
+
+    directCalls = [];
+    const pi = createMockPi();
+    const deps = makeDirectDeps({ ok: true, appliedCount: 1 });
+    const result = await triggerConsolidation(
+      pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory",
+      directTransportLlmConfig, createDirectCtx() as any, usageDb, null, deps,
+    );
+
+    assert.strictEqual(result.consolidated, true);
+    assert.strictEqual(directCalls.length, 1, "direct transport used, no subprocess needed");
+    const options = (directCalls[0][3] ?? directCalls[0][directCalls[0].length - 1]) as { userPrompt: string };
+    assert.ok(options.userPrompt.includes(SIGNALS_HEADER), "direct prompt carries the section");
+    assert.ok(options.userPrompt.includes(`recalled 1x, last ${todayStr()}: "${SIGNAL_ENTRY_RECALLED}"`));
+
   });
 });
