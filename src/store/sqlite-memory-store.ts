@@ -1193,9 +1193,13 @@ export function recordSearchHits(dbManager: DatabaseManager, ids: number[]): voi
 }
 
 /**
- * Recall stats for every entry in a store scope, keyed by entry content
+ * Recall stats for every entry in a store scope, keyed by entry CONTENT only
  * (trimmed — the same stripped form MemoryStore entries and the SQLite mirror
- * both use). Entries with no recorded recalls are absent from the map.
+ * both use). Note this is narrower than syncMemoryEntry's identity
+ * (project+target+category+content): two rows with identical text but
+ * different categories share one signal, and the first matching row wins —
+ * harmless for advisory tie-breaker data. Entries with no recorded recalls
+ * are absent from the map.
  */
 export function getMemoryUsageSignals(
   dbManager: DatabaseManager,

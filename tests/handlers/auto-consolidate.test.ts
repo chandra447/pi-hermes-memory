@@ -2061,3 +2061,67 @@ describe("consolidation usage signals", () => {
 
   });
 });
+
+describe("consolidation usage signals — large all-recalled store (review blocker)", () => {
+  let usageDb: DatabaseManager;
+  let usageDir = "";
+
+  beforeEach(async () => {
+    // Top-level describe: reset the shared exec capture and lock dir here too.
+    execCalls = [];
+    process.env.PI_HERMES_CONSOLIDATION_LOCK_DIR = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pi-consolidation-locks-"),
+    );
+    usageDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-usage-signal-cap-"));
+    usageDb = new DatabaseManager(usageDir);
+  });
+
+  afterEach(() => {
+    try { usageDb.close(); } catch { /* already closed by the test */ }
+    try { fs.rmSync(usageDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
+  it("caps the tracked half, ranks by hits, and folds the remainder into a summary line", async () => {
+    // 40 entries, EVERY one recalled (the mature-store shape where the old
+    // uncapped tracked half grew with the store: 40 tracked lines). Each entry
+    // ~120 chars so the whole store fits one decisive prompt (chunking off).
+    const entries: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      entries.push(`mature-store entry ${String(i).padStart(2, "0")} — ${"recalled prose for sizing ".repeat(3)}end-${i}`);
+    }
+    const store = makeUsageStore(entries);
+    const rows = entries.map((entry) => addMemory(usageDb, entry, "memory"));
+    for (const row of rows) {
+      const hits = 1 + (rows.indexOf(row) % 5); // 1..5 hits, entry 39 has 5
+      for (let i = 0; i < hits; i++) recordSearchHits(usageDb, [row.id]);
+    }
+    // Highest count is on the LAST store entry — sorting must still surface it.
+    for (let i = 0; i < 95; i++) recordSearchHits(usageDb, [rows[39].id]);
+
+    const pi = createMockPi();
+    // One decisive whole-store round: all 40 tracked entries in ONE prompt —
+    // the mature-store shape the owner measured at 270% of the chunk budget.
+    await triggerConsolidation(pi, store, "memory", undefined, DEFAULT_CONSOLIDATION_TIMEOUT_MS, "memory", { consolidationChunking: true, consolidationChunkChars: 999999 }, null, usageDb);
+
+    const prompt = childPrompt(execCalls[0]);
+    const sectionStart = prompt.indexOf("--- Usage Signals (memory_search recall tracking) ---");
+    assert.ok(sectionStart > 0, "signals section present");
+    const section = prompt.slice(sectionStart, prompt.indexOf("Use memory_add", sectionStart));
+
+    const trackedLines = section.split("\n").filter((l) => l.startsWith("- recalled "));
+    assert.strictEqual(trackedLines.length, 20, `tracked half capped at 20 (got ${trackedLines.length})`);
+    assert.match(section, /\(\+20 more recalled entries omitted — showing the top 20 by recall count\)/, "remainder folded into a summary line");
+    // Ranked by hits: the 100-hit entry must top the kept half despite being
+    // LAST in store order, and the kept half is non-increasing by count.
+    assert.match(trackedLines[0], /- recalled 100x, last \d{4}-\d{2}-\d{2}: "mature-store entry 39/);
+    const counts = trackedLines.map((l) => Number(l.match(/- recalled (\d+)x/)![1]));
+    for (let i = 1; i < counts.length; i++) {
+      assert.ok(counts[i] <= counts[i - 1], `kept half must be sorted by hits desc (got ${counts[i - 1]} -> ${counts[i]})`);
+    }
+    // Never-recalled half is empty here — no never-recalled summary expected.
+    assert.ok(!section.includes("have no recorded recalls"));
+    // Bounded section: constant line count, not store-proportional.
+    assert.ok(section.length < 4500, `section bounded (got ${section.length} chars)`);
+    usageDb.close();
+  });
+});

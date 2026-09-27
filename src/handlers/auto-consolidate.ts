@@ -204,8 +204,11 @@ function buildConsolidationPrompt(
 
 /** Longest entry excerpt shown in a usage-signals line. */
 const USAGE_SIGNAL_EXCERPT_CHARS = 80;
-/** Cap for the low-information half (never-recalled lines) so a chunk of many
- *  small entries cannot balloon a round's prompt past its bounded budget. */
+/** Caps per half (tracked / never-recalled) so a chunk of many small entries —
+ *  or a mature store where everything has been recalled — cannot balloon a
+ *  round's prompt past its bounded budget. Both halves fold their remainder
+ *  into one summary line. */
+const USAGE_SIGNAL_TRACKED_MAX_LINES = 20;
 const USAGE_SIGNAL_NEVER_RECALLED_MAX_LINES = 20;
 
 function usageSignalExcerpt(entry: string): string {
@@ -228,27 +231,36 @@ function usageSignalsSectionText(
 ): string | null {
   if (!usageSignals || usageSignals.size === 0 || entries.length === 0) return null;
 
-  const trackedLines: string[] = [];
+  const tracked: Array<{ entry: string; signal: MemoryUsageSignal }> = [];
   const neverRecalledLines: string[] = [];
   for (const entry of entries) {
     const signal = usageSignals.get(entry.trim());
     const excerpt = usageSignalExcerpt(entry);
     if (signal) {
-      trackedLines.push(`- recalled ${signal.hits}x, last ${signal.lastHit}: "${excerpt}"`);
+      tracked.push({ entry, signal });
     } else {
       neverRecalledLines.push(`- never recalled: "${excerpt}"`);
     }
   }
-  if (trackedLines.length === 0) return null;
+  if (tracked.length === 0) return null;
 
-  // Every entry with usage history is listed (usage concentrates in few
-  // entries); the never-recalled half is capped with a summary line — it is
-  // the low-information half and must not blow a chunked round's budget.
+  // Both halves are capped with a summary line for the remainder: a chunk of
+  // many small entries — or a mature store where every entry has been recalled
+  // — must not balloon a chunked round's prompt past its bounded budget.
+  // Tracked entries are ranked by recall count so the most load-bearing ones
+  // survive the cut.
+  tracked.sort((a, b) => b.signal.hits - a.signal.hits);
+  const trackedLines = tracked
+    .slice(0, USAGE_SIGNAL_TRACKED_MAX_LINES)
+    .map(({ signal, entry }) => `- recalled ${signal.hits}x, last ${signal.lastHit}: "${usageSignalExcerpt(entry)}"`);
   const lines = [
     "--- Usage Signals (memory_search recall tracking) ---",
     ...trackedLines,
-    ...neverRecalledLines.slice(0, USAGE_SIGNAL_NEVER_RECALLED_MAX_LINES),
   ];
+  if (tracked.length > USAGE_SIGNAL_TRACKED_MAX_LINES) {
+    lines.push(`- (+${tracked.length - USAGE_SIGNAL_TRACKED_MAX_LINES} more recalled entries omitted — showing the top ${USAGE_SIGNAL_TRACKED_MAX_LINES} by recall count)`);
+  }
+  lines.push(...neverRecalledLines.slice(0, USAGE_SIGNAL_NEVER_RECALLED_MAX_LINES));
   if (neverRecalledLines.length > USAGE_SIGNAL_NEVER_RECALLED_MAX_LINES) {
     lines.push(`- (+${neverRecalledLines.length - USAGE_SIGNAL_NEVER_RECALLED_MAX_LINES} more listed entries have no recorded recalls)`);
   }
