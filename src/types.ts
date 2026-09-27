@@ -110,6 +110,20 @@ export interface MemoryConfig {
    */
   consolidationChunking?: boolean;
   consolidationChunkChars?: number;
+  /**
+   * Record memory_search recalls per entry (hit_count / last_hit_at). Default:
+   * true. Recording is invisible — it changes no prompt, ranking, or result;
+   * the counters only feed consolidation usage signals and /memory-insights.
+   */
+  usageHitTrackingEnabled?: boolean;
+  /**
+   * Feed recorded memory_search recalls into consolidation prompts as per-entry
+   * "Usage Signals" (the blog-style promotion gate: well-recalled entries are
+   * load-bearing, never-recalled entries are weaker keep candidates). Inert
+   * until entries have actually been recalled — fresh installs see byte-identical
+   * prompts until real usage accrues. Default: true.
+   */
+  consolidationUsageSignals?: boolean;
   /** Log failed auto-consolidation attempts to the session console. Default: true */
   autoConsolidationWarnOnFailure: boolean;
   /** Inject pinned STANDING.md instructions into every session. Default: true */

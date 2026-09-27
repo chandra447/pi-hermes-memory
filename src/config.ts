@@ -70,6 +70,8 @@ const DEFAULT_CONFIG: MemoryConfig = {
   consolidationChunking: DEFAULT_CONSOLIDATION_CHUNKING,
   consolidationChunkChars: DEFAULT_CONSOLIDATION_CHUNK_CHARS,
   consolidationTimeoutMs: DEFAULT_CONSOLIDATION_TIMEOUT_MS,
+  usageHitTrackingEnabled: true,
+  consolidationUsageSignals: true,
   autoConsolidationWarnOnFailure: true,
   nudgeToolCalls: DEFAULT_NUDGE_TOOL_CALLS,
   standingInstructionsEnabled: true,
@@ -153,6 +155,12 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       }
       if (typeof parsed.consolidationChunking === "boolean") {
         config.consolidationChunking = parsed.consolidationChunking;
+      }
+      if (typeof parsed.usageHitTrackingEnabled === "boolean") {
+        config.usageHitTrackingEnabled = parsed.usageHitTrackingEnabled;
+      }
+      if (typeof parsed.consolidationUsageSignals === "boolean") {
+        config.consolidationUsageSignals = parsed.consolidationUsageSignals;
       }
       if (typeof parsed.consolidationChunkChars === "number"
         && Number.isFinite(parsed.consolidationChunkChars)
