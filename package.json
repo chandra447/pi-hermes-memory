@@ -49,18 +49,19 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.80.6",
-    "@earendil-works/pi-coding-agent": ">=0.80.6"
+    "@earendil-works/pi-coding-agent": ">=0.80.6",
+    "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.80.2",
     "@earendil-works/pi-coding-agent": "^0.80.2",
+    "@earendil-works/pi-tui": "^0.80.2",
     "@types/better-sqlite3": "^7.6.13",
     "tsx": "^4.21.0",
     "typebox": "^1.1.33",
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "^0.80.2",
     "better-sqlite3": "^13.0.3",
     "strip-ansi": "7.2.0"
   }
