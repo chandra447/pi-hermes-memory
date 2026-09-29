@@ -11,7 +11,7 @@ import {
   registerSyncMarkdownMemoriesCommand,
   syncMarkdownMemoriesToSqlite,
 } from '../../src/handlers/sync-markdown-memories.js';
-import { ENTRY_DELIMITER } from '../../src/constants.js';
+import { ENTRY_DELIMITER, MDSYNC_METADATA_KEY_PREFIX } from '../../src/constants.js';
 import { addMemory, getMemories, reconcileMarkdownMemoryScope, searchMemories } from '../../src/store/sqlite-memory-store.js';
 import { AtomicLockCoordinator } from '../../src/store/atomic-lock-coordinator.js';
 import { MemoryStore } from '../../src/store/memory-store.js';
@@ -605,5 +605,68 @@ describe('memory sqlite sync + markdown backfill', () => {
     assert.strictEqual(counters.imported, 0);
     assert.strictEqual(counters.warnings.length, 0, 'the observer-written fingerprint must let startup skip without touching memories');
     assert.strictEqual(counters.skipped, 1);
+  });
+
+  it('scoped startup sync reconciles only globals and the current project', async () => {
+    fs.writeFileSync(path.join(globalDir, 'MEMORY.md'), 'global memory', 'utf-8');
+    fs.writeFileSync(path.join(globalDir, 'USER.md'), 'global user', 'utf-8');
+    const total = 30;
+    for (let i = 0; i < total; i++) {
+      const dir = path.join(agentRoot, 'projects-memory', `proj-${i}`);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'MEMORY.md'), `memory for project ${i}`, 'utf-8');
+    }
+    // A stale mirror row outside the startup scope must survive: scoped runs
+    // never prune scopes they did not reconcile (the full command does that).
+    addMemory(dbManager, 'stale out-of-scope row', 'memory', 'proj-29');
+
+    const counters = await syncMarkdownMemoriesToSqlite(dbManager, globalDir, undefined, agentRoot, {
+      onlyProjects: ['proj-0'],
+    });
+
+    assert.strictEqual(counters.projectCount, 1);
+    assert.strictEqual(counters.filesScanned, 3, 'global MEMORY.md + USER.md + proj-0 only');
+    const current = searchMemories(dbManager, 'memory for project 0', { project: 'proj-0', target: 'memory' });
+    assert.strictEqual(current.length, 1);
+    assert.deepStrictEqual(getMemories(dbManager, { project: 'proj-1', target: 'memory' }), []);
+    assert.strictEqual(
+      getMemories(dbManager, { project: 'proj-29', target: 'memory' }).length,
+      1,
+      'out-of-scope mirror rows are left alone',
+    );
+    const fingerprints = dbManager.getDb().prepare(
+      `SELECT key FROM extension_metadata WHERE key LIKE '${MDSYNC_METADATA_KEY_PREFIX}%'`,
+    ).all() as Array<{ key: string }>;
+    assert.ok(
+      fingerprints.every((row) => row.key.includes('proj-0') || row.key.includes('null')),
+      `no fingerprint may be recorded for unscanned projects: ${fingerprints.map((row) => row.key)}`,
+    );
+  });
+
+  it('scoped startup sync with no project reconciles globals only', async () => {
+    fs.writeFileSync(path.join(globalDir, 'MEMORY.md'), 'global memory', 'utf-8');
+    const dir = path.join(agentRoot, 'projects-memory', 'proj-0');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'MEMORY.md'), 'memory for project 0', 'utf-8');
+
+    const counters = await syncMarkdownMemoriesToSqlite(dbManager, globalDir, undefined, agentRoot, {
+      onlyProjects: [],
+    });
+
+    assert.strictEqual(counters.projectCount, 0);
+    assert.strictEqual(counters.filesScanned, 1);
+    assert.deepStrictEqual(getMemories(dbManager, { project: 'proj-0', target: 'memory' }), []);
+  });
+
+  it('scoped startup sync still prunes the current project when its file is gone', async () => {
+    addMemory(dbManager, 'stale current-project row', 'memory', 'proj-gone');
+
+    const counters = await syncMarkdownMemoriesToSqlite(dbManager, globalDir, undefined, agentRoot, {
+      onlyProjects: ['proj-gone'],
+    });
+
+    assert.strictEqual(counters.projectCount, 1);
+    assert.strictEqual(counters.removed, 1);
+    assert.deepStrictEqual(getMemories(dbManager, { project: 'proj-gone', target: 'memory' }), []);
   });
 });

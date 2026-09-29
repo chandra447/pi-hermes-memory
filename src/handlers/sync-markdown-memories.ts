@@ -28,12 +28,18 @@ export interface BackfillCounters {
   warnings: string[];
 }
 
-export interface MigrationSyncOptions extends ExtensionRootMigrationOptions {
+export interface MigrationSyncOptions extends ExtensionRootMigrationOptions, SyncMarkdownOptions {
   onMigrationSucceeded?: () => void;
 }
 
 export interface SyncMarkdownOptions {
   force?: boolean;
+  /**
+   * Startup scope: reconcile only these project scopes (plus the global
+   * files), so a pi startup never touches every projects-memory folder.
+   * `undefined`/`null` keeps the full sweep used by /memory-sync-markdown.
+   */
+  onlyProjects?: string[] | null;
 }
 
 function readEntries(filePath: string): string[] {
@@ -189,6 +195,20 @@ export async function syncMarkdownMemoriesToSqlite(
   await reconcileFile(globalUserFile, 'user');
   await reconcileFile(globalFailureFile, 'failure');
 
+  // Startup passes onlyProjects (global files + current project) so boot cost
+  // never scales with the projects-memory folder count. The full sweep below
+  // stays for /memory-sync-markdown, which is the repair path for the scopes
+  // a scoped startup skips (including orphan pruning outside the scope).
+  const scopedProjects = options?.onlyProjects ?? null;
+  if (scopedProjects) {
+    const projectsRoot = path.resolve(agentRoot, projectsMemoryDir ?? 'projects-memory');
+    for (const projectName of new Set(scopedProjects)) {
+      const memoryFile = resolveAuthoritativeMemoryFile(projectsRoot, projectName);
+      await reconcileFile(memoryFile, 'memory', projectName);
+    }
+    return { ...counters, projectCount: new Set(scopedProjects).size };
+  }
+
   const projects = scanProjectDirs(agentRoot, globalDir, projectsMemoryDir);
   const projectFiles = new Map(projects.map((project) => [project.name, project.memoryFile]));
   const mirroredProjects = dbManager.getDb().prepare(`
@@ -226,7 +246,10 @@ export async function migrateThenSyncMarkdownMemories(
     }
     migrationOptions.onMigrationSucceeded?.();
   }
-  return await syncMarkdownMemoriesToSqlite(dbManager, globalDir, projectsMemoryDir, agentRoot);
+  return await syncMarkdownMemoriesToSqlite(dbManager, globalDir, projectsMemoryDir, agentRoot, {
+    force: migrationOptions.force,
+    onlyProjects: migrationOptions.onlyProjects,
+  });
 }
 
 export function registerSyncMarkdownMemoriesCommand(

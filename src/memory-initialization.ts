@@ -16,7 +16,7 @@ function waitForReady(promise: Promise<void>, signal?: AbortSignal): Promise<voi
 
 /** Own initialization, per-use preparation and operations through shutdown. */
 export function createMemoryInitializer(
-  initialize: () => Promise<void>,
+  initialize: (ctx?: MemoryContext) => Promise<void>,
   prepare?: (ctx: MemoryContext) => Promise<void>,
 ) {
   let pending: Promise<void> | undefined;
@@ -39,7 +39,7 @@ export function createMemoryInitializer(
     assertOpen();
     signal?.throwIfAborted();
     if (!initialized) {
-      pending ??= Promise.resolve().then(initialize).then(() => {
+      pending ??= Promise.resolve().then(() => initialize(ctx)).then(() => {
         initialized = true;
       }).finally(() => {
         pending = undefined;

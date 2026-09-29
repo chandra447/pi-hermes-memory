@@ -193,12 +193,19 @@ export default function (pi: ExtensionAPI) {
         shouldMigrateExtensionRoot ? path.join(legacyGlobalDir, STANDING_FILE) : undefined)
     : null;
 
-  const initialization = createMemoryInitializer(async () => {
+  const initialization = createMemoryInitializer(async (ctx) => {
     const timingPrefix = lazy ? "memory-init" : "session-start";
     if (lazy) migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
     if (!persistenceInitialized) {
       try {
         await measureLifecycle(`${timingPrefix}.persistence-sync`, async () => {
+          // Startup reconciles the global files plus the current project only:
+          // a full sweep over every projects-memory folder serialized
+          // concurrent startups on the shared mutation-lock database.
+          // /memory-sync-markdown remains the repair path for other scopes.
+          const startupProject = ctx?.cwd
+            ? detectProject(config.projectsMemoryDir, ctx.cwd).name
+            : null;
           await migrateThenSyncMarkdownMemories(
             dbManager,
             shouldMigrateExtensionRoot ? legacyGlobalDir : null,
@@ -206,6 +213,7 @@ export default function (pi: ExtensionAPI) {
             config.projectsMemoryDir,
             agentRoot,
             {
+              onlyProjects: startupProject ? [startupProject] : [],
               onMigrationSucceeded: () => {
                 databaseMigrationPending = false;
               },
