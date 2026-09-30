@@ -13,9 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Opt-in SQLite session retention** ([#183](https://github.com/chandra447/pi-hermes-memory/issues/183)): new `sessionRetentionDays` setting (default `0`, disabled). When set to a positive value, sessions whose JSONL source file has not been updated within the window are pruned from SQLite at startup — rows only, the JSONL files themselves are never deleted — and both the deferred backfill and `/memory-index-sessions` skip files outside the window, so pruned sessions stay pruned instead of being re-indexed on every startup. With the default `0`, pruning is fully disabled and startup keeps the legacy count-only backfill preflight.
 
+- **`sessionIndexExclude`: skip whole directories when indexing sessions** ([#223](https://github.com/chandra447/pi-hermes-memory/pull/223)): new `sessionIndexExclude` setting (default `[]`, disabled). `~/.pi/agent/sessions/` is a shared namespace, so extensions such as pi-subagents' `subagent-artifacts/` legitimately keep JSONL there that is not a session. Non-session *files* are already skipped by content sniffing; this setting also skips entire first-level directories regardless of content, e.g. `"sessionIndexExclude": ["subagent-artifacts"]` — exact names or `*` globs (`["artifact-*"]`). The list applies to the startup backfill preflight, the deferred backfill, live indexing, and `/memory-index-sessions`. Entries must be plain first-level directory names: values that are blank after trimming, or that contain a path separator or a `..` segment, are dropped with a warning instead of being accepted as a config value that can never match a directory.
+
 ### Changed
 
 - **Natural-language search now filters common stop words** ([#184](https://github.com/chandra447/pi-hermes-memory/pull/184)): session and memory searches drop function words (`the`, `is`, `what`, …) before FTS5 matching, improving precision for natural-language queries. Intent-bearing words (`can`, `need`, `off`, `like`, `get`, …) are deliberately kept. A query made up entirely of stop words no longer returns an empty result — it degrades to a scoped literal substring search over the original terms.
+
+- **Non-session JSONL artifacts are skipped silently instead of failing the backfill** ([#223](https://github.com/chandra447/pi-hermes-memory/pull/223)): session discovery treated every `.jsonl` under `~/.pi/agent/sessions/` as a session, so JSONL that extensions drop in the shared sessions root produced a `Failed to parse: <path>` error per file, a `N file errors` warning, and consumed the per-startup indexing budget (one reported install logged `41 file errors` on every launch). Files whose first line is not a `{"type":"session",…}` header are now detected with a bounded 4 KB first-line sniff and skipped: they are counted apart from real failures in the indexer result and in `/memory-index-sessions` output, and they no longer keep the deferred backfill preflight re-scheduling on every startup. Genuinely corrupt session files — and files whose header line runs past the sniff window — still surface as errors.
 
 ### Fixed
 
@@ -24,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Policy-only memory writes bypass the Markdown character cap** ([#218](https://github.com/chandra447/pi-hermes-memory/issues/218)): SQLite is the query authority in policy-only mode, so adds, replacements, and atomic mutation plans can exceed the Markdown export limit without triggering automatic consolidation. Legacy-inject mode keeps its existing caps, grace windows, auto-consolidation, failure limits, and FIFO eviction.
 
 - **SQLite open integrity scans can be disabled** ([#194](https://github.com/chandra447/pi-hermes-memory/issues/194)): set `quickCheckOnOpen` to `false` to skip the asynchronous startup `PRAGMA quick_check`; operation-time corruption recovery remains enabled.
+
+- **BOM-prefixed session files are indexed instead of reported as parse failures** ([#223](https://github.com/chandra447/pi-hermes-memory/pull/223)): reading a session JSONL as UTF-8 keeps a byte-order mark (U+FEFF) as a leading character, so the raw header line failed `JSON.parse`, the session id was never read, and the file was reported as `Failed to parse: <path>` — a real session lost from search with only an error to show for it. A leading BOM is now stripped before parsing (for the full parse and for the 4 KB sniff, which stays a single positional read); files with or without a BOM index identically.
 
 ### Fixed
 

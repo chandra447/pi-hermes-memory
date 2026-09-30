@@ -90,6 +90,23 @@ function extractToolCalls(content: unknown): string[] | undefined {
   return toolNames.length > 0 ? toolNames : undefined;
 }
 
+/** Remove a leading UTF-8 byte-order mark (U+FEFF) from decoded text. */
+function stripLeadingBom(text: string): string {
+  return text.startsWith('\uFEFF') ? text.slice(1) : text;
+}
+
+/**
+ * Read a file as UTF-8 with a leading byte-order mark removed.
+ *
+ * Decoding with `utf-8` keeps a BOM as a leading U+FEFF character, which makes
+ * the raw first line fail `JSON.parse`. For a session JSONL that means the
+ * session header is skipped, the file parses to `null`, and the indexer reports
+ * it as "Failed to parse" even though its content is intact.
+ */
+function readUtf8WithoutBom(filePath: string): string {
+  return stripLeadingBom(fs.readFileSync(filePath, 'utf-8'));
+}
+
 /**
  * Parse a Pi session JSONL file.
  *
@@ -97,7 +114,7 @@ function extractToolCalls(content: unknown): string[] | undefined {
  * @returns Parsed session data, or null if the file is invalid
  */
 export function parseSessionFile(filePath: string): ParsedSession | null {
-  const content = fs.readFileSync(filePath, 'utf-8');
+  const content = readUtf8WithoutBom(filePath);
   const lines = content.split('\n').filter(line => line.trim());
 
   if (lines.length === 0) return null;
@@ -192,9 +209,9 @@ export function isSessionFile(filePath: string): boolean {
     const buf = Buffer.alloc(SNIFF_BYTES);
     const bytesRead = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0);
     if (bytesRead === 0) return false;
-    const head = buf.subarray(0, bytesRead).toString('utf-8');
-    const newline = head.indexOf('\n');
-    const firstLine = (newline === -1 ? head : head.slice(0, newline)).trim();
+    const text = stripLeadingBom(buf.subarray(0, bytesRead).toString('utf-8'));
+    const newline = text.indexOf('\n');
+    const firstLine = (newline === -1 ? text : text.slice(0, newline)).trim();
     if (!firstLine) return false;
     try {
       const entry = JSON.parse(firstLine);

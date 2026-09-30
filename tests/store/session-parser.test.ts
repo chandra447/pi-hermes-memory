@@ -233,6 +233,39 @@ describe('session-parser', () => {
       assert.ok(result);
       assert.strictEqual(result.messages[0].content, 'I inspected the file.');
     });
+
+    it('should parse a session file that starts with a UTF-8 BOM', () => {
+      const filePath = path.join(tmpDir, 'bom.jsonl');
+      const lines = [
+        JSON.stringify({ type: 'session', id: 'bom-1', timestamp: '2026-05-03T00:00:00Z', cwd: '/Users/test/bom-project' }),
+        JSON.stringify({
+          type: 'message',
+          id: 'msg-1',
+          parentId: null,
+          timestamp: '2026-05-03T00:01:00Z',
+          message: {
+            role: 'user',
+            content: [{ type: 'text', text: 'BOM-prefixed session' }],
+            timestamp: Date.now(),
+          },
+        }),
+      ];
+      // Written as raw bytes, the way an editor that defaults to "UTF-8 with
+      // BOM" would. Without stripping it the header line fails JSON.parse, so
+      // the session id is never read and the indexer reports "Failed to parse".
+      fs.writeFileSync(
+        filePath,
+        Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(lines.join('\n'), 'utf-8')]),
+      );
+
+      const result = parseSessionFile(filePath);
+      assert.ok(result);
+      assert.strictEqual(result.id, 'bom-1');
+      assert.strictEqual(result.cwd, '/Users/test/bom-project');
+      assert.strictEqual(result.messages.length, 1);
+      assert.strictEqual(result.messages[0].content, 'BOM-prefixed session');
+      assert.strictEqual(isSessionFile(filePath), true);
+    });
   });
 
   describe('getSessionFiles', () => {
