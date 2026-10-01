@@ -268,20 +268,33 @@ function indexLiveSessionOnce(dbManager: DatabaseManager, sessionManager: Sessio
 export function pruneEphemeralReviewSessions(dbManager: DatabaseManager): number {
   return dbManager.withCorruptionRecovery(() => {
     const db = dbManager.getDb();
+    // The prompt directory is `mkdtemp(join(os.tmpdir(), "pi-hermes-prompt-"))`, so
+    // the stored wrapper is per-OS and per-run: `/tmp/...` on Linux,
+    // `/var/folders/<xx>/<yy>/T/...` on macOS, `%TEMP%\...` on Windows. Matching
+    // the marker separator-agnostically reclaims rows from every platform and from
+    // temp directories that no longer exist, which matching `os.tmpdir()` cannot
+    // do (it only ever names the current one). Anchoring on the attachment wrapper
+    // keeps the specificity the old `/tmp` prefix provided — a bare
+    // `%pi-hermes-prompt-%` also matches source-code quotes of that marker.
+    //
+    // A child session can have its assistant reply indexed too, which the removed
+    // `COUNT(*) = 1` treated as "not a child session". The marker row is the
+    // stable signal instead: a user message carrying that wrapper in a session
+    // with no file row.
     const candidates = db.prepare(`
       SELECT s.id
       FROM sessions s
       WHERE NOT EXISTS (
         SELECT 1 FROM session_files sf WHERE sf.session_id = s.id
       )
-        AND (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) = 1
         AND EXISTS (
           SELECT 1
           FROM messages m
           WHERE m.session_id = s.id
+            AND m.role = 'user'
             AND m.content LIKE ?
         )
-    `).all('<file name="/tmp/pi-hermes-prompt-%') as Array<{ id: string }>;
+    `).all('<file name="%pi-hermes-prompt-%prompt.md">%') as Array<{ id: string }>;
 
     if (candidates.length === 0) return 0;
 

@@ -489,6 +489,115 @@ describe('session-indexer', () => {
       assert.strictEqual(dbManager.getStats().messages, 0);
     });
 
+    it('removes file-less review sessions from every OS temp directory', () => {
+      // The prompt directory comes from os.tmpdir(), so the stored path is
+      // per-OS: `/tmp` on Linux, `/var/folders/<xx>/<yy>/T` on macOS, `%TEMP%`
+      // on Windows. Only the Linux shape was matched before.
+      const fileRefs: Array<[string, string]> = [
+        ['macos-background-review', '/var/folders/xy/zzz123/T/pi-hermes-prompt-Ab12Cd/prompt.md'],
+        ['windows-background-review', 'C:\\Users\\me\\AppData\\Local\\Temp\\pi-hermes-prompt-Ef34Gh\\prompt.md'],
+      ];
+      for (const [id, fileRef] of fileRefs) {
+        indexSession(dbManager, {
+          id,
+          project: 'review',
+          cwd: '/tmp/review',
+          startedAt: '2026-05-03T00:00:00Z',
+          endedAt: null,
+          messages: [{
+            id: `${id}-message`,
+            role: 'user',
+            content: `<file name="${fileRef}">\nReview the conversation above.`,
+            timestamp: '2026-05-03T00:01:00Z',
+          }],
+        });
+      }
+
+      assert.strictEqual(pruneEphemeralReviewSessions(dbManager), 2);
+      assert.strictEqual(dbManager.getStats().sessions, 0);
+      assert.strictEqual(dbManager.getStats().messages, 0);
+    });
+
+    it('removes a file-less review session whose reply was indexed too', () => {
+      indexSession(dbManager, {
+        id: 'review-with-reply',
+        project: 'review',
+        cwd: '/tmp/review',
+        startedAt: '2026-05-03T00:00:00Z',
+        endedAt: null,
+        messages: [
+          // The child's reply can be indexed ahead of the prompt row, so the
+          // prompt is not necessarily the session's first message.
+          {
+            id: 'review-reply',
+            role: 'assistant',
+            content: 'Consolidated 4 entries → 3.',
+            timestamp: '2026-05-03T00:02:00Z',
+          },
+          {
+            id: 'review-prompt',
+            role: 'user',
+            content: '<file name="/tmp/pi-hermes-prompt-abc123/prompt.md">\nReview the conversation above.',
+            timestamp: '2026-05-03T00:01:00Z',
+          },
+        ],
+      });
+
+      assert.strictEqual(pruneEphemeralReviewSessions(dbManager), 1);
+      assert.strictEqual(dbManager.getStats().sessions, 0);
+      assert.strictEqual(dbManager.getStats().messages, 0);
+    });
+
+    it('keeps file-less sessions that are not the extension\'s own child runs', () => {
+      const filePath = path.join(tmpDir, 'real-session.jsonl');
+      fs.writeFileSync(filePath, '');
+      // File-backed session that does reference an ephemeral prompt file.
+      indexSession(dbManager, {
+        id: 'file-backed-session',
+        project: 'real',
+        cwd: '/work',
+        startedAt: '2026-05-03T00:00:00Z',
+        endedAt: null,
+        messages: [{
+          id: 'file-backed-message',
+          role: 'user',
+          content: '<file name="/tmp/pi-hermes-prompt-abc123/prompt.md">\nA real session that attached that file.',
+          timestamp: '2026-05-03T00:01:00Z',
+        }],
+      });
+      upsertSessionFileMetadata(dbManager, filePath, 'file-backed-session');
+      // File-less sessions without the marker, including one that only quotes it.
+      indexSession(dbManager, {
+        id: 'file-less-real-session',
+        project: 'real',
+        cwd: '/work',
+        startedAt: '2026-05-03T00:00:00Z',
+        endedAt: null,
+        messages: [{
+          id: 'file-less-message',
+          role: 'user',
+          content: 'A real session whose file row was never recorded.',
+          timestamp: '2026-05-03T00:01:00Z',
+        }],
+      });
+      indexSession(dbManager, {
+        id: 'quotes-the-marker',
+        project: 'real',
+        cwd: '/work',
+        startedAt: '2026-05-03T00:00:00Z',
+        endedAt: null,
+        messages: [{
+          id: 'quote-message',
+          role: 'user',
+          content: "grep -n 'pi-hermes-prompt-' src/handlers/pi-child-process.ts",
+          timestamp: '2026-05-03T00:01:00Z',
+        }],
+      });
+
+      assert.strictEqual(pruneEphemeralReviewSessions(dbManager), 0);
+      assert.strictEqual(dbManager.getStats().sessions, 3);
+    });
+
     it('indexCurrentSession indexes missing live messages idempotently', () => {
       const entries = [
         {
