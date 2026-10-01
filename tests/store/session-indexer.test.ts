@@ -780,11 +780,22 @@ describe('session-indexer', () => {
 
     it('prunes only sessions whose file mtime is outside the retention window', () => {
       const sessionsDir = path.join(tmpDir, 'sessions');
-      writeJsonlSessionAt(sessionsDir, 'old', cutoffFor(60));
-      writeJsonlSessionAt(sessionsDir, 'recent', now());
+      const oldFile = writeJsonlSessionAt(sessionsDir, 'old', cutoffFor(60));
+      const recentFile = writeJsonlSessionAt(sessionsDir, 'recent', now());
       indexAllSessions(dbManager, sessionsDir);
+      const db = dbManager.getDb();
+      const checkpoint = (file: string) => db.prepare('SELECT value FROM extension_metadata WHERE key = ?').get(`session-index-v1:${file}`);
+      const retained = checkpoint(recentFile);
+      assert.ok(checkpoint(oldFile));
+      assert.ok(retained);
+      db.prepare('INSERT INTO extension_metadata (key, value) VALUES (?, ?)').run(LAST_SESSION_BACKFILL_KEY, 'keep');
 
       const pruned = pruneOldSessions(dbManager, 30);
+      assert.equal(checkpoint(oldFile), undefined);
+      assert.deepEqual(checkpoint(recentFile), retained);
+      assert.deepEqual(db.prepare('SELECT value FROM extension_metadata WHERE key = ?').get(LAST_SESSION_BACKFILL_KEY), { value: 'keep' });
+      assert.deepEqual(pruneOldSessions(dbManager, 30), { sessionsRemoved: 0, messagesRemoved: 0 });
+      assert.deepEqual(checkpoint(recentFile), retained);
       // 'old' has an expired file mtime and is pruned; 'recent' has a fresh
       // file mtime and is kept, even though both were indexed.
       assert.strictEqual(pruned.sessionsRemoved, 1);
@@ -799,6 +810,18 @@ describe('session-indexer', () => {
     it('removes nothing when the database is empty', () => {
       const result = pruneOldSessions(dbManager, 30);
       assert.deepStrictEqual(result, { sessionsRemoved: 0, messagesRemoved: 0 });
+    });
+
+    it('cleans already-orphaned checkpoints even when no sessions qualify', () => {
+      const db = dbManager.getDb();
+      const insert = db.prepare('INSERT INTO extension_metadata (key, value) VALUES (?, ?)');
+      insert.run(LAST_SESSION_BACKFILL_KEY, 'keep');
+      insert.run('unrelated:/deleted/session.jsonl', 'keep too');
+      const retained = db.prepare('SELECT key, value FROM extension_metadata ORDER BY key').all();
+      insert.run('session-index-v1:/deleted/session.jsonl', '{}');
+      assert.deepEqual(pruneOldSessions(dbManager, 30), { sessionsRemoved: 0, messagesRemoved: 0 });
+      assert.deepEqual(db.prepare('SELECT key, value FROM extension_metadata ORDER BY key').all(), retained);
+      assert.deepEqual(pruneOldSessions(dbManager, 30), { sessionsRemoved: 0, messagesRemoved: 0 });
     });
 
     it('removes sessions older than the retention window and their messages', () => {

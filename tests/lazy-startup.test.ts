@@ -12,6 +12,8 @@ process.env.PI_CODING_AGENT_DIR = root;
 const { default: registerExtension } = await import("../src/index.js");
 const { MemoryStore } = await import("../src/store/memory-store.js");
 const { DatabaseManager } = await import("../src/store/db.js");
+const { indexAllSessionsAsync, indexLiveSessionAsync } = await import("../src/store/session-indexer.js");
+const { SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS } = await import("../src/handlers/session-live-index.js");
 const globalDir = path.join(root, "pi-hermes-memory");
 const cwd = path.join(root, "workspace");
 const projectDir = path.join(root, "projects-memory", "workspace");
@@ -239,6 +241,103 @@ describe("lazy startup lifecycle", () => {
     const manager = getDb.mock.calls[0].this;
     assert.throws(() => manager.getDb(), /shut down/);
     assert.equal(close.mock.callCount(), 1);
+  });
+
+  for (const reason of ['quit', 'reload']) {
+    for (const queued of [true, false]) {
+      it(`bounds ${reason} with ${queued ? 'queued' : 'active'} live indexing and forbids late writes`, { timeout: 5000 }, async (t) => {
+        const file = await writeSession();
+        ctx.sessionManager.getSessionFile = () => file;
+        const getDb = t.mock.method(DatabaseManager.prototype, 'getDb');
+        const opens = t.mock.method(DatabaseManager.prototype as any, 'open');
+        const close = t.mock.method(DatabaseManager.prototype, 'close');
+        register();
+        await emit('session_start');
+        await search(); // Complete initialization/backfill before testing the index deadline.
+        const manager = getDb.mock.calls[0].this;
+        const key = `session-index-v1:${file}`;
+        const checkpoint = manager.getDb().prepare('SELECT value FROM extension_metadata WHERE key = ?').get(key);
+        assert.ok(checkpoint);
+        await fs.appendFile(file, '\n' + JSON.stringify({
+          type: 'message', id: 'late', timestamp: new Date().toISOString(),
+          message: { role: 'user', content: 'x'.repeat(512 * 1024) },
+        }) + '\n');
+
+        // Use a separate manager/file like the manual bulk command. Force a
+        // yield per chunk so the deadline is deterministic, not a speed test.
+        const bulkDir = path.join(root, 'bulk');
+        await fs.mkdir(bulkDir);
+        await fs.copyFile(file, path.join(bulkDir, 'bulk.jsonl'));
+        const bulkDb = new DatabaseManager(path.join(root, 'bulk-db'));
+        let clock = performance.now();
+        t.mock.method(performance, 'now', () => clock += 10);
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        let bulkFinished = !queued;
+        const bulk = queued ? indexAllSessionsAsync(bulkDb, bulkDir).then(() => { bulkFinished = true; }) : Promise.resolve();
+        let shutDown = false;
+        const shutdown = emit('session_shutdown', { reason }).then(() => { shutDown = true; });
+        try {
+          await new Promise(setImmediate);
+          assert.equal(shutDown, false);
+          assert.equal(close.mock.calls.filter(call => call.this === manager).length, 0);
+          t.mock.timers.tick(SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS);
+          await shutdown;
+          assert.equal(bulkFinished, !queued, 'shutdown must not wait for the bulk queue');
+          assert.equal(close.mock.calls.filter(call => call.this === manager).length, 1);
+          assert.throws(() => manager.getDb(), /shut down/);
+        } finally {
+          t.mock.timers.reset();
+          await bulk;
+          // A queue barrier also observes the late live-index rejection.
+          await indexLiveSessionAsync(bulkDb, { getSessionFile: () => undefined, getHeader: () => null, getEntries: () => [] });
+          bulkDb.close();
+        }
+        assert.equal(opens.mock.calls.filter(call => call.this === manager).length, 1, 'must not reopen the extension database');
+        const observer = new DatabaseManager(globalDir);
+        try {
+          assert.deepEqual(observer.getDb().prepare('SELECT value FROM extension_metadata WHERE key = ?').get(key), checkpoint);
+          assert.equal(observer.getDb().prepare('SELECT id FROM messages WHERE id = ?').get('late'), undefined);
+        } finally { observer.close(); }
+      });
+    }
+  }
+
+  it('keeps the successful shutdown checkpoint and clears its deadline', async (t) => {
+    const file = await writeSession();
+    ctx.sessionManager.getSessionFile = () => file;
+    register();
+    await emit('session_start');
+    await search();
+    await fs.appendFile(file, '\n' + JSON.stringify({
+      type: 'message', id: 'final', timestamp: new Date().toISOString(),
+      message: { role: 'user', content: 'final searchable text' },
+    }) + '\n');
+    const timers = t.mock.method(globalThis, 'setTimeout');
+    const cleared = t.mock.method(globalThis, 'clearTimeout');
+    await emit('session_shutdown', { reason: 'quit' });
+    const deadline = timers.mock.calls.find(call => call.arguments[1] === SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS);
+    assert.ok(deadline);
+    assert.ok(cleared.mock.calls.some(call => call.arguments[0] === deadline.result));
+    const observer = new DatabaseManager(globalDir);
+    try {
+      const row = observer.getDb().prepare('SELECT value FROM extension_metadata WHERE key = ?').get(`session-index-v1:${file}`) as { value: string };
+      assert.equal(JSON.parse(row.value).offset, (await fs.stat(file)).size);
+      assert.ok(observer.getDb().prepare('SELECT id FROM messages WHERE id = ?').get('final'));
+      assert.equal((await indexLiveSessionAsync(observer, { getSessionFile: () => file, getHeader: () => null, getEntries: () => [] }))?.messagesIndexed, 0);
+    } finally { observer.close(); }
+  });
+
+  it('closes cleanly when shutdown indexing rejects before the deadline', async (t) => {
+    const getDb = t.mock.method(DatabaseManager.prototype, 'getDb');
+    const close = t.mock.method(DatabaseManager.prototype, 'close');
+    register();
+    await emit('session_start');
+    await search();
+    const manager = getDb.mock.calls[0].this;
+    ctx.sessionManager.getSessionFile = () => { throw new Error('index failed'); };
+    await emit('session_shutdown', { reason: 'quit' });
+    assert.equal(close.mock.calls.filter(call => call.this === manager).length, 1);
+    assert.throws(() => manager.getDb(), /shut down/);
   });
 
   it("waits for the full scheduled batch across forty multi-message history files", async (t) => {

@@ -6,7 +6,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DatabaseManager } from '../store/db.js';
-import { indexAllSessions, getSessionStats, retentionCutoffMs } from '../store/session-indexer.js';
+import { indexAllSessionsAsync, getSessionStats, retentionCutoffMs } from '../store/session-indexer.js';
 import type { MemoryConfig } from '../types.js';
 import { AGENT_ROOT } from '../paths.js';
 
@@ -41,7 +41,7 @@ export function registerIndexSessionsCommand(pi: ExtensionAPI, config: MemoryCon
         try {
           // Retention is honored here too: a manual reindex must not re-add the
           // expired sessions the auto pruning just deleted.
-          const result = indexAllSessions(dbManager, SESSIONS_DIR, undefined, retentionCutoffMs(config.sessionRetentionDays));
+          const result = await indexAllSessionsAsync(dbManager, SESSIONS_DIR, undefined, retentionCutoffMs(config.sessionRetentionDays));
           const stats = getSessionStats(dbManager);
 
           let output = `\n✅ Session indexing complete!\n\n`;

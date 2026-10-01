@@ -1,7 +1,10 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { DEFAULT_MAX_MESSAGE_CONTENT_LENGTH } from '../constants.js';
 import { DatabaseManager } from './db.js';
-import { parseSessionFile, getSessionFiles, type ParsedSession } from './session-parser.js';
+import { searchEntryMessage, getSessionFiles, type ParsedSession } from './session-parser.js';
+import { readSessionRecords } from './session-stream.js';
 
 export const LAST_SESSION_BACKFILL_KEY = 'last_session_backfill';
 export const SESSION_BACKFILL_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -250,15 +253,167 @@ function indexLiveSessionOnce(dbManager: DatabaseManager, sessionManager: Sessio
   const sessionFile = sessionManager.getSessionFile?.();
   if (sessionManager.getSessionFile && !sessionFile) return null;
   if (sessionFile && fs.existsSync(sessionFile)) {
-    const session = parseSessionFile(sessionFile);
-    if (session) {
-      const result = indexSession(dbManager, session);
-      upsertSessionFileMetadata(dbManager, sessionFile, session.id);
-      return result;
-    }
+    const result = drain(indexFileSteps(dbManager, sessionFile));
+    if (result) return result;
   }
 
   return indexCurrentSession(dbManager, sessionManager);
+}
+
+function drain<T>(steps: Generator<void, T>): T {
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+async function drainAsync<T>(steps: Generator<void, T>): Promise<T> {
+  let deadline = performance.now() + 8;
+  try {
+    let step = steps.next();
+    while (!step.done) {
+      if (performance.now() >= deadline) {
+        await yieldToEventLoop();
+        deadline = performance.now() + 8;
+      }
+      step = steps.next();
+    }
+    return step.value;
+  } finally {
+    steps.return(undefined as T);
+  }
+}
+
+interface IndexCursor {
+  version: 1;
+  offset: number;
+  size: number;
+  mtimeMs: number;
+  ino: number;
+  dev: number;
+  fingerprint: string;
+  header: Omit<ParsedSession, 'messages'>;
+}
+
+function fingerprint(file: string, offset: number): string {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const hash = createHash('sha256');
+    const buffer = Buffer.alloc(Math.min(4096, offset));
+    // Bounded samples, not a full-prefix integrity guarantee.
+    for (const position of [0, Math.max(0, Math.floor(offset / 2) - Math.floor(buffer.length / 2)), Math.max(0, offset - buffer.length)]) {
+      const size = fs.readSync(fd, buffer, 0, buffer.length, position);
+      hash.update(buffer.subarray(0, size));
+    }
+    return hash.digest('hex');
+  } finally { fs.closeSync(fd); }
+}
+
+/** Batch writes and byte checkpoints keep both first import and later appends
+ * bounded. Old session_files metadata is not trusted as a parser checkpoint. */
+function* indexFileSteps(dbManager: DatabaseManager, file: string): Generator<void, IndexResult | null> {
+  const stat = fs.statSync(file);
+  const key = `session-index-v1:${file}`;
+  const db = dbManager.getDb();
+  const row = db.prepare('SELECT value FROM extension_metadata WHERE key = ?').get(key) as { value: string } | undefined;
+  let cursor: IndexCursor | undefined;
+  try { cursor = row ? JSON.parse(row.value) : undefined; } catch { /* stale checkpoint */ }
+  const valid = cursor?.version === 1 && Number.isSafeInteger(cursor.offset) && cursor.offset >= 0
+    && cursor.offset <= stat.size && cursor.size <= stat.size && cursor.ino === stat.ino && cursor.dev === stat.dev
+    && (cursor.size < stat.size || cursor.mtimeMs === stat.mtimeMs)
+    && cursor.header?.id && db.prepare('SELECT id FROM sessions WHERE id = ?').get(cursor.header.id)
+    && cursor.fingerprint === fingerprint(file, cursor.offset);
+  // Compare the same fixed extent before/after scanning: inode identity alone
+  // does not distinguish appends from in-place rewrites.
+  const beforeFingerprint = fingerprint(file, stat.size);
+  let session: ParsedSession | null = valid ? { ...cursor!.header, messages: [] } : null;
+  let offset = valid ? cursor!.offset : 0;
+  let result: IndexResult | null = null;
+  let batchSize = 0;
+  let replacedMessages = 0;
+  const flush = () => {
+    if (!session) return;
+    const batch = indexSessionOnce(dbManager, session);
+    result = result
+      ? { sessionId: batch.sessionId, messagesIndexed: result.messagesIndexed + batch.messagesIndexed, skipped: result.skipped && batch.skipped }
+      : batch;
+    session.messages = [];
+    batchSize = 0;
+  };
+  for (const record of readSessionRecords(file, offset, stat.size)) {
+    if (!record) { yield; continue; }
+    if (record.offset >= 0) offset = record.offset;
+    const entry = record.entry;
+    if (!entry) continue;
+    if (entry.type === 'session' && entry.id && entry.cwd && entry.timestamp) {
+      flush();
+      if (cursor && !valid && cursor.header?.id === entry.id) {
+        replacedMessages = (db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?').get(entry.id) as { count: number }).count;
+        db.prepare('DELETE FROM messages WHERE session_id = ?').run(entry.id);
+      }
+      session = { id: entry.id, cwd: entry.cwd, project: entry.cwd.split('/').pop() ?? entry.cwd, startedAt: entry.timestamp, endedAt: null, messages: [] };
+    }
+    const message = searchEntryMessage(entry);
+    if (session && message) {
+      session.messages.push(message);
+      batchSize += message.content.length;
+      if (session.messages.length >= 64 || batchSize >= 512 * 1024) { flush(); yield; }
+    }
+  }
+  flush();
+  if (result) (result as IndexResult).messagesIndexed = Math.max(0, (result as IndexResult).messagesIndexed - replacedMessages);
+  if (session) {
+    const after = fs.statSync(file);
+    // Growth is allowed only when the original extent's samples still match.
+    // Never mark the appended tail (or an incomplete record) as indexed.
+    if (after.ino === stat.ino && after.dev === stat.dev && after.size >= stat.size
+      && (after.size > stat.size || after.mtimeMs === stat.mtimeMs)
+      && beforeFingerprint === fingerprint(file, stat.size)) {
+      const { messages: _messages, ...header } = session;
+      const next: IndexCursor = { version: 1, offset, size: offset, mtimeMs: after.mtimeMs, ino: stat.ino, dev: stat.dev, fingerprint: fingerprint(file, offset), header };
+      dbManager.getDb().prepare('INSERT INTO extension_metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(next));
+      // A partial final record must remain eligible for the next backfill.
+      upsertSessionFileMetadata(dbManager, file, session.id, { path: file, size: offset, mtimeMs: Math.trunc(after.mtimeMs) });
+    } else {
+      // Batches may already contain pre-rewrite rows. Drop derived state so
+      // INSERT OR IGNORE cannot preserve stale content on the next full pass.
+      dbManager.getDb(); // Preserve the closed-DB guard before cleanup.
+      const discard = () => {
+        db.prepare('DELETE FROM messages WHERE session_id = ?').run(session!.id);
+        db.prepare('UPDATE sessions SET message_count = 0 WHERE id = ?').run(session!.id);
+        db.prepare('DELETE FROM extension_metadata WHERE key = ?').run(key);
+        db.prepare('DELETE FROM session_files WHERE path = ?').run(file);
+      };
+      if (db.transaction) db.transaction(discard)();
+      else discard();
+      return null;
+    }
+  }
+  return result;
+}
+
+// Serialize asynchronous scans so multiple sessions cannot each allocate a
+// batch or race the same checkpoint. Every scan yields during parsing.
+let indexingQueue: Promise<unknown> = Promise.resolve();
+function queuedIndex<T>(db: DatabaseManager, operation: () => Promise<T>): Promise<T> {
+  const task = indexingQueue.then(async () => {
+    try { return await operation(); }
+    catch (error) {
+      if (!DatabaseManager.isCorruptionError(error)) throw error;
+      db.recoverFromCorruption(error);
+      return await operation();
+    }
+  });
+  indexingQueue = task.catch(() => {});
+  return task;
+}
+
+export function indexLiveSessionAsync(db: DatabaseManager, manager: SessionManagerSnapshot): Promise<IndexResult | null> {
+  return queuedIndex(db, async () => {
+    const file = manager.getSessionFile?.();
+    if (manager.getSessionFile && !file) return null;
+    if (file && fs.existsSync(file)) return await drainAsync(indexFileSteps(db, file));
+    return indexCurrentSession(db, manager);
+  });
 }
 
 /**
@@ -339,17 +494,15 @@ function emptyBulkIndexResult(): BulkIndexResult {
   };
 }
 
-function indexSessionFile(dbManager: DatabaseManager, file: string, result: BulkIndexResult): void {
+function* indexSessionFileSteps(dbManager: DatabaseManager, file: string, result: BulkIndexResult): Generator<void> {
   result.sessionsProcessed++;
 
-  const session = parseSessionFile(file);
-  if (!session) {
+  const indexResult = yield* indexFileSteps(dbManager, file);
+  if (!indexResult) {
     result.errors.push(`Failed to parse: ${file}`);
     return;
   }
 
-  const indexResult = indexSession(dbManager, session);
-  upsertSessionFileMetadata(dbManager, file, session.id);
   if (indexResult.skipped) {
     result.sessionsSkipped++;
   } else {
@@ -377,6 +530,19 @@ export function indexAllSessions(
   projectDir?: string,
   retentionCutoffMs = 0,
 ): BulkIndexResult {
+  return dbManager.withCorruptionRecovery(() => drain(indexAllSessionsSteps(dbManager, sessionsDir, projectDir, retentionCutoffMs)));
+}
+
+export function indexAllSessionsAsync(db: DatabaseManager, dir: string, projectDir?: string, cutoff = 0): Promise<BulkIndexResult> {
+  return queuedIndex(db, () => drainAsync(indexAllSessionsSteps(db, dir, projectDir, cutoff)));
+}
+
+function* indexAllSessionsSteps(
+  dbManager: DatabaseManager,
+  sessionsDir: string,
+  projectDir: string | undefined,
+  retentionCutoffMs: number,
+): Generator<void, BulkIndexResult> {
   const files = getSessionFiles(sessionsDir, projectDir);
   const result = emptyBulkIndexResult();
   let expiredSkipped = 0;
@@ -394,8 +560,9 @@ export function indexAllSessions(
     }
 
     try {
-      indexSessionFile(dbManager, file, result);
+      yield* indexSessionFileSteps(dbManager, file, result);
     } catch (err) {
+      if (DatabaseManager.isCorruptionError(err)) throw err;
       result.errors.push(`Error indexing ${file}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -419,6 +586,18 @@ export function indexChangedSessions(
   sessionsDir: string,
   options: IncrementalIndexOptions = {},
 ): BulkIndexResult {
+  return dbManager.withCorruptionRecovery(() => drain(indexChangedSessionsSteps(dbManager, sessionsDir, options)));
+}
+
+export function indexChangedSessionsAsync(db: DatabaseManager, dir: string, options: IncrementalIndexOptions = {}): Promise<BulkIndexResult> {
+  return queuedIndex(db, () => drainAsync(indexChangedSessionsSteps(db, dir, options)));
+}
+
+function* indexChangedSessionsSteps(
+  dbManager: DatabaseManager,
+  sessionsDir: string,
+  options: IncrementalIndexOptions,
+): Generator<void, BulkIndexResult> {
   const files = getSessionFiles(sessionsDir, options.projectDir);
   const maxFilesToIndex = options.maxFilesToIndex ?? 50;
   const result = emptyBulkIndexResult();
@@ -445,6 +624,7 @@ export function indexChangedSessions(
       }
       changed.push(metadata);
     } catch (err) {
+      if (DatabaseManager.isCorruptionError(err)) throw err;
       result.errors.push(`Error indexing ${file}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -457,8 +637,9 @@ export function indexChangedSessions(
       break;
     }
     try {
-      indexSessionFile(dbManager, metadata.path, result);
+      yield* indexSessionFileSteps(dbManager, metadata.path, result);
     } catch (err) {
+      if (DatabaseManager.isCorruptionError(err)) throw err;
       result.errors.push(`Error indexing ${metadata.path}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -643,7 +824,20 @@ export function pruneOldSessions(
       OR (sf.path IS NULL AND s.started_at < ?)
   `).all(cutoffMs, cutoffIso) as Array<{ id: string }>;
 
+  // Paths are authoritative here: session_files cascades with its session.
+  // Keep retained cursors (and their cheap appends), including when there is
+  // nothing to prune, while also cleaning orphans left by earlier versions.
+  const pruneOrphanCursors = () => db.prepare(`
+    DELETE FROM extension_metadata
+    WHERE key LIKE 'session-index-v1:%'
+      AND NOT EXISTS (
+        SELECT 1 FROM session_files sf
+        WHERE sf.path = substr(extension_metadata.key, length('session-index-v1:') + 1)
+      )
+  `).run();
+
   if (eligibleSessionIds.length === 0) {
+    pruneOrphanCursors();
     return { sessionsRemoved: 0, messagesRemoved: 0 };
   }
 
@@ -660,6 +854,7 @@ export function pruneOldSessions(
     const delSessions = db.prepare(
       `DELETE FROM sessions WHERE id IN (${eligibleSessionIds.map(() => '?').join(',')})`,
     ).run(...eligibleSessionIds.map((r) => r.id));
+    pruneOrphanCursors();
     return { messagesRemoved: delMessages.changes, sessionsRemoved: delSessions.changes };
   };
 

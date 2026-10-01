@@ -31,6 +31,30 @@ describe('session live indexing handler', () => {
     };
   }
 
+  it('does not lose another session or an event arriving during an async scan', async () => {
+    const state: SessionLiveIndexState = { inProgress: false, promise: null };
+    const callbacks: (() => void)[] = [];
+    const first = createSnapshot([]);
+    const second = { ...createSnapshot([]), getHeader: () => ({ id: 'other-session', timestamp: 'now', cwd: '/other' }) };
+    const calls: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const indexLiveSessionFn = async (_db: DatabaseManager, snapshot: typeof first) => {
+      calls.push(snapshot.getHeader().id);
+      if (calls.length === 1) await gate;
+      return null;
+    };
+    const options = { state, indexLiveSessionFn, setTimeoutFn: (callback: () => void) => callbacks.push(callback) };
+    scheduleLiveSessionIndex(dbManager, first, options);
+    callbacks[0]();
+    scheduleLiveSessionIndex(dbManager, second, options);
+    scheduleLiveSessionIndex(dbManager, first, options);
+    release();
+    await state.promise;
+    assert.deepEqual(calls, ['live-session', 'other-session', 'live-session']);
+    assert.equal(state.pending?.size, 0);
+  });
+
   it('defers indexing so message_end does not block and then indexes live messages', async () => {
     const entries = [{
       type: 'message',

@@ -28,11 +28,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
 import { DatabaseManager } from "./store/db.js";
-import { indexSession, upsertSessionFileMetadata, pruneEphemeralReviewSessions, pruneOldSessions, retentionCutoffMs } from "./store/session-indexer.js";
+import { indexLiveSessionAsync, pruneEphemeralReviewSessions, pruneOldSessions, retentionCutoffMs } from "./store/session-indexer.js";
 import { runRecoveryMaintenance } from "./store/recovery-maintenance.js";
 import { scheduleSessionBackfill, joinSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS, type SessionBackfillState } from "./handlers/session-backfill.js";
 import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-live-index.js";
-import { parseSessionFile } from "./store/session-parser.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
 import { registerSkillTool } from "./tools/skill-tool.js";
 import { registerSessionSearchTool } from "./tools/session-search-tool.js";
@@ -409,34 +408,26 @@ export default function (pi: ExtensionAPI) {
       dbManager.close();
       return;
     }
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      measureLifecycleSync("shutdown.active-index", () => {
-        const sessionFile = ctx.sessionManager.getSessionFile();
-        if (sessionFile && fs.existsSync(sessionFile)) {
-          const sessionData = parseSessionFile(sessionFile);
-          if (sessionData) {
-            dbManager.withCorruptionRecovery(() => {
-              indexSession(dbManager, sessionData);
-              // Keep session_files metadata in sync with the final on-disk state.
-              // Pi appends the closing session entry on shutdown after the last
-              // message_end, so without this upsert the stored size/mtime would be
-              // stale and the next startup would re-parse this file unnecessarily.
-              upsertSessionFileMetadata(dbManager, sessionFile, sessionData.id);
-            });
-          }
-        }
-      });
-    } catch {
-      // Silent fail — don't block shutdown
-    } finally {
-      try {
-        await measureLifecycle("shutdown.index-waits", () => Promise.all([
+      // Include time spent behind bulk indexing in the same shutdown budget.
+      // Observe every rejection even if the deadline wins the race.
+      await measureLifecycle("shutdown.index-waits", () => Promise.race([
+        Promise.allSettled([
+          measureLifecycle("shutdown.active-index", () => indexLiveSessionAsync(dbManager, ctx.sessionManager)),
           waitForSessionBackfill(SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS, backfillState),
           waitForLiveSessionIndex(SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS),
-        ]));
-      } catch {
-        // Best effort only — shutdown should not be held up by indexing errors.
-      }
+        ]),
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(resolve, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS);
+        }),
+      ]));
+    } catch {
+      // Best effort only — shutdown should not be held up by indexing errors.
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      // The open guard prevents timed-out queued work from reopening SQLite or
+      // advancing a checkpoint after close. Completed scans keep their cursor.
       try {
         databaseClosed = true;
         measureLifecycleSync("shutdown.database-close", () => dbManager.close());
