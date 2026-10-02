@@ -46,6 +46,7 @@ describe("loadConfig", () => {
     // Retention is disabled by default so existing history is never silently
     // deleted; a positive value opts in, 0/omitted disables.
     assert.strictEqual(config.sessionRetentionDays, 0);
+    assert.deepStrictEqual(config.sessionIndexExclude, []);
     assert.strictEqual(config.quickCheckOnOpen, true);
   });
 
@@ -221,6 +222,55 @@ describe("loadConfig", () => {
     assert.strictEqual(loadConfig(TEST_CONFIG_PATH).sessionRetentionDays, 0);
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ sessionRetentionDays: "30" }));
     assert.strictEqual(loadConfig(TEST_CONFIG_PATH).sessionRetentionDays, 0);
+  });
+
+  it("keeps usable sessionIndexExclude entries and warns about the rest", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => { warnings.push(String(message)); };
+
+    try {
+      // A project directory name survives unchanged, quietly.
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ sessionIndexExclude: ["2ndBrain"] }));
+      assert.deepStrictEqual(loadConfig(TEST_CONFIG_PATH).sessionIndexExclude, ["2ndBrain"]);
+      assert.deepStrictEqual(warnings, [], "a valid entry must not warn");
+
+      // Separators, `..` segments, and blank entries cannot name a first-level
+      // directory under the sessions root: accepted as-is they would sit in the
+      // config file matching nothing, silently excluding no directory at all.
+      const invalid = ["../p", "..", "a/b", "a\\b", "", "   "];
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ sessionIndexExclude: invalid }));
+      assert.deepStrictEqual(loadConfig(TEST_CONFIG_PATH).sessionIndexExclude, []);
+      assert.strictEqual(warnings.length, 1, "invalid entries warn once per load");
+      assert.match(warnings[0], /sessionIndexExclude/);
+      for (const entry of invalid) {
+        assert.ok(
+          warnings[0].includes(JSON.stringify(entry)),
+          `warning should name the rejected entry ${JSON.stringify(entry)}`,
+        );
+      }
+
+      // Mixed arrays keep only the usable entries, trimmed.
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ sessionIndexExclude: [" 2ndBrain ", "../p", "表格优化"] }));
+      assert.deepStrictEqual(loadConfig(TEST_CONFIG_PATH).sessionIndexExclude, ["2ndBrain", "表格优化"]);
+      assert.strictEqual(warnings.length, 2);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  it("falls back to the default sessionIndexExclude for non-array values", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ sessionIndexExclude: "2ndBrain" }));
+    assert.deepStrictEqual(loadConfig(TEST_CONFIG_PATH).sessionIndexExclude, []);
+
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ sessionIndexExclude: ["2ndBrain", 5] }));
+    assert.deepStrictEqual(loadConfig(TEST_CONFIG_PATH).sessionIndexExclude, []);
+
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ sessionIndexExclude: null }));
+    assert.deepStrictEqual(loadConfig(TEST_CONFIG_PATH).sessionIndexExclude, []);
   });
 
   it("handles partial config (missing keys use defaults)", () => {

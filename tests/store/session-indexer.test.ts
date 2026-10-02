@@ -196,17 +196,36 @@ describe('session-indexer', () => {
       assert.strictEqual(result2.sessionsIndexed, 0);
     });
 
-    it('should handle invalid JSONL files gracefully', () => {
+    it('should surface a session-headed file with corrupt body as an error', () => {
       const sessionsDir = path.join(tmpDir, 'sessions');
       const projDir = path.join(sessionsDir, 'test-project');
       fs.mkdirSync(projDir, { recursive: true });
 
-      // Invalid file (no session entry)
-      fs.writeFileSync(path.join(projDir, 'invalid.jsonl'), '{"type":"message","id":"m1"}');
+      // A session-typed first line (passes the sniff) that is missing the
+      // required id/cwd/timestamp fields: parseSessionFile yields no session,
+      // and since the file IS shaped like a session this must surface as an
+      // error rather than be silently swallowed like a foreign artifact.
+      fs.writeFileSync(path.join(projDir, 'invalid.jsonl'), '{"type":"session"}');
 
       const result = indexAllSessions(dbManager, sessionsDir);
       assert.strictEqual(result.sessionsProcessed, 1);
       assert.strictEqual(result.errors.length, 1);
+    });
+
+    it('should silently skip headerless files as non-session artifacts', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      const projDir = path.join(sessionsDir, 'test-project');
+      fs.mkdirSync(projDir, { recursive: true });
+
+      // No session entry at all: an extension artifact in the shared sessions
+      // dir. Skipped without error (the pre-sniff behavior was one error per
+      // such file on every startup backfill).
+      fs.writeFileSync(path.join(projDir, 'invalid.jsonl'), '{"type":"message","id":"m1"}');
+
+      const result = indexAllSessions(dbManager, sessionsDir);
+      assert.strictEqual(result.sessionsProcessed, 0);
+      assert.strictEqual(result.nonSessionSkipped, 1);
+      assert.strictEqual(result.errors.length, 0);
     });
 
     it('should handle empty sessions directory', () => {
@@ -358,7 +377,63 @@ describe('session-indexer', () => {
       const indexed = dbManager.getDb().prepare('SELECT id FROM sessions').all() as { id: string }[];
       assert.deepStrictEqual(indexed.map((r) => r.id), ['newer']);
     });
+
+    it('silently skips non-session JSONL artifacts without counting them as errors', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(path.join(sessionsDir, 'project-a', 's1.jsonl'), 's1');
+      // Extension artifact: valid JSONL, but the first line is not a session header.
+      const artifact = path.join(sessionsDir, 'subagent-artifacts', 'worker_transcript.jsonl');
+      fs.mkdirSync(path.dirname(artifact), { recursive: true });
+      fs.writeFileSync(artifact, JSON.stringify({ type: 'transcript', events: [] }) + '\n');
+
+      const result = indexChangedSessions(dbManager, sessionsDir);
+
+      assert.strictEqual(result.errors.length, 0);
+      assert.strictEqual(result.nonSessionSkipped, 1);
+      assert.strictEqual(result.sessionsIndexed, 1);
+    });
+
+    it('non-session artifacts never consume the per-startup cap', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      const artifactDir = path.join(sessionsDir, 'subagent-artifacts');
+      fs.mkdirSync(artifactDir, { recursive: true });
+      for (let n = 0; n < 3; n++) {
+        fs.writeFileSync(path.join(artifactDir, `t${n}.jsonl`), JSON.stringify({ type: 'transcript', n }) + '\n');
+      }
+      writeJsonlSession(path.join(sessionsDir, 'real.jsonl'), 'real');
+
+      // Cap of 1: if artifacts were queued as changed files, the real session
+      // could be pushed out of the window. Sniffing keeps the cap for sessions.
+      const result = indexChangedSessions(dbManager, sessionsDir, { maxFilesToIndex: 1 });
+      assert.strictEqual(result.nonSessionSkipped, 3);
+      assert.strictEqual(result.sessionsIndexed, 1);
+      assert.strictEqual(result.errors.length, 0);
+    });
+
+    it('excludeDirs skips whole first-level directories regardless of content', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      // Even a session-shaped file inside an excluded dir must not be indexed.
+      writeJsonlSession(path.join(sessionsDir, 'nope-*', 's9.jsonl'), 's9');
+      writeJsonlSession(path.join(sessionsDir, 'project-a', 's1.jsonl'), 's1');
+
+      const result = indexChangedSessions(dbManager, sessionsDir, { excludeDirs: ['nope-*'] });
+      assert.strictEqual(result.sessionsIndexed, 1);
+      assert.strictEqual(result.errors.length, 0);
+      const db = dbManager.getDb();
+      const rows = db.prepare('SELECT id FROM sessions').all() as { id: string }[];
+      assert.deepStrictEqual(rows.map((r) => r.id), ['s1']);
+    });
+
+    it('indexAllSessions honors excludeDirs too', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(path.join(sessionsDir, 'excluded', 's2.jsonl'), 's2');
+      writeJsonlSession(path.join(sessionsDir, 'kept', 's3.jsonl'), 's3');
+      const result = indexAllSessions(dbManager, sessionsDir, undefined, 0, ['excluded']);
+      assert.strictEqual(result.sessionsIndexed, 1);
+      assert.strictEqual(result.errors.length, 0);
+    });
   });
+
 
   describe('current session indexing helpers', () => {
     function writeSessionFile(filePath: string): void {
@@ -549,6 +624,69 @@ describe('session-indexer', () => {
       fs.writeFileSync(path.join(sessionsDir, 'project-b', 'notes.txt'), 'not a session');
 
       assert.strictEqual(countSessionFiles(sessionsDir), 2);
+    });
+
+    it('needsBackfill is false for an artifacts-only sessions dir with a fresh timestamp (sniffed-out files never demand work)', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      // Extension artifacts (no {"type":"session"} header) in a subdirectory:
+      // they never receive session_files stamps, so a naive preflight would
+      // return true on the first unstamped file on every startup.
+      const artifactsDir = path.join(sessionsDir, 'subagent-artifacts');
+      fs.mkdirSync(artifactsDir, { recursive: true });
+      fs.writeFileSync(path.join(artifactsDir, 'worker_transcript.jsonl'), JSON.stringify({ type: 'transcript', entries: [] }) + '\n');
+      touchBackfillTimestamp(dbManager, new Date('2026-05-03T00:30:00Z'));
+
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), false);
+    });
+
+    it('preflight is false with a fresh timestamp even when indexed files are unreadable (stored-match short-circuits the sniff)', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      // Several indexed sessions, then corrupted IN PLACE with the DB stamps
+      // re-pointed at the corrupted file's exact stat values: stored-match
+      // hits, so the preflight must skip each file WITHOUT opening or parsing
+      // it. If the sniff ran, the garbage first line would fail open (no
+      // newline in the fragment) and demand a backfill — asserting false here
+      // proves the stat → stored-match short-circuit keeps steady state
+      // sniff-free even for content the parser could never accept.
+      for (let i = 1; i <= 5; i++) {
+        writeJsonlSession(sessionsDir, `project-${i}`, `s${i}`);
+      }
+      indexAllSessions(dbManager, sessionsDir);
+
+      const db = dbManager.getDb();
+      for (const dir of fs.readdirSync(sessionsDir)) {
+        const filePath = path.join(sessionsDir, dir, `${dir.replace('project-', 's')}.jsonl`);
+        if (!fs.existsSync(filePath)) continue;
+        fs.writeFileSync(filePath, 'x'.repeat(fs.statSync(filePath).size));
+        const after = fs.statSync(filePath);
+        db.prepare('UPDATE session_files SET size = ?, mtime_ms = ? WHERE path = ?').run(after.size, Math.trunc(after.mtimeMs), filePath);
+      }
+      touchBackfillTimestamp(dbManager, new Date('2026-05-03T00:30:00Z'));
+
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), false);
+    });
+
+    it('needsBackfill is false when only excluded dirs exist and the last backfill is recent', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'noise-dir', 's1');
+      touchBackfillTimestamp(dbManager, new Date('2026-05-03T00:30:00Z'));
+
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z'), 0, ['noise-dir']), false);
+      // sanity: without the exclusion the same state demands a backfill
+      assert.strictEqual(needsBackfill(dbManager, sessionsDir, new Date('2026-05-03T01:00:00Z')), true);
+    });
+
+    it('countSessionFiles excludes non-session artifacts and excluded dirs by default', () => {
+      const sessionsDir = path.join(tmpDir, 'sessions');
+      writeJsonlSession(sessionsDir, 'project-a', 's1');
+      const artifactsDir = path.join(sessionsDir, 'subagent-artifacts');
+      fs.mkdirSync(artifactsDir, { recursive: true });
+      fs.writeFileSync(path.join(artifactsDir, 'worker_transcript.jsonl'), JSON.stringify({ type: 'transcript' }) + '\n');
+
+      assert.strictEqual(countSessionFiles(sessionsDir), 1);
+      // glob exclusion drops the artifacts dir; the real session remains
+      assert.strictEqual(countSessionFiles(sessionsDir, ['subagent-*']), 1);
+      assert.strictEqual(countSessionFiles(sessionsDir, ['project-a']), 0);
     });
 
     it('needsBackfill is true when session file count exceeds indexed sessions', () => {
