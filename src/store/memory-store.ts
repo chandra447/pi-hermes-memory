@@ -305,6 +305,33 @@ export class MemoryStore {
       (markMutation) => this._add(target, content, signal, addedMessage, project, markMutation),
       signal,
     );
+    // Policy-only mode never returns the "Memory at …" error (capEnforced is
+    // false there — #218/#221), so without this branch the overflow trigger is
+    // dead code in the shipped default mode: the store grows unbounded and the
+    // registered consolidator never fires. Preserve the #221 intent (the write
+    // lands), then consolidate after the fact.
+    if (
+      result.success
+      && !this.capEnforced
+      && this.consolidator
+      && this.memoryOverflowStrategy() === "auto-consolidate"
+      && this.charCount(target) > this.charLimit(target)
+    ) {
+      const consolidation = await this.consolidator(target, signal).catch(
+        (err): ConsolidationResult => ({ consolidated: false, error: `consolidator threw ${String(err).slice(0, 200)}` }),
+      );
+      if (consolidation.consolidated) {
+        try {
+          await this.loadFromDisk();
+        } catch {
+          // The write already landed; a reload failure only delays visibility
+          // of the consolidated content, so keep the success and note it.
+        }
+        return { ...result, message: `${result.message ?? "Entry added."} Over capacity — auto-consolidation ran after the write.` };
+      }
+      return { ...result, message: `${result.message ?? "Entry added."} Over capacity — auto-consolidation attempted but failed: ${consolidation.error || "no reason reported"}` };
+    }
+
     if (
       result.success
       || retriesLeft <= 0
