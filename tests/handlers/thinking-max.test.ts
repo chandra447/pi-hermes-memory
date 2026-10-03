@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { MEMORY_WRITE_TOOL_NAMES } from "../../src/constants.js";
 import { runDirectMemoryCompletion } from "../../src/handlers/review-memory-ops.js";
 import {
   buildChildPiPromptArgs,
@@ -58,7 +59,7 @@ describe("llmThinkingOverride max", () => {
   it("forwards llmThinkingOverride max as --thinking max", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", { llmThinkingOverride: "max" }, []),
-      ["-p", "--no-session", "--thinking", "max", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", "--thinking", "max", ...EXT_ARGS, "--tools", MEMORY_WRITE_TOOL_NAMES.join(","), "hello"],
     );
   });
 });

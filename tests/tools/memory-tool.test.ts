@@ -7,10 +7,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { registerMemoryTool } from "../../src/tools/memory-tool.js";
+import { buildChildPiPromptArgs } from "../../src/handlers/pi-child-process.js";
 import { MemoryStore } from "../../src/store/memory-store.js";
 import { DatabaseManager } from "../../src/store/db.js";
 import { getMemories, searchMemories, syncMemoryEntry } from "../../src/store/sqlite-memory-store.js";
-import { ENTRY_DELIMITER, MEMORY_FILE } from "../../src/constants.js";
+import { ENTRY_DELIMITER, MEMORY_FILE, MEMORY_WRITE_TOOL_NAMES } from "../../src/constants.js";
 import { Value } from "typebox/value";
 
 describe("registerMemoryTool", () => {
@@ -47,6 +48,34 @@ describe("registerMemoryTool", () => {
       assert.ok(tool.promptSnippet.length > 0);
       assert.ok(Array.isArray(tool.promptGuidelines));
       assert.ok(tool.parameters);
+    }
+  });
+
+  it("every name in the child --tools allowlist is a registered memory tool (drift guard, #275)", () => {
+    const registeredTools: any[] = [];
+    const mockPi = {
+      registerTool: (def: any) => {
+        registeredTools.push(def);
+      },
+    } as unknown as ExtensionAPI;
+
+    registerMemoryTool(mockPi, {} as MemoryStore, null);
+
+    const args = buildChildPiPromptArgs("p", {}, []);
+    const flagIndex = args.indexOf("--tools");
+    assert.ok(flagIndex !== -1, "child argv must carry a --tools allowlist");
+    const allowlist = args[flagIndex + 1].split(",");
+    // pi silently ignores unknown --tools names, so a rename that lands in
+    // the argv but not in registration (or vice versa) would leave children
+    // unable to write memory with nothing to tell you. This test fails on
+    // any such drift instead.
+    assert.deepStrictEqual(allowlist, [...MEMORY_WRITE_TOOL_NAMES]);
+    const registeredNames = registeredTools.map((tool) => tool.name);
+    for (const name of allowlist) {
+      assert.ok(
+        registeredNames.includes(name),
+        `--tools allowlist name "${name}" is not a registered tool (registered: ${registeredNames.join(", ")})`,
+      );
     }
   });
 

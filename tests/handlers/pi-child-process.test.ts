@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { MEMORY_WRITE_TOOL_NAMES } from "../../src/constants.js";
 import {
   buildChildPiPromptArgs,
   detectAuthAdapterExtensionPaths,
@@ -26,6 +27,9 @@ const OWN_EXTENSION_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../src/index.ts",
 );
+
+// The child tool allowlist every argv shape must carry (#275).
+const TOOL_ARGS = ["--tools", MEMORY_WRITE_TOOL_NAMES.join(",")];
 
 // Adapter detection scans the real sibling/agent node_modules trees, so a
 // contributor with a provider auth adapter installed gets extra -e args in
@@ -269,20 +273,20 @@ describe("buildChildPiPromptArgs", () => {
   it("uses --no-extensions and only passes hermes-memory extension", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", {}, []),
-      ["-p", "--no-session", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", ...EXT_ARGS, ...TOOL_ARGS, "hello"],
     );
   });
 
   it("adds a model override and defaults thinking to off", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", { llmModelOverride: "openrouter/deepseek/deepseek-v4-flash" }, []),
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, ...TOOL_ARGS, "hello"],
     );
   });
   it("inherits the active provider/model when no override is configured", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", {}, [], { provider: "local-llama", id: "local-9b" }),
-      ["-p", "--no-session", "--model", "local-llama/local-9b", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", "--model", "local-llama/local-9b", ...EXT_ARGS, ...TOOL_ARGS, "hello"],
     );
   });
 
@@ -294,7 +298,7 @@ describe("buildChildPiPromptArgs", () => {
         [],
         { provider: "local-llama", id: "local-9b" },
       ),
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, ...TOOL_ARGS, "hello"],
     );
   });
 
@@ -302,14 +306,14 @@ describe("buildChildPiPromptArgs", () => {
   it("allows thinking overrides without a model override", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", { llmThinkingOverride: "low" }, []),
-      ["-p", "--no-session", "--thinking", "low", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", "--thinking", "low", ...EXT_ARGS, ...TOOL_ARGS, "hello"],
     );
   });
 
   it("ignores missing inherited extension paths", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", {}, ["-e", "src/index.ts"]),
-      ["-p", "--no-session", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", ...EXT_ARGS, ...TOOL_ARGS, "hello"],
     );
   });
 
@@ -341,6 +345,7 @@ describe("buildChildPiPromptArgs", () => {
           "-e", "git:github.com/example/provider-extension@v1",
           "-e", "npm:@example/provider-extension@1.0.0",
           ...DETECTED_ADAPTER_ARGS,
+          ...TOOL_ARGS,
           "hello",
         ],
       );
@@ -778,9 +783,9 @@ describe("execChildPrompt", () => {
     const promptReference = logicalCalls[0].at(-1)!;
     assert.match(promptReference, /^@/);
     assert.deepStrictEqual(logicalCalls, [
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, promptReference],
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, ...TOOL_ARGS, promptReference],
       // Retry drops configured overrides but preserves the active session model.
-      ["-p", "--no-session", "--model", "local-llama/local-9b", ...EXT_ARGS, promptReference],
+      ["-p", "--no-session", "--model", "local-llama/local-9b", ...EXT_ARGS, ...TOOL_ARGS, promptReference],
     ]);
   });
 
@@ -830,8 +835,8 @@ describe("execChildPrompt", () => {
       const promptReference = calls[0].args.at(-1)!;
       assert.match(promptReference, /^@/);
       assert.deepStrictEqual(calls.map(logicalChildArgs), [
-        ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, promptReference],
-        ["-p", "--no-session", ...EXT_ARGS, promptReference],
+        ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, ...TOOL_ARGS, promptReference],
+        ["-p", "--no-session", ...EXT_ARGS, ...TOOL_ARGS, promptReference],
       ]);
     } finally {
       if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
@@ -901,5 +906,44 @@ describe("execChildPrompt", () => {
 
     assert.strictEqual(result.code, 1);
     assert.strictEqual(calls.length, 1);
+  });
+
+  it("carries the memory tool allowlist exactly once on every argv shape, including the retry that drops overrides", async () => {
+    const calls: string[][] = [];
+    const pi = {
+      exec: async (_cmd: string, args: string[]) => {
+        calls.push(args);
+        return calls.length === 1
+          ? { code: 1, stdout: "", stderr: "model not found" }
+          : { code: 0, stdout: "ok", stderr: "" };
+      },
+    };
+
+    const expectedAllowlist = MEMORY_WRITE_TOOL_NAMES.join(",");
+
+    const assertExactlyOnce = (args: string[]): void => {
+      const flagIndexes = args.reduce<number[]>((acc, arg, i) => (arg === "--tools" ? [...acc, i] : acc), []);
+      assert.strictEqual(flagIndexes.length, 1, `--tools should appear exactly once, got ${flagIndexes.length}`);
+      assert.strictEqual(args[flagIndexes[0] + 1], expectedAllowlist);
+    };
+
+    // All primary-builder shapes.
+    for (const shape of [
+      buildChildPiPromptArgs("p", {}, []),
+      buildChildPiPromptArgs("p", { llmModelOverride: "openrouter/deepseek/deepseek-v4-flash", llmThinkingOverride: "off" }, []),
+      buildChildPiPromptArgs("p", {}, [], { provider: "local-llama", id: "local-9b" }),
+    ]) {
+      assertExactlyOnce(shape);
+    }
+
+    // Primary attempt fails on model resolution → retry builder drops the
+    // overrides; the allowlist must survive on both argv shapes.
+    await execChildPrompt(pi as any, "hello", {
+      llmModelOverride: "missing/model",
+    }, { timeoutMs: 30000, retryWithoutOverrides: true });
+
+    assert.strictEqual(calls.length, 2, "override failure should retry once");
+    assertExactlyOnce(calls[0]);
+    assertExactlyOnce(calls[1]);
   });
 });
