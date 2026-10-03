@@ -7,6 +7,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import stripAnsi from "strip-ansi";
 import type { MemoryConfig, ThinkingLevel } from "../types.js";
 import { AGENT_ROOT } from "../paths.js";
+import { MEMORY_WRITE_TOOL_NAMES } from "../constants.js";
 
 type ChildLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride" | "childExtensionPaths">;
 
@@ -267,6 +268,18 @@ function appendOwnExtensionArgs(args: string[], config: ChildLlmConfig): void {
   for (const extensionSource of childExtensionSources(config)) {
     args.push("-e", extensionSource);
   }
+  // Host-enforced tool allowlist for memory children (#275): review, flush,
+  // correction-save and consolidation children only ever write through the
+  // three memory tools, so every other tool — file writers like
+  // edit/write/bash as well as skill_manage — stays unreachable in the
+  // subprocess. A weak fallback model can therefore not modify the user's
+  // repo from a journal-less child. Enforced by pi's --tools (built-in and
+  // extension tools alike), not by the prompt. Placed on this shared helper
+  // because both argv builders (primary and retry-without-overrides) call
+  // it, so the two stay in sync by construction. The child's cwd stays the
+  // session cwd: the memory tools bind the project store from it, and with
+  // file tools unreachable the cwd is no longer the risk.
+  args.push("--tools", MEMORY_WRITE_TOOL_NAMES.join(","));
 }
 
 export function buildChildPiPromptArgs(

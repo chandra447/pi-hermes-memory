@@ -431,6 +431,8 @@ By default, background review, session flush, correction save, and the manual `/
 
 If direct mode fails (no model, no auth, provider error, unparseable response, or — for consolidation only — a result that didn't actually free any space), it automatically falls back to the legacy `pi -p --no-session` subprocess path. The automatic over-capacity consolidator triggered from `MemoryStore` itself always uses the subprocess path, since it runs without extension-runtime access.
 
+The subprocess path is restricted to memory operations by construction: child `pi -p` processes run with `--tools memory_add,memory_replace,memory_remove`, so a background child cannot edit files, run commands, or touch skills in your repo even when the fallback model is a weak one. Children keep your project as their working directory (the memory tools bind the project store from it), but with file and shell tools unreachable they can only write memory entries.
+
 Set `reviewTransport` in config only when you need to override this:
 
 | Value | Behavior |

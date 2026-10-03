@@ -19,7 +19,7 @@ import {
   syncMemoryEntry,
   isFts5QueryError,
 } from "../store/sqlite-memory-store.js";
-import { MEMORY_TOOL_DESCRIPTION } from "../constants.js";
+import { MEMORY_TOOL_DESCRIPTION, MEMORY_WRITE_TOOL_NAMES } from "../constants.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 import type { MemoryCategory, MemoryResult } from "../types.js";
 import { normalizeMemoryLookupText } from "../store/memory-lookup.js";
@@ -441,9 +441,12 @@ This action-specific tool accepts only the parameters listed in its schema.`;
     description: "Category for failure memories.",
   });
 
+  // Tool names come from MEMORY_WRITE_TOOL_NAMES — the same constant the
+  // child argv's --tools allowlist is built from (#275), so a rename cannot
+  // silently desynchronize registration from the child allowlist.
   registerActionTool(
     "add",
-    "memory_add",
+    MEMORY_WRITE_TOOL_NAMES[0],
     "Memory Add",
     `${commonDescription}
 
@@ -457,7 +460,7 @@ Add one durable entry. The target and content fields are required.`,
   );
   registerActionTool(
     "replace",
-    "memory_replace",
+    MEMORY_WRITE_TOOL_NAMES[1],
     "Memory Replace",
     `${commonDescription}
 
@@ -470,7 +473,7 @@ Replace one existing entry. The target, old_text, and content fields are require
   );
   registerActionTool(
     "remove",
-    "memory_remove",
+    MEMORY_WRITE_TOOL_NAMES[2],
     "Memory Remove",
     `${commonDescription}
 
