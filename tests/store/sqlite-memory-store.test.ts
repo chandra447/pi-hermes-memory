@@ -163,6 +163,21 @@ describe('sqlite-memory-store', () => {
       assert.strictEqual(getMemories(dbManager, { target: 'failure', project: null }).length, 1);
     });
 
+    it('keeps a multi-line entry in its project scope and strips its metadata comment', () => {
+      const raw = '[correction] use pnpm\nand pnpm dlx for one-off binaries '
+        + '<!-- created=2026-05-08, last=2026-05-09, project64=cHJvamVjdC1h -->';
+
+      const parsed = parseMarkdownMemoryEntry(raw, 'failure');
+      assert.strictEqual(parsed.content, '[correction] use pnpm\nand pnpm dlx for one-off binaries');
+
+      reconcileMarkdownFailureScopes(dbManager, [raw]);
+
+      const entries = getMemories(dbManager, { target: 'failure', project: 'project-a' });
+      assert.strictEqual(entries.length, 1);
+      assert.strictEqual(entries[0].content, '[correction] use pnpm\nand pnpm dlx for one-off binaries');
+      assert.strictEqual(getMemories(dbManager, { target: 'failure', project: null }).length, 0);
+    });
+
     it('round-trips project correction scope through authoritative Markdown metadata', async () => {
       const store = new MemoryStore({
         memoryDir: tmpDir,
