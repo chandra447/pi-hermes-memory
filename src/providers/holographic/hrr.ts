@@ -112,7 +112,7 @@ export function encodeFact(content: string, entities: string[], dim: number = 10
   const roleContent = encodeAtom(_ROLE_CONTENT, dim);
   const roleEntity = encodeAtom(_ROLE_ENTITY, dim);
   const entityVectors = entities.map((entity) => bind(encodeAtom(entity.toLowerCase(), dim), roleEntity));
-  return bundle([bind(encodeText(content, dim), roleContent), entityVectors]);
+  return bundle([bind(encodeText(content, dim), roleContent), ...entityVectors]);
 }
 
 /** Serialize as prefixed float32 (half the size of legacy float64 blobs). */

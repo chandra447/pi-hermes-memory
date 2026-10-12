@@ -161,11 +161,31 @@ export class MemoryStore {
   }
 
   private _one<T = any>(sql: string, params: any[] = []): T | undefined {
-    return this._prepare(sql).get(...params);
+    // better-sqlite3 types Statement<Result = unknown>.get() as unknown | undefined;
+    // cast to the row shape callers expect. (Record access below is typed via the interface.)
+    return this._prepare(sql).get(...params) as unknown as T | undefined;
   }
 
   private _run<T = any>(sql: string, params: any[] = []): T {
     return this._prepare(sql).run(...params) as unknown as T;
+  }
+
+  /**
+   * Run a read query and return all rows. Mirrors Python's
+   * `store._conn.execute(sql, params).fetchall()`; the fact retriever needs this
+   * raw access for FTS5 / category-bank / vector queries that the store does not
+   * otherwise expose.
+   */
+  query<T = any>(sql: string, params: any[] = []): T[] {
+    return this._prepare(sql).all(...params) as T[];
+  }
+
+  /**
+   * Run a read query and return the first row. Mirrors Python's
+   * `store._conn.execute(sql, params).fetchone()`.
+   */
+  queryOne<T = any>(sql: string, params: any[] = []): T | undefined {
+    return this._prepare(sql).get(...params) as unknown as T | undefined;
   }
 
   /**
@@ -337,7 +357,6 @@ export class MemoryStore {
     }
     const bankVector = bundle(
       rows.map((r) => bytesToPhases(r.hrr_vector, this._hrrDim)),
-      this._hrrDim,
     );
     this._run(
       "INSERT INTO memory_banks (bank_name, vector, dim, fact_count, updated_at) " +
