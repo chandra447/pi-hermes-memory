@@ -61,6 +61,7 @@ import { AGENT_ROOT } from "./paths.js";
 import { isDatabaseMigrationPending } from "./extension-root-migration.js";
 import { measureLifecycle, measureLifecycleSync } from "./lifecycle-timing.js";
 import { createMemoryInitializer, withMemoryInitialization, type EnsureMemoryReady } from "./memory-initialization.js";
+import { setupMnemeHost, type MnemeHost } from "./providers/mneme/host.js";
 
 export function resolveProjectSkillDiscovery(
   skillStore: SkillStore,
@@ -111,6 +112,11 @@ export default function (pi: ExtensionAPI) {
   let persistenceInitialized = false;
 
   const store = new MemoryStore({ ...config, memoryDir: globalDir });
+  // ── Mneme (opt-in, disabled until mneme.enabled) ──
+  // Builds the provider layer once, registers its tools and the write-mirror,
+  // and returns the per-event hooks. A no-op host when disabled, so every
+  // handler below stays in place but does nothing.
+  const mnemeHost: MnemeHost = setupMnemeHost(pi, config, store);
   // Factory may run with no session (Pi public contract). Do not snapshot
   // project identity from process.cwd() here — bind from session_start ctx.cwd
   // and from tool execute ctx.cwd.
@@ -293,6 +299,9 @@ export default function (pi: ExtensionAPI) {
     // Pinned directives must not depend on migration/SQLite being healthy.
     if (standingStore) await standingStore.load();
     if (!lazy) await ensureMemoryReady(ctx);
+    // Mneme providers initialize for this session (Hermes memory is not a
+    // dependency — a disabled/failed init must not block the rest).
+    await mnemeHost.onSessionStart(ctx);
     refreshSkillProjectContext(ctx.cwd);
     await skillStore.migrateLegacySkills();
     await skillStore.ensureDiscoveredRoots();
@@ -303,7 +312,14 @@ export default function (pi: ExtensionAPI) {
   // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
   pi.on("before_agent_start", async (event, _ctx) => {
     const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectNameRef(), standingStore);
-    if (!promptContext) return;
+    // Mneme's static provider section plus this turn's prefetch, combined with
+    // the memory promptContext above. An empty block is filtered out, so a
+    // disabled Mneme layer leaves the prompt untouched.
+    const combined = [promptContext, mnemeHost.systemPromptBlock(), mnemeHost.prefetchAll(event.prompt ?? "")]
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
+    if (!combined) return;
 
     // pi 0.86+ hands handlers a normalized clone of these options and re-renders
     // the prompt from it, so appending through `appendSystemPrompt` keeps the
@@ -319,14 +335,14 @@ export default function (pi: ExtensionAPI) {
     // 0.86+ runner normalizes `sections` onto the clone it passes.
     const promptOptions = event.systemPromptOptions;
     if (promptOptions && "sections" in promptOptions) {
-      promptOptions.appendSystemPrompt = [promptOptions.appendSystemPrompt, promptContext]
+      promptOptions.appendSystemPrompt = [promptOptions.appendSystemPrompt, combined]
         .filter(Boolean)
         .join("\n\n");
       return;
     }
 
     return {
-      systemPrompt: event.systemPrompt + "\n\n" + promptContext,
+      systemPrompt: event.systemPrompt + "\n\n" + combined,
     };
   });
 
@@ -426,6 +442,10 @@ export default function (pi: ExtensionAPI) {
   // close() and silently no-op.
   pi.on("session_shutdown", async (_event, ctx) => {
     await initialization.close();
+    // Release Mneme providers first (before the db close below): each provider's
+    // store is independent, so this cannot race with the Hermes db close, and
+    // running it early keeps the "no DB-writing handler after close" rule intact.
+    await mnemeHost.onSessionShutdown();
     if (lazy && !initialization.isReady()) {
       databaseClosed = true;
       dbManager.close();

@@ -8,6 +8,10 @@
  *
  * Only `name`, `is_available`, `initialize`, and `get_tool_schemas` are abstract;
  * everything else has a permissive default so a provider opts in by overriding.
+ *
+ * `get_tool_schemas` returns schemas the host registers with its own
+ * `registerTool` (TypeBox `TSchema` here — Pi validates them at dispatch time);
+ * each tool dispatches back through the provider's `handleToolCall`.
  */
 
 /** What the last prefetch injected, for a deterministic recall indicator. */
@@ -20,11 +24,16 @@ export interface RecallStatus {
   glyph: string;
 }
 
-/** OpenAI function-calling schema. */
+import type { TSchema } from "typebox";
+
+/** A tool the provider exposes: name/description for the host, a TypeBox
+ * schema Pi validates at dispatch time, and per-tool dispatch via
+ * `handleToolCall`. `parameters` is a TypeBox `TSchema` (Pi's `registerTool`
+ * requires it, unlike Hermes's plain OpenAI JSON schema). */
 export interface ToolSchema {
   name: string;
   description: string;
-  parameters: Record<string, unknown>;
+  parameters: TSchema;
 }
 
 /**

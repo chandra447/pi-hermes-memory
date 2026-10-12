@@ -19,6 +19,9 @@ import { FactRetriever } from "./retrieval.js";
 import { MemoryProvider, type ToolSchema } from "./memory-provider.js";
 import { cleanHit } from "../mneme/clean-hit.js";
 import type { ProviderSearchHit, ProviderSearchOptions } from "../mneme/clean-hit.js";
+import { Type } from "typebox";
+import { StringEnum } from "@earendil-works/pi-ai";
+import type { TSchema } from "typebox";
 
 export interface HolographicConfig {
   db_path?: string;
@@ -35,6 +38,27 @@ export interface ToolResult {
   count: number;
 }
 
+// The Holographic tool schemas were plain OpenAI-style JSON in Hermes; Pi's
+// `registerTool` wants a TypeBox `TSchema` for its `parameters`, so these are
+// expressed with TypeBox. Required-ness is positional: a property is required
+// unless wrapped in `Type.Optional()`, so only `action` (and, for feedback, the
+// `fact_id`) is required — mirroring the original `required` arrays.
+const FACT_STORE_PARAMETERS: TSchema = Type.Object({
+  action: StringEnum(
+    ["add", "search", "probe", "related", "reason", "contradict", "update", "remove", "list"] as const,
+  ),
+  content: Type.Optional(Type.String({ description: "Fact content (required for 'add')."})),
+  query: Type.Optional(Type.String({ description: "Search query (required for 'search')."})),
+  entity: Type.Optional(Type.String({ description: "Entity name for 'probe'/'related'."})),
+  entities: Type.Optional(Type.Array(Type.String({ description: "Entity names for 'reason'."}))),
+  fact_id: Type.Optional(Type.Number({ description: "Fact ID for 'update'/'remove'."})),
+  category: Type.Optional(StringEnum(["user_pref", "project", "tool", "general"] as const)),
+  tags: Type.Optional(Type.String({ description: "Comma-separated tags."})),
+  trust_delta: Type.Optional(Type.Number({ description: "Trust adjustment for 'update'."})),
+  min_trust: Type.Optional(Type.Number({ description: "Minimum trust filter (default: 0.3)."})),
+  limit: Type.Optional(Type.Number({ description: "Max results (default: 10)."})),
+});
+
 export const FACT_STORE_SCHEMA: ToolSchema = {
   name: "fact_store",
   description:
@@ -45,36 +69,18 @@ export const FACT_STORE_SCHEMA: ToolSchema = {
     "• reason — Compositional: facts connected to MULTIPLE entities simultaneously.\n" +
     "• contradict — Memory hygiene: find facts making conflicting claims.\n• update/remove/list — CRUD operations.\n\n" +
     "IMPORTANT: Before answering questions about the user, ALWAYS probe or reason first.",
-  parameters: {
-    type: "object",
-    properties: {
-      action: {type: "string", enum: ["add", "search", "probe", "related", "reason", "contradict", "update", "remove", "list"]},
-      content: {type: "string", description: "Fact content (required for 'add')."},
-      query: {type: "string", description: "Search query (required for 'search')."},
-      entity: {type: "string", description: "Entity name for 'probe'/'related'."},
-      entities: {type: "array", items: {type: "string"}, description: "Entity names for 'reason'."},
-      fact_id: {type: "integer", description: "Fact ID for 'update'/'remove'."},
-      category: {type: "string", enum: ["user_pref", "project", "tool", "general"]},
-      tags: {type: "string", description: "Comma-separated tags."},
-      trust_delta: {type: "number", description: "Trust adjustment for 'update'."},
-      min_trust: {type: "number", description: "Minimum trust filter (default: 0.3)."},
-      limit: {type: "integer", description: "Max results (default: 10)."},
-    },
-    required: ["action"],
-  },
+  parameters: FACT_STORE_PARAMETERS,
 };
+
+const FACT_FEEDBACK_PARAMETERS: TSchema = Type.Object({
+  action: StringEnum(["helpful", "unhelpful"] as const),
+  fact_id: Type.Number({ description: "The fact ID to rate."}),
+});
 
 export const FACT_FEEDBACK_SCHEMA: ToolSchema = {
   name: "fact_feedback",
   description: "Rate a fact after using it. Mark 'helpful' if accurate, 'unhelpful' if outdated. This trains the memory — good facts rise, bad facts sink.",
-  parameters: {
-    type: "object",
-    properties: {
-      action: {type: "string", enum: ["helpful", "unhelpful"]},
-      fact_id: {type: "integer", description: "The fact ID to rate."},
-    },
-    required: ["action", "fact_id"],
-  },
+  parameters: FACT_FEEDBACK_PARAMETERS,
 };
 
 // Auto-extraction patterns: (patterns, category). User preferences -> user_pref,
