@@ -210,8 +210,9 @@ export class HolographicMemoryProvider extends MemoryProvider {
       id: String(r.fact_id),
       content: String(r.content),
       trust: typeof r.trust_score === "number" ? r.trust_score : undefined,
+      created_at: String(r.created_at),
+      updated_at: String(r.updated_at),
       category: typeof r.category === "string" ? r.category : undefined,
-      updated_at: typeof r.updated_at === "string" ? r.updated_at : undefined,
       raw_match: r,
     }));
   }

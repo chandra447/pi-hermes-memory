@@ -101,11 +101,11 @@ provider result that has passed **three gates before it is ever returned**:
 
 1. **Scope** — the hit matches the requested `category` (e.g. a personal query
    only returns personal-scoped facts; cross-category leakage is dropped).
-2. **Recency** — the hit is not past its effective-decay cutoff. Holographic's
-   Ebbinghaus time decay already ages trust toward 0.5; the gate drops facts
-   whose `updated_at` is older than the configured half-life window. A hit with
-   **no** `updated_at` is dropped too — with no recency the gate cannot prove
-   freshness, so it fails closed rather than surface an undated fact.
+2. **Recency** — the hit is not past its effective-decay cutoff. Age
+   (`created_at`) drives relevance; last-edit (`updated_at`) drives re-validation
+   — so both timestamps are **mandatory**, and the gate uses the **older of the
+   two** (strictest): a fresh edit can't rescue a fact created long ago. Missing
+   either fails closed — without both timestamps the gate can't prove freshness.
 3. **Source of truth** — the hit survives the same `scanContent` write gate the
    local store uses (no injection/exfiltration/secret patterns). Retrieval does
    **not** just strip patterns from a match; it refuses the whole fact. This is
@@ -126,7 +126,8 @@ export interface ProviderSearchHit {
   id: string;            // e.g. fact_id
   content: string;
   trust?: number;        // from trust_score
-  updated_at?: string;
+  created_at: string;    // mandatory — age drives relevance
+  updated_at: string;    // mandatory — last re-validation feeds the gate
   category?: string;
   raw_match: Record<string, unknown>; // the full provider row
 }

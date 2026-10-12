@@ -27,7 +27,7 @@ export interface ProviderSearchOptions {
    */
   category?: string;
   /**
-   * ISO timestamp; hits whose `updated_at` is older than this are dropped.
+   * ISO timestamp; hits whose content is older than this are dropped.
    * `undefined` = no recency filter.
    */
   minRecencyAt?: string;
@@ -40,8 +40,16 @@ export interface ProviderSearchHit {
   content: string;
   /** Trust score, if the provider reports one. */
   trust?: number;
-  /** Last-updated timestamp, if the provider reports one. */
-  updated_at?: string;
+  /**
+   * Created timestamp — mandatory. Memory age drives relevance: a fact's age is
+   * a first-order signal of whether it is still useful or needs re-validation.
+   */
+  created_at: string;
+  /**
+   * Last-updated timestamp — mandatory. When the content was last re-validated;
+   * feeds the recency gate's re-validation check.
+   */
+  updated_at: string;
   /** Provider's own category label. */
   category?: string;
   /** The full underlying provider row, for callers that want it. */
@@ -73,10 +81,14 @@ export function cleanHit(
   const hits = raw.filter((h) => {
     // Gate 1: scope.
     if (options.category !== undefined && h.category !== options.category) return false;
-    // Gate 2: recency. Unknown/absent recency fails closed (can't prove freshness).
+    // Gate 2: recency. Age (created_at) drives relevance; last-edit (updated_at)
+    // drives re-validation — use the OLDER of the two (strictest). Missing either
+    // fails closed: without both timestamps the gate can't prove freshness.
     if (minRecencyTs !== undefined) {
-      const ts = h.updated_at ? Date.parse(h.updated_at) : Number.NaN;
-      if (Number.isNaN(ts) || ts < minRecencyTs) return false;
+      const createdTs = h.created_at ? Date.parse(h.created_at) : Number.NaN;
+      const updatedTs = h.updated_at ? Date.parse(h.updated_at) : Number.NaN;
+      if (Number.isNaN(createdTs) || Number.isNaN(updatedTs)) return false;
+      if (Math.min(createdTs, updatedTs) < minRecencyTs) return false;
     }
     // Gate 3: source of truth — refuse the whole fact, don't strip patterns.
     if (scanContent(h.content) !== null) return false;

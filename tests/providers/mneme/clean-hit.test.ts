@@ -18,6 +18,7 @@ const hit = (over: Partial<ProviderSearchHit> = {}): ProviderSearchHit => ({
   id: "1",
   content: "a clean personal preference",
   trust: 0.9,
+  created_at: "2026-01-01T00:00:00.000Z",
   updated_at: "2026-01-10T00:00:00.000Z",
   category: "user_pref",
   raw_match: { fact_id: "1" },
@@ -45,24 +46,37 @@ describe("cleanHit — gate 1: scope", () => {
 describe("cleanHit — gate 2: recency", () => {
   it("drops hits older than minRecencyAt", () => {
     const p = new FakeProvider([
-      hit({ id: "old", updated_at: "2020-01-01T00:00:00.000Z" }),
-      hit({ id: "new", updated_at: "2026-06-01T00:00:00.000Z" }),
+      hit({ id: "old", created_at: "2020-01-01T00:00:00.000Z", updated_at: "2020-01-01T00:00:00.000Z" }),
+      hit({ id: "new", created_at: "2026-06-01T00:00:00.000Z", updated_at: "2026-06-01T00:00:00.000Z" }),
     ]);
     const res = cleanHit(p, "q", { minRecencyAt: "2026-01-01T00:00:00.000Z" });
     assert.equal(res.hits.length, 1);
     assert.equal(res.hits[0].id, "new");
   });
 
-  it("fails closed when a hit has no updated_at (can't prove freshness)", () => {
-    const p = new FakeProvider([hit({ updated_at: undefined })]);
+  it("uses the older of created_at/updated_at — a fresh edit can't rescue an old fact", () => {
+    // Created long ago (stale), but edited yesterday. The recency gate uses the
+    // OLDER timestamp, so the age still drops it.
+    const p = new FakeProvider([
+      hit({ id: "a", created_at: "2020-01-01T00:00:00.000Z", updated_at: "2026-06-01T00:00:00.000Z" }),
+    ]);
+    const res = cleanHit(p, "q", { minRecencyAt: "2026-01-01T00:00:00.000Z" });
+    assert.equal(res.hits.length, 0);
+  });
+
+  it("fails closed when either timestamp is missing", () => {
+    const p = new FakeProvider([
+      { id: "1", content: "clean", created_at: "2026-06-01T00:00:00.000Z", raw_match: {} } as unknown as ProviderSearchHit,
+    ]);
     const res = cleanHit(p, "q", { minRecencyAt: "2026-01-01T00:00:00.000Z" });
     assert.equal(res.hits.length, 0);
   });
 
   it("no recency filter when minRecencyAt is omitted", () => {
-    const p = new FakeProvider([hit({ updated_at: "1999-01-01T00:00:00.000Z" })]);
+    const p = new FakeProvider([hit({ created_at: "1999-01-01T00:00:00.000Z", updated_at: "1999-01-01T00:00:00.000Z" })]);
     assert.equal(cleanHit(p, "q", {}).hits.length, 1);
   });
+
 });
 
 describe("cleanHit — gate 3: source of truth (scanContent)", () => {
