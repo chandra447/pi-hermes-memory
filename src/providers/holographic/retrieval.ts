@@ -315,7 +315,10 @@ export class FactRetriever {
     limit: number,
   ): Record<string, unknown>[] {
     /** Raw FTS5 MATCH candidates with rank normalized to [0, 1] as `fts_rank`. */
-    const categoryClause = "AND f.category = ? ";
+    // Clause is conditional to match the conditional param push: with no category
+    // filter there is no `category = ?` placeholder, so the bound params must not
+    // include one (otherwise better-sqlite3's param-count mismatch yields []).
+    const categoryClause = category ? "AND f.category = ? " : "";
     const params: unknown[] = [FactRetriever._sanitizeFtsQuery(query)];
     if (category) params.push(category);
     params.push(minTrust, limit);

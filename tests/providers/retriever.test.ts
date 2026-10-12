@@ -129,6 +129,19 @@ describe("FactRetriever retrieval", () => {
     const results = s.search("nonexistentzzz", "general", 0, 5);
     assert.ok(results.length === 0, "unmatched query should return nothing");
   });
+
+  it("returns facts from any category when no category filter is passed", () => {
+    const store = new MemoryStore(":memory:");
+    store.addFact("alice prefers dark mode", "preference");
+    store.addFact("alice and bob prefer coffee", "convention");
+    const s = new FactRetriever(store, 0);
+    // No category → facts from EVERY category should be eligible (regression for
+    // the _ftsCandidates category-clause / param-count mismatch).
+    const results = s.search("alice", undefined, 0, 10);
+    assert.strictEqual(results.length, 2, "no-category search should find facts from all categories");
+    const cats = new Set(results.map((r) => (r as { category: string }).category));
+    assert.ok(cats.has("preference") && cats.has("convention"), `expected both categories, saw ${[...cats].join(", ")}`);
+  });
 });
 
 describe("FactRetriever Jaccard", () => {
