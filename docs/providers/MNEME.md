@@ -99,8 +99,14 @@ have higher recall but leak 19–20 stale/forbidden hits per 36 questions; the
 local providers (Holographic, RetainDB) score 0 bad hits. A "clean hit" is a
 provider result that has passed **three gates before it is ever returned**:
 
-1. **Scope** — the hit matches the requested `category` (e.g. a personal query
-   only returns personal-scoped facts; cross-category leakage is dropped).
+1. **Scope** — the hit matches the requested `category`. Mneme standardizes on
+   the six Hermes memory scopes as the **single canonical category vocabulary**:
+   `failure | correction | insight | preference | convention | tool-quirk` — the
+   same set the built-in `MemoryStore` already uses. The scope gate drops anything
+   outside the requested scope (cross-category leakage): a personal query only
+   returns personal-scoped facts. There is **no** per-provider category namespace
+   and **no** mapping layer — every provider's facts carry one of these six, so
+   `category` is typed as `MemoryCategory` here, not a free string.
 2. **Recency** — the hit is not past its effective-decay cutoff. Age
    (`created_at`) drives relevance; last-edit (`updated_at`) drives re-validation
    — so both timestamps are **mandatory**, and the gate uses the **older of the
@@ -117,9 +123,10 @@ provider result that has passed **three gates before it is ever returned**:
 ```ts
 export interface ProviderSearchOptions {
   limit?: number;
-  // Provider-agnostic category label (providers use their own vocabulary:
-  // "user_pref", "project", …). Undefined = no scope filter.
-  category?: string;
+  // Canonical Mneme category — one of the six Hermes memory scopes
+  // (failure | correction | insight | preference | convention | tool-quirk).
+  // Undefined = no scope filter.
+  category?: MemoryCategory;
   minRecencyAt?: string; // ISO timestamp
 }
 export interface ProviderSearchHit {
@@ -128,7 +135,7 @@ export interface ProviderSearchHit {
   trust?: number;        // from trust_score
   created_at: string;    // mandatory — age drives relevance
   updated_at: string;    // mandatory — last re-validation feeds the gate
-  category?: string;
+  category?: MemoryCategory; // one of the six canonical memory scopes
   raw_match: Record<string, unknown>; // the full provider row
 }
 export interface ProviderSearchResult {
@@ -232,6 +239,13 @@ rerank, `cleanHit` = that pipeline plus the three gates above, `remove` =
 `hrr_dim`, `hrr_weight`). Its tools (`fact_store`, `fact_feedback`) register via
 the `registerTool` idiom.
 
+Its facts carry a `category`, now **one of the six canonical memory scopes**
+rather than Hermes's older `user_pref`/`project`/`tool`/`general` set — Mneme
+standardizes on the memory-scope vocabulary everywhere, so no provider owns a
+private category namespace and no mapping layer is needed. A provider tags a fact
+with whatever scope fits (a user preference lands as `preference`, a project
+decision as `convention`, a tool quirk as `tool-quirk`, …).
+
 ## Scope
 
 | Phase | Deliverable |
@@ -250,3 +264,12 @@ registration**: Holographic's schemas are plain JSON schemas, but Pi's
 TypeBox conversion before they can register. That conversion is a small, isolated
 follow-up; the layer it plugs into (registry, config, selection, clean-hit) is
 complete and tested.
+
+**Category vocabulary (design decision).** The category field across all of Mneme
+is the six Hermes memory scopes — `failure | correction | insight | preference |
+convention | tool-quirk` — not a provider-agnostic string. This collapses the
+clean-hit layer's `category` to `MemoryCategory` and moves Holographic's fact
+categories off Hermes's `user_pref`/`project`/`tool`/`general` set onto the same
+six. It is enforced everywhere with a single vocabulary — no per-provider
+namespace and no mapping/migration layer, which is cheap because the software is
+unreleased (nothing persisted to migrate).

@@ -19,6 +19,7 @@ import { FactRetriever } from "./retrieval.js";
 import { MemoryProvider, type ToolSchema } from "./memory-provider.js";
 import { cleanHit } from "../mneme/clean-hit.js";
 import type { ProviderSearchHit, ProviderSearchOptions } from "../mneme/clean-hit.js";
+import type { MemoryCategory } from "../../types.js";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { TSchema } from "typebox";
@@ -52,7 +53,9 @@ const FACT_STORE_PARAMETERS: TSchema = Type.Object({
   entity: Type.Optional(Type.String({ description: "Entity name for 'probe'/'related'."})),
   entities: Type.Optional(Type.Array(Type.String({ description: "Entity names for 'reason'."}))),
   fact_id: Type.Optional(Type.Number({ description: "Fact ID for 'update'/'remove'."})),
-  category: Type.Optional(StringEnum(["user_pref", "project", "tool", "general"] as const)),
+  category: Type.Optional(
+    StringEnum(["failure", "correction", "insight", "preference", "convention", "tool-quirk"] as const),
+  ),
   tags: Type.Optional(Type.String({ description: "Comma-separated tags."})),
   trust_delta: Type.Optional(Type.Number({ description: "Trust adjustment for 'update'."})),
   min_trust: Type.Optional(Type.Number({ description: "Minimum trust filter (default: 0.3)."})),
@@ -90,11 +93,11 @@ interface ExtractPattern {
   category: string;
 }
 const EXTRACT_PATTERNS: ExtractPattern[] = [
-  {regex: /\bI\s+(?:prefer|like|love|use|want|need)\s+(.+)/i, category: "user_pref"},
-  {regex: /\bmy\s+(?:favorite|preferred|default)\s+\w+\s+is\s+(.+)/i, category: "user_pref"},
-  {regex: /\bI\s+(?:always|never|usually)\s+(.+)/i, category: "user_pref"},
-  {regex: /\bwe\s+(?:decided|agreed|chose)\s+(?:to\s+)?(.+)/i, category: "project"},
-  {regex: /\bthe\s+project\s+(?:uses|needs|requires)\s+(.+)/i, category: "project"},
+  {regex: /\bI\s+(?:prefer|like|love|use|want|need)\s+(.+)/i, category: "preference"},
+  {regex: /\bmy\s+(?:favorite|preferred|default)\s+\w+\s+is\s+(.+)/i, category: "preference"},
+  {regex: /\bI\s+(?:always|never|usually)\s+(.+)/i, category: "preference"},
+  {regex: /\bwe\s+(?:decided|agreed|chose)\s+(?:to\s+)?(.+)/i, category: "convention"},
+  {regex: /\bthe\s+project\s+(?:uses|needs|requires)\s+(.+)/i, category: "convention"},
 ];
 
 /** Coerce the `auto_extract` config (a string enum in Hermes) into a boolean. */
@@ -218,7 +221,7 @@ export class HolographicMemoryProvider extends MemoryProvider {
       trust: typeof r.trust_score === "number" ? r.trust_score : undefined,
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
-      category: typeof r.category === "string" ? r.category : undefined,
+      category: typeof r.category === "string" ? (r.category as MemoryCategory) : undefined,
       raw_match: r,
     }));
   }
@@ -243,7 +246,7 @@ export class HolographicMemoryProvider extends MemoryProvider {
   private dispatchFactStore(a: Record<string, unknown>): string {
     switch (a.action) {
       case "add": {
-        const fact_id = this.store.addFact(String(a.content), this.str(a, "category", "general"), this.str(a, "tags", ""));
+        const fact_id = this.store.addFact(String(a.content), this.str(a, "category", "insight"), this.str(a, "tags", ""));
         return JSON.stringify({fact_id, status: "added"});
       }
       case "search":
@@ -331,7 +334,7 @@ export class HolographicMemoryProvider extends MemoryProvider {
     // Mirror built-in memory writes as facts.
     if (action === "add" && this._store && content) {
       try {
-        this.store.addFact(content, target === "user" ? "user_pref" : "general");
+        this.store.addFact(content, target === "user" ? "preference" : "insight");
       } catch (e) {
         console.debug(`Holographic memory_write mirror failed: ${e}`);
       }

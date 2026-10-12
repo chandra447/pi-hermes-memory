@@ -20,7 +20,7 @@ const hit = (over: Partial<ProviderSearchHit> = {}): ProviderSearchHit => ({
   trust: 0.9,
   created_at: "2026-01-01T00:00:00.000Z",
   updated_at: "2026-01-10T00:00:00.000Z",
-  category: "user_pref",
+  category: "preference",
   raw_match: { fact_id: "1" },
   ...over,
 });
@@ -28,17 +28,17 @@ const hit = (over: Partial<ProviderSearchHit> = {}): ProviderSearchHit => ({
 describe("cleanHit — gate 1: scope", () => {
   it("drops hits outside the requested category", () => {
     const p = new FakeProvider([
-      hit({ id: "a", category: "user_pref" }),
-      hit({ id: "b", category: "project" }),
+      hit({ id: "a", category: "preference" }),
+      hit({ id: "b", category: "convention" }),
     ]);
-    const res = cleanHit(p, "q", { category: "user_pref" });
+    const res = cleanHit(p, "q", { category: "preference" });
     assert.equal(res.raw_matches, 2);
     assert.equal(res.hits.length, 1);
     assert.equal(res.hits[0].id, "a");
   });
 
   it("returns all hits when no scope is requested", () => {
-    const p = new FakeProvider([hit({ category: "user_pref" }), hit({ category: "project" })]);
+    const p = new FakeProvider([hit({ category: "preference" }), hit({ category: "convention" })]);
     assert.equal(cleanHit(p, "q", {}).hits.length, 2);
   });
 });
@@ -101,10 +101,10 @@ describe("cleanHit — gate 3: source of truth (scanContent)", () => {
 describe("cleanHit — combined", () => {
   it("passes through clean, in-scope, fresh hits and reports the raw count", () => {
     const p = new FakeProvider([
-      hit({ id: "1", category: "user_pref", updated_at: "2026-06-01T00:00:00.000Z", content: "clean" }),
-      hit({ id: "2", category: "user_pref", updated_at: "2026-06-01T00:00:00.000Z", content: "clean" }),
+      hit({ id: "1", category: "preference", updated_at: "2026-06-01T00:00:00.000Z", content: "clean" }),
+      hit({ id: "2", category: "preference", updated_at: "2026-06-01T00:00:00.000Z", content: "clean" }),
     ]);
-    const res = cleanHit(p, "q", { category: "user_pref", minRecencyAt: "2026-01-01T00:00:00.000Z" });
+    const res = cleanHit(p, "q", { category: "preference", minRecencyAt: "2026-01-01T00:00:00.000Z" });
     assert.equal(res.raw_matches, 2);
     assert.equal(res.hits.length, 2);
   });

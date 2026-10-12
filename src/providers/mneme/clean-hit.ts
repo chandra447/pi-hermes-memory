@@ -16,16 +16,18 @@
  */
 
 import { scanContent } from "../../store/content-scanner.js";
+import type { MemoryCategory } from "../../types.js";
 
 export interface ProviderSearchOptions {
   /** Max results to consider. */
   limit?: number;
   /**
-   * Scope filter. Provider-agnostic: providers use their own category
-   * vocabulary ("user_pref", "project", …), so this is a plain string, not the
-   * file-store's `MemoryCategory`. `undefined` = no scope filter.
+   * Scope filter — one of the six canonical Mneme memory scopes
+   * (`failure | correction | insight | preference | convention | tool-quirk`).
+   * Mneme standardizes on this vocabulary everywhere; there is no per-provider
+   * category namespace and no mapping layer. `undefined` = no scope filter.
    */
-  category?: string;
+  category?: MemoryCategory;
   /**
    * ISO timestamp; hits whose content is older than this are dropped.
    * `undefined` = no recency filter.
@@ -50,8 +52,8 @@ export interface ProviderSearchHit {
    * feeds the recency gate's re-validation check.
    */
   updated_at: string;
-  /** Provider's own category label. */
-  category?: string;
+  /** Category — one of the six canonical Mneme memory scopes. */
+  category?: MemoryCategory;
   /** The full underlying provider row, for callers that want it. */
   raw_match: Record<string, unknown>;
 }
