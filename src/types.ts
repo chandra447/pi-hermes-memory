@@ -135,6 +135,29 @@ export interface MemoryConfig {
    * Default: 0 (disabled).
    */
   sessionRetentionDays?: number;
+  /**
+   * Mneme: pluggable *additional* memory providers (starting with Holographic).
+   * Disabled until explicitly opted in via `enabled`. Lives in the extension's
+   * own namespace — a new top-level block that never touches the shapes above.
+   *
+   * The plugin keys below map 1:1 onto the concrete provider's config
+   * (Holographic's `plugin.yaml`): `db_path`, `default_trust`,
+   * `min_trust_threshold`, `temporal_decay_half_life`, `hrr_dim`,
+   * `hrr_weight`, plus `auto_extract` (session-end fact extraction).
+   */
+  mneme?: {
+    /** Turn Mneme on. Default: false (disabled until opted in). */
+    enabled?: boolean;
+    /** Names of registered providers to load when enabled. Undefined = all registered. */
+    providers?: string[];
+    db_path?: string;
+    default_trust?: number;
+    min_trust_threshold?: number;
+    temporal_decay_half_life?: number;
+    hrr_dim?: number;
+    hrr_weight?: number;
+    auto_extract?: boolean | string;
+  };
 }
 
 export type MemoryCategory =

@@ -17,6 +17,8 @@
 import { MemoryStore } from "./store.js";
 import { FactRetriever } from "./retrieval.js";
 import { MemoryProvider, type ToolSchema } from "./memory-provider.js";
+import { cleanHit } from "../mneme/clean-hit.js";
+import type { ProviderSearchHit, ProviderSearchOptions } from "../mneme/clean-hit.js";
 
 export interface HolographicConfig {
   db_path?: string;
@@ -181,13 +183,37 @@ export class HolographicMemoryProvider extends MemoryProvider {
   override prefetch(query: string, _sessionId = ""): string {
     if (!this._retriever || !query) return "";
     try {
-      const results = this.retriever.search(query, undefined, this.minTrust, 5);
-      const lines = results.map((r) => `- [${Number((r.trust_score as number | undefined) ?? 0).toFixed(1)}] ${String(r.content ?? "")}`);
+      // Clean recall only: gate by scope/recency/source-of-truth (the Mneme layer).
+      const { hits } = cleanHit(this, query, { limit: 5 });
+      const lines = hits.map((h) => `- [${(h.trust ?? 0).toFixed(1)}] ${h.content}`);
       return lines.length > 0 ? "## Holographic Memory\n" + lines.join("\n") : "";
     } catch (e) {
       console.debug(`Holographic prefetch failed: ${e}`);
       return "";
     }
+  }
+
+  /**
+   * Raw recall, shaped for the Mneme clean-hit layer. Additive — the base
+   * `MemoryProvider` is left untouched. Maps `FactRetriever.search` rows onto
+   * `ProviderSearchHit`; the Mneme layer applies scope/recency/source-of-truth.
+   */
+  recall(query: string, options: ProviderSearchOptions = {}): ProviderSearchHit[] {
+    if (!this._retriever) throw new Error("Holographic provider not initialized");
+    const rows = this.retriever.search(
+      query,
+      options.category,
+      this.minTrust,
+      options.limit ?? 10,
+    );
+    return rows.map((r) => ({
+      id: String(r.fact_id),
+      content: String(r.content),
+      trust: typeof r.trust_score === "number" ? r.trust_score : undefined,
+      category: typeof r.category === "string" ? r.category : undefined,
+      updated_at: typeof r.updated_at === "string" ? r.updated_at : undefined,
+      raw_match: r,
+    }));
   }
 
   override getToolSchemas(): ToolSchema[] {

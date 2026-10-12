@@ -1,4 +1,4 @@
-# Proteus — pluggable memory providers
+# Mneme — pluggable additional memory providers
 
 > Port Holographic (Hermes's first-party local memory provider) into
 > pi-hermes-memory behind a `MemoryProvider` interface, keeping the existing
@@ -41,8 +41,8 @@ Holographic as a **coexisting** provider — the agent uses both the built-in
 its own tools + a recall block + lifecycle, and the existing `MemoryStore` keeps
 doing exactly what it does.
 
-Concretely, **Proteus** is the `MemoryProvider` contract a provider implements;
-`index.ts` loads registered providers and drives them through the lifecycle:
+Concretely, **Mneme** is the pluggable layer that loads providers and drives them
+through the lifecycle:
 
 ```
 initialize → systemPromptBlock/prefetch → tool dispatch → shutdown
@@ -50,7 +50,46 @@ initialize → systemPromptBlock/prefetch → tool dispatch → shutdown
 
 This is the least invasive wiring: `MemoryStore` and its consolidation/locking
 stay untouched. Swapping the model later (making the file store *implement*
-Proteus and become the default provider) is a separate refactor — noted, not done.
+the `MemoryProvider` base and become the default provider) is a separate refactor
+— noted, not done.
+
+### Two contract layers
+
+Mneme sits on top of the provider contract in two layers:
+
+1. **`MemoryProvider` — the Pi-convention base.** The host (the extension,
+   mirroring Hermes's `MemoryManager`) drives it. This is the faithful port of
+   Hermes's `agent/memory_provider.py` `MemoryProvider` ABC. What the host calls:
+
+   - `get name(): string` — stable, provider-unique id (e.g. `"holographic"`)
+   - `isAvailable(): boolean` — config/deps only, no network (sync)
+   - `initialize(sessionId, config?)` — connections/resources per startup
+   - `getToolSchemas(): ToolSchema[]` + `handleToolCall(name, args): string` —
+     OpenAI function-calling dispatch; every tool returns a JSON string
+   - `shutdown(): void` — flush queues, close connections
+   - lifecycle hooks (opt in by overriding): `onTurnStart`, `onSessionEnd`
+     (real session boundaries only), `onPreCompression` (feeds the summary
+     prompt), `onSessionSwitch`, `onDelegation`
+   - recall: `systemPromptBlock(): string`, `prefetch(query, sessionId): string`,
+     `syncTurn(...): void`, `recallStatus(): RecallStatus | null`
+   - `onMemoryWrite(action, target, content): void` — mirror built-in writes as
+     facts (add|replace|remove; target memory|user)
+   - static helpers: `getConfigSchema()`, `saveConfig()`, `backupPaths()`,
+     `unavailableReason()`
+
+   Only `name`, `isAvailable`, `initialize`, and `getToolSchemas` are abstract;
+   everything else has a permissive default so a provider opts in by overriding.
+   The base is generic — subclasses carry the specifics
+   (`HolographicMemoryProvider`), so its name is intentionally not a capability
+   hint. This base is **the frozen public interface**: `MemoryConfig`,
+   `MemoryResult`, and `MemoryMutationOperation` are untouched.
+
+2. **The Mneme layer — the clean-hit + registry + opt-in contract.** Built in a
+   separate module (`src/providers/mneme/`) so providers don't subclass the
+   extension: a registry that classifies providers (`is_local`/`is_bidirectional`),
+   the `cleanHit` gating pipeline (the headline operation below), and the config
+   surface that selects which providers load. This is the only layer that is
+   Mneme-specific.
 
 ## "Clean hit" is the first-class operation
 
@@ -64,137 +103,149 @@ provider result that has passed **three gates before it is ever returned**:
    only returns personal-scoped facts; cross-category leakage is dropped).
 2. **Recency** — the hit is not past its effective-decay cutoff. Holographic's
    Ebbinghaus time decay already ages trust toward 0.5; the gate drops facts
-   whose `updated_at` is older than the configured half-life window.
+   whose `updated_at` is older than the configured half-life window. A hit with
+   **no** `updated_at` is dropped too — with no recency the gate cannot prove
+   freshness, so it fails closed rather than surface an undated fact.
 3. **Source of truth** — the hit survives the same `scanContent` write gate the
    local store uses (no injection/exfiltration/secret patterns). Retrieval does
    **not** just strip patterns from a match; it refuses the whole fact. This is
    why the built-in `MemoryStore` is the source of truth and providers are gated
    mirrors: anything that would fail a write never becomes a retrievable hit.
 
-A provider implements raw recall, then `cleanHit()` runs that pipeline:
+`cleanHit` lives in the Mneme layer and adapts a provider's *raw recall*:
 
 ```ts
-async function cleanHit(provider, query, options): Promise<ProviderSearchResult> {
-  const raw = await provider.search(query, options);       // provider's own recall
-  const clean = raw.hits.filter(h =>
-    h.category === options.category                       // gate 1: scope
-      && h.updated_at > options.minRecencyAt               // gate 2: recency
-      && !scanContent(h.content)                           // gate 3: source of truth
-  );
-  return { hits: clean, raw_matches: raw.hits.length };
+export interface ProviderSearchOptions {
+  limit?: number;
+  // Provider-agnostic category label (providers use their own vocabulary:
+  // "user_pref", "project", …). Undefined = no scope filter.
+  category?: string;
+  minRecencyAt?: string; // ISO timestamp
+}
+export interface ProviderSearchHit {
+  id: string;            // e.g. fact_id
+  content: string;
+  trust?: number;        // from trust_score
+  updated_at?: string;
+  category?: string;
+  raw_match: Record<string, unknown>; // the full provider row
+}
+export interface ProviderSearchResult {
+  hits: ProviderSearchHit[];
+  raw_matches: number;   // how many rows were considered before gating
+}
+
+export function cleanHit(
+  provider: { recall(query, options?): ProviderSearchHit[] },
+  query: string,
+  options: ProviderSearchOptions,
+): ProviderSearchResult {
+  const raw = provider.recall(query, options);          // provider's own recall
+  const minTs = options.minRecencyAt ? Date.parse(options.minRecencyAt) : undefined;
+  const hits = raw.filter(h => {
+    if (options.category !== undefined && h.category !== options.category) return false; // gate 1: scope
+    // gate 2: recency — no updated_at ⇒ cannot prove freshness ⇒ drop (fail closed).
+    if (minTs !== undefined) {
+      const ts = h.updated_at ? Date.parse(h.updated_at) : Number.NaN;
+      if (Number.isNaN(ts) || ts < minTs) return false;
+    }
+    return !scanContent(h.content);                                              // gate 3: source of truth
+  });
+  return { hits, raw_matches: raw.length };
 }
 ```
 
-Holographic's own retrieval (`retrieval.py`) already does this in spirit: FTS +
+Holographic's own retrieval (`retrieval.ts`) already does this in spirit: FTS +
 Jaccard + HRR rerank, then trust-scores and temporal decay prune the result
 before it hits the system prompt. The port preserves that ordering. `cleanHit`
 merges the explicit gates onto the interface so every future provider is held to
 the same bar the article validated.
 
-## Proteus interface (TS)
-
-Adapted from Hermes's `agent/memory_provider.py` `MemoryProvider` ABC to Pi's
-tool/context conventions. Abstract members a provider must implement:
-
-- `id: string` — stable, provider-unique registration id
-- `kind: "vector" | "document" | "hybrid"` — retrieval strategy shape
-- `isAvailable(): Promise<boolean>` — config/deps only, no network
-- `add(entries: string[]): Promise<void>` — mirror built-in writes
-- `replace(content: string): Promise<void>` — full-store rewrite
-- `remove(match: string | string[]): Promise<void>` — delete by text
-- `snapshot(): Promise<MemorySnapshot>` — return every entry (consolidation)
-- `search(query, options?): Promise<ProviderSearchResult>` — raw provider recall
-- `cleanHit(query, options?): Promise<ProviderSearchResult>` — search gated by
-  scope + recency + source-of-truth (the operation above)
-- `sync(localEntries, options?): Promise<ProviderSyncResult>` — one direction per
-  provider (see registry `is_bidirectional`)
-- `close(signal?): Promise<void>` — close the connection
-
-Result/options shapes:
-
-```ts
-interface ProviderSearchOptions { limit?: number; category?: MemoryCategory; minRecencyAt?: string; }
-interface ProviderSearchHit { id: string; content: string; trust?: number; updated_at?: string; }
-interface ProviderSearchResult { hits: ProviderSearchHit[]; raw_matches: number; }
-interface ProviderSyncResult { synced: boolean; error?: string; added?: number; removed?: number; }
-```
-
-Abstract members a provider may opt into (override to enable):
-
-- `systemPromptBlock(): string` — static injection ("# Holographic Memory …")
-- `prefetch(query, params?): string` — formatted clean recall for the next turn
-- `onMemoryWrite(action, target, content): void` — mirror built-in writes as facts
-- `refresh?(signal?): Promise<void>` — periodic background sync
-- `shutdown(): Promise<void>` — close the shared connection
-
 ## Registry
 
 ```ts
 export interface RegisteredProvider {
-  id: string;
-  name: string;
+  id: string;            // provider name
+  name: string;          // human label
   kind: "vector" | "document" | "hybrid";
   is_local: boolean;    // embedded, no external auth/server — the v1 bar
   is_bidirectional: boolean; // whether sync pulls from the provider or pushes only
+  config?: Record<string, unknown>;
 }
-export interface ProteusRegistry {
-  register(provider: ProteusProvider): void;
-  get(id: string): ProteusProvider | undefined;
-  list(): RegisteredProvider[];
+
+// allowNonLocal=false is the v1 default: non-local providers are rejected
+// until an operator opts in. Also has has(id) and clear().
+class MnemeRegistry(allowNonLocal = false) {
+  register(provider: RegisteredProvider): void { /* rejects is_local:false unless opted in */ }
+  get(id: string): RegisteredProvider | undefined; ...
+  list(): RegisteredProvider[]; ...
 }
 ```
 
 The registry rejects a provider whose `is_local === false` unless an operator has
-explicitly opted in (the v1 bar: **embedded, no external auth, no running server**).
+explicitly opted in (the v1 bar: **embedded, no external auth, no running
+server**). `is_bidirectional` is the one sanctioned pull path (`sync({ pull })`) —
+push-only v1 providers (`is_bidirectional: false`) only accept writes.
+
+The provider's own `recall(query, options)` (additive, on the concrete
+`HolographicMemoryProvider` — the base is left untouched) returns the raw rows
+that `cleanHit` gates; the base's `prefetch`/`handleToolCall` continue to drive the
+agent's normal recall path.
 
 ## Integration seams
 
 Wiring reuses the existing Pi seams rather than inventing new ones:
 
-- **Write gate is shared, not duplicated.** `scanContent` in `store/content-scanner.ts`
-  is the single injection/exfiltration/secret gate and runs **before any provider**.
-  A provider's `add`/`replace` mirrors built-in writes through the same gate as a
-  defense-in-depth second check — a fact that would fail a write never becomes a
-  retrievable hit, so `cleanHit`'s source-of-truth gate is airtight.
-- **Providers inject, they don't subclass the extension.** Tool/command registration
-  goes through the existing `registerTool`/`registerCommand` idiom
-  (`memory-initialization.ts`), exactly as Holographic's `fact_store`/`fact_feedback`
-  would register. The local `MemoryStore` and its consolidation/mutation locking
-  stay untouched.
-- **Config.** `proteus?: { enabled: boolean; db_path?: string; default_trust?:
-  number; min_trust_threshold?: number; temporal_decay_half_life?: number; hrr_dim?:
-  number; hrr_weight?: number }` in `config.ts`, plus `proteus.providers?: string[]`
-  to select which registered providers load. Default: disabled until opted in.
-- **Source-of-truth discipline.** The built-in `MemoryStore` is the local source of
-  truth. On a write, the provider's `onMemoryWrite` mirrors the fact into the store
-  (push-only for v1); `sync({ pull })` is the one sanctioned pull path, gated by
-  `is_bidirectional`. Local memory never depends on a provider being up.
+- **Write gate is shared, not duplicated.** `scanContent` in
+  `store/content-scanner.ts` is the single injection/exfiltration/secret gate and
+  runs **before any provider**. A provider's writes mirror built-in writes through
+  the same gate as a defense-in-depth second check — a fact that would fail a
+  write never becomes a retrievable hit, so `cleanHit`'s source-of-truth gate is
+  airtight.
+- **Providers inject, they don't subclass the extension.** Tool/command
+  registration goes through the existing `registerTool`/`registerCommand` idiom
+  (`memory-initialization.ts`), exactly as Holographic's `fact_store`/
+  `fact_feedback` register. The local `MemoryStore` and its consolidation/
+  mutation locking stay untouched.
+- **Config.** `mneme?: { enabled: boolean; providers?: string[]; db_path?:
+  string; default_trust?: number; min_trust_threshold?: number;
+  temporal_decay_half_life?: number; hrr_dim?: number; hrr_weight?: number }` in
+  `config.ts`, plus `mneme.providers?: string[]` to select which registered
+  providers load. Default: **disabled until opted in** (`mneme.enabled`).
+- **Source-of-truth discipline.** The built-in `MemoryStore` is the local source
+  of truth. On a write, the provider's `onMemoryWrite` mirrors the fact into the
+  store (push-only for v1); `sync({ pull })` is the one sanctioned pull path,
+  gated by `is_bidirectional`. Local memory never depends on a provider being up.
 - **Frozen public interface.** `MemoryConfig`, `MemoryResult`, and
-  `MemoryMutationOperation` are untouched; Proteus lives in the extension's own
-  namespace and never changes their shapes.
+  `MemoryMutationOperation` are untouched; Mneme lives in the extension's own
+  namespace (`src/providers/mneme/`) and never changes their shapes.
 
 ## Holographic (v1) concretization
 
-Holographic maps onto Proteus directly: its `store.ts` port is the local SQLite
-source of truth (`is_local: true`); `add` = `addFact`, `search` = FTS+Jaccard+HRR
-rerank, `cleanHit` = that pipeline plus the three gates above, `remove` = `removeFact`;
-`snapshot` = all facts; `sync` = `db_path`-backed copy (push-only for v1, so
+Holographic maps onto Mneme directly: its `store.ts` port is the local SQLite
+source of truth (`is_local: true`); `add` = `addFact`, `recall` = FTS+Jaccard+HRR
+rerank, `cleanHit` = that pipeline plus the three gates above, `remove` =
+`removeFact`; `sync` = `db_path`-backed copy (push-only for v1, so
 `is_bidirectional: false`). Config keys mirror the plugin's `plugin.yaml`
 (`db_path`, `default_trust`, `min_trust_threshold`, `temporal_decay_half_life`,
-`hrr_dim`, `hrr_weight`). Its tools (`fact_store`, `fact_feedback`) register via the
-`registerTool` idiom. Phase 3 builds on the committed store (Phase 2).
+`hrr_dim`, `hrr_weight`). Its tools (`fact_store`, `fact_feedback`) register via
+the `registerTool` idiom.
 
 ## Scope
 
 | Phase | Deliverable |
 |---|---|
-| 0 | Proteus types + **clean-hit** design + integration-seam map (this doc) |
+| 0 | Mneme types + **clean-hit** design + integration-seam map (this doc) |
 | 1 | HRR math port (SHA-256 atoms, bind/unbind/bundle/similarity, blob (de)ser) | ✅ `4c53fb3` |
 | 2 | Holographic store port: SQLite schema + FTS5 + trust + N-gram dedup + entities + relationship graph + time decay | ✅ `ecd60ff` (20/20 tests) |
-| 3 | Holographic provider: tools (`fact_store`, `fact_feedback`), system block, prefetch — HRR + store already in place |
-| 4 | Wiring: provider registry + config (`proteus.db_path`, `default_trust`, `hrr_dim`, provider selection) |
-| 5 | Tests (store, HRR, provider, config) + clean-hit gating tests |
+| 3 | Holographic provider: tools (`fact_store`, `fact_feedback`), system block, prefetch, `onMemoryWrite` mirror — HRR + store already in place | ✅ `672033a` (built + tested) |
+| 4 | Mneme layer: registry (is_local bar + is_bidirectional) + config (`mneme.enabled`/`mneme.providers`, `mneme.db_path`, `default_trust`, `hrr_dim`) + provider selection (`buildMneme`) + `cleanHit` gating (all 3 gates incl. `scanContent`) + store write-mirror hook | ✅ `9284b42` (built + tested) |
+| 5 | Tests (registry, config, all three clean-hit gates incl. `scanContent` source-of-truth) | ✅ |
+| 6 | Host wiring in `index.ts`: initialize each provider + append `systemPromptBlock`/prefetch per turn, fire the write-mirror, and register `fact_store`/`fact_feedback` | held — see below |
 
-Phases 0â2 (this doc, HRR, store) are direction-independent and are done. Phase 3
-builds on the committed store; Phase 4 wiring is the only part that depends on the
-integration model and is the next thing to implement.
+Phases 0–4 are done. The remaining seam (Phase 6) is **tool + command
+registration**: Holographic's schemas are plain JSON schemas, but Pi's
+`registerTool` takes a TypeBox `TSchema`, so the two Holographic tools need a
+TypeBox conversion before they can register. That conversion is a small, isolated
+follow-up; the layer it plugs into (registry, config, selection, clean-hit) is
+complete and tested.

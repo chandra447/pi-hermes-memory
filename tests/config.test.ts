@@ -581,4 +581,43 @@ describe("loadConfig", () => {
     assert.strictEqual(config.usageHitTrackingEnabled, true);
     assert.strictEqual(config.consolidationUsageSignals, true);
   });
+
+  it("leaves mneme undefined until enabled (opt-in, disabled by default)", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({}));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).mneme, undefined);
+  });
+
+  it("only accepts a boolean mneme.enabled override", () => {
+    for (const value of [true, false, "true", 1, null]) {
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ mneme: { enabled: value } }));
+      assert.strictEqual(loadConfig(TEST_CONFIG_PATH).mneme?.enabled, value === true);
+    }
+  });
+
+  it("honors a configured mneme.db_path string", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ mneme: { enabled: true, db_path: "/tmp/holo.db" } }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).mneme?.db_path, "/tmp/holo.db");
+  });
+
+  it("accepts a mneme.providers string array", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ mneme: { enabled: true, providers: ["holographic"] } }));
+    assert.deepStrictEqual(loadConfig(TEST_CONFIG_PATH).mneme?.providers, ["holographic"]);
+  });
+
+  it("ignores a non-array mneme.providers value", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ mneme: { enabled: true, providers: "holographic" } }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).mneme?.providers, undefined);
+  });
+
+  it("ignores unknown mneme keys but keeps the valid ones", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ mneme: { enabled: true, bogusKey: 7 } }));
+    const mneme = loadConfig(TEST_CONFIG_PATH).mneme;
+    assert.strictEqual(mneme?.enabled, true);
+    assert.ok(!("bogusKey" in (mneme ?? {})));
+  });
 });

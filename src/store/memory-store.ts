@@ -61,6 +61,13 @@ export class MemoryStore {
   private storagePaths: Partial<Record<"memory" | "user" | "failure", string>> = {};
   private snapshot: MemorySnapshot = { memory: "", user: "" };
   private consolidator: ((target: "memory" | "user" | "failure", signal?: AbortSignal) => Promise<ConsolidationResult>) | null = null;
+  /**
+   * Mirror successful writes to a coexisting provider (e.g. Holographic's
+   * `onMemoryWrite`). Optional; a no-op until wired from index.ts. Kept out of
+   * the constructor to avoid an import cycle (the provider lives in the
+   * extension's Mneme layer).
+   */
+  private writeMirror: ((action: "add" | "replace" | "remove", target: string, content: string) => void) | null = null;
   private overflowSince: Partial<Record<"memory" | "user" | "failure", number>> = {};
   private mutationObserver: ((target: "memory" | "user" | "failure", entries: string[]) => Promise<string | null | undefined>) | null = null;
 
@@ -78,6 +85,25 @@ export class MemoryStore {
     fn: (target: "memory" | "user" | "failure", entries: string[]) => Promise<string | null | undefined>,
   ): void {
     this.mutationObserver = fn;
+  }
+
+  /**
+   * Inject a write mirror so a coexisting provider can mirror built-in memory
+   * writes (Holographic turns adds into facts). Fires only on a write that was
+   * actually persisted — never on the duplicate/error/overflow paths.
+   */
+  setWriteMirror(fn: (action: "add" | "replace" | "remove", target: string, content: string) => void): void {
+    this.writeMirror = fn;
+  }
+
+  /** Fire the write mirror if wired; swallow provider-side errors so a mirror
+   * failure can never break a built-in write. */
+  private mirrorWrite(action: "add" | "replace" | "remove", target: string, content: string): void {
+    try {
+      this.writeMirror?.(action, target, content);
+    } catch (e) {
+      console.debug(`Memory write mirror failed: ${e}`);
+    }
   }
 
   // ─── Path helpers ───
@@ -288,6 +314,7 @@ export class MemoryStore {
     this.setEntries(target, entries);
     await this.saveToDisk(target);
     markMutation();
+    this.mirrorWrite("add", target, content);
 
     return this.successResponse(target, addedMessage);
   }
@@ -548,6 +575,7 @@ export class MemoryStore {
     this.setEntries(target, testEntries);
     await this.saveToDisk(target);
     markMutation();
+    this.mirrorWrite("replace", target, newContent);
 
     return this.successResponse(target, "Entry replaced.");
   }
@@ -585,6 +613,7 @@ export class MemoryStore {
     this.setEntries(target, entries.filter((entry) => !matchedEntries.has(entry)));
     await this.saveToDisk(target);
     markMutation();
+    this.mirrorWrite("remove", target, oldText);
 
     return this.successResponse(target, "Entry removed.");
   }

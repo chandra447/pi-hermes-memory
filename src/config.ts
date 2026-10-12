@@ -180,6 +180,30 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (typeof parsed.sessionRetentionDays === "number" && Number.isFinite(parsed.sessionRetentionDays) && parsed.sessionRetentionDays >= 0) {
         config.sessionRetentionDays = parsed.sessionRetentionDays;
       }
+      // Mneme: pluggable additional providers. Disabled until opted in; only the
+      // known keys are validated and copied, so an unknown key fails closed.
+      if (parsed.mneme && typeof parsed.mneme === "object") {
+        const raw = parsed.mneme as Record<string, unknown>;
+        const entry: Record<string, unknown> = {};
+        // A present-but-invalid enabled coerces to false (disabled), matching the
+        // `=== true` coercion other overrides use — an invalid value is a
+        // deliberate disabled, not a dropped opt-in.
+        if (raw.enabled !== undefined) entry.enabled = typeof raw.enabled === "boolean" ? raw.enabled : false;
+        if (Array.isArray(raw.providers) && raw.providers.every((v): v is string => typeof v === "string")) {
+          entry.providers = raw.providers.map((s) => String(s).trim()).filter(Boolean);
+        }
+        if (typeof raw.db_path === "string") entry.db_path = raw.db_path;
+        const asNumber = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+        for (const key of ["default_trust", "min_trust_threshold", "temporal_decay_half_life", "hrr_dim", "hrr_weight"] as const) {
+          const n = asNumber(raw[key]);
+          if (n !== undefined) entry[key] = n;
+        }
+        if (typeof raw.auto_extract === "boolean" || typeof raw.auto_extract === "string") {
+          entry.auto_extract = raw.auto_extract;
+        }
+        // Unknown keys are dropped (fail closed); an all-invalid block is left unset.
+        if (Object.keys(entry).length > 0) config.mneme = entry as MemoryConfig["mneme"];
+      }
       if (typeof parsed.standingInstructionsEnabled === "boolean") config.standingInstructionsEnabled = parsed.standingInstructionsEnabled;
       if (typeof parsed.projectCharLimit === "number") config.projectCharLimit = parsed.projectCharLimit;
       if (typeof parsed.memoryDir === "string") {
