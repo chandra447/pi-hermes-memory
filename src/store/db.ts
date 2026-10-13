@@ -24,6 +24,13 @@ type DatabaseLike = {
 };
 
 type DatabaseCtor = new (dbPath: string) => DatabaseLike;
+
+// Public, runtime-aware SQLite surface for other stores (e.g. the Mneme
+// holographic store). Under Bun these resolve to a bun:sqlite-backed shim; under
+// Node they resolve to the native better-sqlite3 module. Never load
+// better-sqlite3 directly at import time — route through getRuntimeDatabaseCtor
+// so Bun (which cannot load the NAPI addon) uses bun:sqlite instead.
+export type { StatementLike as SqliteStatement, DatabaseLike as SqliteDatabase, DatabaseCtor as SqliteDatabaseCtor };
 type BunDatabaseInstance = {
   prepare: (sql: string) => StatementLike;
   exec: (sql: string) => void;
@@ -155,6 +162,17 @@ function getDatabaseCtor(): DatabaseCtor {
       : (loadBetterSqlite3({ requireImpl: require }) as DatabaseCtor);
   }
   return cachedDatabaseCtor;
+}
+
+/**
+ * Runtime-aware SQLite constructor for external consumers. Resolves lazily
+ * (Bun -> bun:sqlite shim, Node -> better-sqlite3) so callers that open their
+ * own database (e.g. the Mneme fact store) get a working driver on both
+ * runtimes instead of loading the better-sqlite3 NAPI addon under Bun, which
+ * crashes the compiled Pi binary.
+ */
+export function getRuntimeDatabaseCtor(): DatabaseCtor {
+  return getDatabaseCtor();
 }
 
 export class DatabaseManager {

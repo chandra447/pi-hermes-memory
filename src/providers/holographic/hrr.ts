@@ -150,11 +150,13 @@ export function bytesToPhases(data: Buffer, dim?: number): PhaseVector {
   throw new Error(`HRR vector blob has ${data.length} bytes; expected ${float64Bytes} (legacy float64) for dim=${d}`);
 }
 
-function fromF32Payload(payload: Buffer): PhaseVector {
+function fromF32Payload(payload: Uint8Array): PhaseVector {
   // Copy bytes into a fresh array (subarray views can omit typed-read methods) and read LE float32s.
+  // bytes.set() is portable across Node's Buffer and Bun's Uint8Array BLOBs; Buffer.copy()
+  // does not exist on a plain Uint8Array (what bun:sqlite returns), so it is avoided.
   const count = payload.length / 4;
   const bytes = new Uint8Array(count * 4);
-  payload.copy(bytes);
+  bytes.set(payload);
   const f32 = new Float32Array(bytes.buffer);
   return new Float64Array(f32);
 }

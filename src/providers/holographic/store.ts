@@ -15,7 +15,10 @@
  * dangling transaction or write-lock the way it could in the Python driver.
  */
 
-import Database from "better-sqlite3";
+// SQLite driver is resolved at runtime (Bun -> bun:sqlite shim, Node ->
+// better-sqlite3) via getRuntimeDatabaseCtor. Importing better-sqlite3 directly
+// would load its NAPI addon under Bun, which crashes the compiled Pi binary.
+import { getRuntimeDatabaseCtor, type SqliteDatabase, type SqliteStatement } from "../../store/db.js";
 
 import { bundle, bytesToPhases, encodeFact, phasesToBytes } from "./hrr.js";
 
@@ -138,15 +141,20 @@ export class MemoryStore {
   private _defaultTrust: number;
   private _hrrDim: number;
 
-  private _db: Database.Database;
-  private _prepared = new Map<string, Database.Statement>();
+  private _db: SqliteDatabase;
+  private _prepared = new Map<string, SqliteStatement>();
 
   constructor(dbPath: string, defaultTrust = 0.5, hrrDim = 1024) {
     this._dbPath = dbPath;
     this._defaultTrust = clampTrust(defaultTrust);
     this._hrrDim = hrrDim;
-    this._db = new Database(dbPath, { fileMustExist: false });
-    this._db.pragma("journal_mode = WAL");
+    // fileMustExist is false by default on both drivers; the bun:sqlite shim
+    // ignores options, so construct with the bare path (matches the base store).
+    this._db = new (getRuntimeDatabaseCtor())(dbPath);
+    // Use exec() rather than better-sqlite3's .pragma(): the bun:sqlite shim has
+    // no .pragma() method, and `PRAGMA journal_mode = WAL` runs identically on
+    // both drivers.
+    this._db.exec("PRAGMA journal_mode = WAL");
     this._db.exec(_SCHEMA);
   }
 
@@ -155,14 +163,14 @@ export class MemoryStore {
     return this._dbPath;
   }
 
-  private _prepare(sql: string): Database.Statement {
+  private _prepare(sql: string): SqliteStatement {
     if (!this._prepared.has(sql)) this._prepared.set(sql, this._db.prepare(sql));
     return this._prepared.get(sql)!;
   }
 
   private _one<T = any>(sql: string, params: any[] = []): T | undefined {
-    // better-sqlite3 types Statement<Result = unknown>.get() as unknown | undefined;
-    // cast to the row shape callers expect. (Record access below is typed via the interface.)
+    // The driver types get() as unknown | undefined; cast to the row shape
+    // callers expect. (Record access below is typed via the interface.)
     return this._prepare(sql).get(...params) as unknown as T | undefined;
   }
 
