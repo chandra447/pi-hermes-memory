@@ -62,4 +62,23 @@ describe("HRR math port", () => {
     assert.ok(isFloat64(back));
     assert.ok(Math.abs(similarity(v, back) - 1) < 1e-4, `blob round-trip similarity ${similarity(v, back)}`);
   });
+
+  it("rejects dim<=1 on write (ambiguous + meaningless)", () => {
+    assert.throws(() => phasesToBytes(new Float64Array([1.5]), 1), /dim must be > 1/);
+  });
+
+  it("rejects dim<=1 blobs on read", () => {
+    const blob = Buffer.concat([Buffer.from("HRR1"), Buffer.alloc(4)]); // payload 4 bytes == dim 1
+    assert.throws(() => bytesToPhases(blob, 1), /dim must be > 1/);
+  });
+
+  it("rejects blobs without the HRR1 prefix (legacy raw-f64 no longer supported)", () => {
+    const raw = Buffer.alloc(2 * 8); // what the old legacy f64 format looked like
+    assert.throws(() => bytesToPhases(raw, 2), /missing the "HRR1" prefix/);
+  });
+
+  it("rejects a payload whose length does not match the declared dim", () => {
+    const bytes = phasesToBytes(encodeAtom("len", DIM), DIM);
+    assert.throws(() => bytesToPhases(bytes, DIM - 1), /payload bytes; expected/);
+  });
 });

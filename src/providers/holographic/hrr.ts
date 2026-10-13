@@ -19,7 +19,6 @@ export type PhaseVector = Float64Array;
 export const _TWO_PI = 2.0 * Math.PI;
 export const _FLOAT32_BLOB_PREFIX = "HRR1";
 const _F32 = 4;
-const _F64 = 8;
 const _ROLE_CONTENT = "__hrr_role_content__";
 const _ROLE_ENTITY = "__hrr_role_entity__";
 
@@ -115,39 +114,47 @@ export function encodeFact(content: string, entities: string[], dim: number = 10
   return bundle([bind(encodeText(content, dim), roleContent), ...entityVectors]);
 }
 
-/** Serialize as prefixed float32 (half the size of legacy float64 blobs). */
+/** Serialize a phase vector as a prefixed float32 blob ("HRR1" + little-endian float32s). */
 export function phasesToBytes(phases: PhaseVector, dim?: number): Buffer {
   const d = dim ?? phases.length;
-  if (4 + d * _F32 === d * _F64) return Buffer.from(phases); // dim == 1 collision case
+  if (d <= 1) {
+    throw new Error(`HRR dim must be > 1 (got ${d}); dim<=1 blobs are ambiguous and meaningless`);
+  }
   const f32 = new Float32Array(phases.length);
   for (let i = 0; i < phases.length; i++) f32[i] = phases[i];
   return Buffer.concat([Buffer.from(_FLOAT32_BLOB_PREFIX), Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength)]);
 }
 
-/** Deserialize prefixed float32 or legacy raw float64 blobs (always returns float64). */
-function byteEquals(buf: Buffer, offset: number, value: string): boolean {
+function byteEquals(buf: Uint8Array, offset: number, value: string): boolean {
   for (let i = 0; i < value.length; i++) if (buf[offset + i] !== value.charCodeAt(i)) return false;
   return true;
 }
 
-export function bytesToPhases(data: Buffer, dim?: number): PhaseVector {
-
-  const d = dim ?? data.length;
+/**
+ * Deserialize a prefixed float32 blob into a float64 phase vector.
+ *
+ * Only the prefixed-float32 format is supported. This is a greenfield store —
+ * there is no legacy raw-float64 data, and the one scenario that would carry it
+ * (importing a pre-existing Hermes Python database) is out of scope. dim<=1 is
+ * rejected: a prefixed-f32 blob and a raw-f64 blob are the same length at
+ * dim==1 (ambiguous), and a 1-D HRR cannot be bound/unbound usefully.
+ */
+export function bytesToPhases(data: Uint8Array, dim?: number): PhaseVector {
   const plen = _FLOAT32_BLOB_PREFIX.length;
-  const prefixed = byteEquals(data, 0, _FLOAT32_BLOB_PREFIX);
-
-  if (dim === undefined) {
-    if (prefixed) return fromF32Payload(data.subarray(plen));
-    return fromF64Payload(data);
+  if (!byteEquals(data, 0, _FLOAT32_BLOB_PREFIX)) {
+    throw new Error(
+      `HRR vector blob is missing the "${_FLOAT32_BLOB_PREFIX}" prefix (got ${data.length} bytes); only prefixed float32 blobs are supported`,
+    );
   }
-
-  const float32BlobBytes = plen + d * _F32;
-  const float64Bytes = d * _F64;
-  const collides = float32BlobBytes === float64Bytes; // dim == 1
-  if (!collides && prefixed && data.length === float32BlobBytes) return fromF32Payload(data.subarray(plen));
-  if (data.length === float64Bytes) return fromF64Payload(data);
-  if (!prefixed) throw new Error(`HRR legacy vector blob has ${data.length} bytes; expected ${float64Bytes} (float64) for dim=${d}`);
-  throw new Error(`HRR vector blob has ${data.length} bytes; expected ${float64Bytes} (legacy float64) for dim=${d}`);
+  const payload = data.subarray(plen);
+  const d = dim ?? payload.length / _F32;
+  if (d <= 1) {
+    throw new Error(`HRR dim must be > 1 (got ${d}); dim<=1 blobs are ambiguous and meaningless`);
+  }
+  if (payload.length !== d * _F32) {
+    throw new Error(`HRR vector blob has ${payload.length} payload bytes; expected ${d * _F32} for dim=${d}`);
+  }
+  return fromF32Payload(payload);
 }
 
 function fromF32Payload(payload: Uint8Array): PhaseVector {
@@ -159,10 +166,6 @@ function fromF32Payload(payload: Uint8Array): PhaseVector {
   bytes.set(payload);
   const f32 = new Float32Array(bytes.buffer);
   return new Float64Array(f32);
-}
-
-function fromF64Payload(payload: Buffer): PhaseVector {
-  return new Float64Array(payload);
 }
 
 /** SNR = sqrt(dim / n_items) (inf when empty); warns below 2.0. */
