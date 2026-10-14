@@ -20,10 +20,6 @@ export { bind, unbind, bundle, encodeAtom, encodeText, encodeFact, similarity, p
 import type { MemoryStore } from "./store.js";
 
 const _FACT_COLUMNS = "fact_id, content, category, tags, trust_score, retrieval_count, helpful_count, created_at, updated_at";
-const _PUNCT = ".,;:!?\"'()[]{}#@<>";
-// Characters stripped from FTS5 MATCH tokens (FTS5 operators that would otherwise
-// change the meaning of the query).
-const _FTS_OPERATORS = '"()*^:-+';
 // Stopwords dropped before FTS5 OR-expansion: short English function words that
 // carry no retrieval signal and force false-negative AND matches.
 const _FTS_STOPWORDS = new Set(
@@ -36,8 +32,16 @@ const _FTS_STOPWORDS = new Set(
     would you your yours yourself yourselves`.split(/\s+/),
 );
 
-const _PUNCT_SET = new Set(_PUNCT.split(""));
-const _OPERATORS_SET = new Set(_FTS_OPERATORS.split(""));
+/**
+ * Tokens as FTS5's default (unicode61) tokenizer stores them: maximal runs of
+ * Unicode letters/digits. Punctuation — `-`, `_`, `'`, … — is a separator, so
+ * "E2E-LIVE" -> ["e2e","live"] exactly as the facts_fts index holds it.
+ * Shared by _tokenize (Jaccard) and _sanitizeFtsQuery (MATCH) so query-side
+ * tokenization always matches index-side tokenization.
+ */
+function indexTokens(text: string): string[] {
+  return text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+}
 
 /** Cosine similarity [-1, 1] -> [0, 1]. */
 function _shift(sim: number): number {
@@ -47,22 +51,6 @@ function _shift(sim: number): number {
 /** Round to 3 decimal places (matching Python's `round(x, 3)`). */
 function _round3(x: number): number {
   return Math.round(x * 1000) / 1000;
-}
-
-/** Remove leading/trailing characters in `chars`. */
-function stripTrailing(text: string, chars: Set<string>): string {
-  let start = 0;
-  let end = text.length;
-  while (start < end && chars.has(text[start])) start++;
-  while (end > start && chars.has(text[end - 1])) end--;
-  return text.slice(start, end);
-}
-
-/** Remove every character in `chars` from `text`. */
-function removeChars(text: string, chars: Set<string>): string {
-  let out = "";
-  for (const ch of text) if (!chars.has(ch)) out += ch;
-  return out;
 }
 
 /** |A ∩ B| / |A ∪ B|. */
@@ -341,31 +329,35 @@ export class FactRetriever {
     return results;
   }
 
-  /** Lowercase whitespace tokens with surrounding punctuation stripped (no stemming). */
+  /**
+   * Index-aligned lowercase tokens (no stemming): maximal Unicode-alphanumeric
+   * runs, so "E2E-LIVE" -> {"e2e","live"} like the FTS5 index. The old
+   * strip-surrounding-punctuation version kept "e2e-live" whole, which never
+   * intersected the index tokens and zeroed the Jaccard term for hyphenated
+   * queries.
+   */
   static _tokenize(text: string): Set<string> {
     if (!text) return new Set();
-    const set = new Set<string>();
-    for (const w of text.toLowerCase().split(/\s+/)) {
-      const stripped = stripTrailing(w, _PUNCT_SET);
-      if (stripped.length > 0) set.add(stripped);
-    }
-    return set;
+    return new Set(indexTokens(text));
   }
 
   /**
    * Natural-language query -> FTS5-safe OR expression of quoted tokens. FTS5
-   * AND-joins a multi-word MATCH by default, which tanks recall on prose: drop
-   * stopwords and <2-char tokens, strip FTS5 operator chars, phrase-quote each
-   * survivor. If nothing survives, return the raw query (zero results, not a
-   * SQL error).
+   * AND-joins a multi-word MATCH by default, which tanks recall on prose: split
+   * on the index tokenizer's boundaries (maximal Unicode-alphanumeric runs),
+   * drop stopwords and <2-char tokens, phrase-quote each survivor. If nothing
+   * survives, return the raw query (zero results, not a SQL error).
    */
   static _sanitizeFtsQuery(query: string): string {
     if (!query) return "";
-    const tokens = [...query
-      .toLowerCase()
-      .split(/\s+/)
-      .map((raw) => removeChars(stripTrailing(raw, _PUNCT_SET), _OPERATORS_SET))
-      .filter((c) => c.length >= 2 && !_FTS_STOPWORDS.has(c))]
+    // Split on the same boundaries the FTS5 index uses: a hyphenated word like
+    // "E2E-LIVE" becomes the sub-tokens e2e, live (OR-joined, matching the
+    // multi-word OR semantics). The old remove-operator-chars path glued it
+    // into "e2elive", which the index never contains -> guaranteed 0 hits; raw
+    // unquoted hyphens are also an FTS5 syntax error ("no such column"), so
+    // neutralizing `-` is required, but by splitting, not stripping.
+    const tokens = indexTokens(query)
+      .filter((c) => c.length >= 2 && !_FTS_STOPWORDS.has(c))
       .map((c) => `"${c}"`);
     return tokens.length > 0 ? tokens.join(" OR ") : query;
   }

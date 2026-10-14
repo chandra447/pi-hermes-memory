@@ -144,6 +144,59 @@ describe("FactRetriever retrieval", () => {
   });
 });
 
+describe("FactRetriever FTS5 tokenizer alignment", () => {
+  // Regression: real-life E2E on 2026-10-14 — search('E2E-LIVE') returned 0
+  // hits. The sanitizer stripped the hyphen (an FTS5 "operator") and glued the
+  // word into "e2elive", which the unicode61 index never contains (it stores
+  // the tokens e2e + live). Query-side and index-side tokenization must match.
+  it("_tokenize splits on FTS5 separator characters like the index", () => {
+    assert.deepEqual([...FactRetriever._tokenize("E2E-LIVE")].sort(), ["e2e", "live"]);
+    assert.deepEqual([...FactRetriever._tokenize("snake_case 42")].sort(), ["42", "case", "snake"]);
+    assert.deepEqual([...FactRetriever._tokenize("don't")].sort(), ["don", "t"]);
+    assert.deepEqual([...FactRetriever._tokenize("")], []);
+  });
+
+  it("_sanitizeFtsQuery splits hyphenated words instead of stripping the hyphen", () => {
+    assert.strictEqual(FactRetriever._sanitizeFtsQuery("E2E-LIVE"), '"e2e" OR "live"');
+    assert.strictEqual(FactRetriever._sanitizeFtsQuery("snake_case"), '"snake" OR "case"');
+  });
+
+  it("_sanitizeFtsQuery neutralizes FTS5 operator characters (no column filters)", () => {
+    // Raw 'a:b' would be parsed by FTS5 as a column filter -> SQL error.
+    const q = FactRetriever._sanitizeFtsQuery("config:a: b");
+    assert.ok(!q.includes(":"), `must not leak a colon: ${q}`);
+  });
+
+  it("search finds facts stored under hyphenated terms", () => {
+    const store = new MemoryStore(":memory:");
+    const s = new FactRetriever(store, 0);
+    store.addFact("E2E-LIVE: Mneme holographic provider add path verified", "insight");
+    store.addFact("the vanilla system btop stays untouched", "convention");
+    const results = s.search("E2E-LIVE", undefined, 0, 5);
+    assert.ok(results.length >= 1, "hyphenated query must match the hyphenated fact");
+    assert.ok(String(results[0]["content"]).includes("E2E-LIVE"), "top hit is the E2E-LIVE fact");
+  });
+
+  it("search finds facts stored under underscored terms", () => {
+    const store = new MemoryStore(":memory:");
+    const s = new FactRetriever(store, 0);
+    store.addFact("the memory_store.db file lives in pi-hermes-memory", "tool-quirk");
+    const results = s.search("memory_store", undefined, 0, 5);
+    assert.ok(results.length >= 1, "underscored query must match the underscored fact");
+  });
+
+  it("Jaccard term is non-zero for hyphenated query vs hyphenated content", () => {
+    const store = new MemoryStore(":memory:");
+    const s = new FactRetriever(store, 0);
+    store.addFact("E2E-LIVE: Mneme holographic provider add path verified", "insight");
+    const results = s.search("E2E-LIVE", undefined, 0, 5);
+    assert.ok(results.length > 0);
+    // score = relevance * trust; with the old glued token the FTS5 candidate
+    // list was empty, so any positive score proves the tokens now intersect.
+    assert.ok((results[0]["score"] as number) > 0, "score must be positive");
+  });
+});
+
 describe("FactRetriever Jaccard", () => {
   it("disjoint sets have zero Jaccard", () => {
     const a = new Set(["a", "b"]);
