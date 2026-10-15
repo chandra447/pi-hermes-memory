@@ -160,13 +160,15 @@ export interface MemoryConfig {
   };
 }
 
-export type MemoryCategory =
-  | "failure"
-  | "correction"
-  | "insight"
-  | "preference"
-  | "convention"
-  | "tool-quirk";
+import type { MemoryCategory as SharedMemoryCategory } from './shared/vocabulary.js';
+
+/**
+ * Memory categories — the single source is `src/shared/vocabulary.ts` (spine
+ * convention "Vocabulary single-sourcing": hub and client share one
+ * definition). Aliased here so existing `types.js` importers keep working and
+ * the local usages below resolve.
+ */
+export type MemoryCategory = SharedMemoryCategory;
 
 export interface MemoryResult {
   success: boolean;
