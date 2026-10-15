@@ -496,11 +496,21 @@ describe('DatabaseManager', () => {
 
       const indexes = migratedDb.prepare(`
         SELECT name FROM sqlite_master
-        WHERE type = 'index' AND name IN ('idx_memories_project', 'idx_memories_target', 'idx_memories_category')
+        WHERE type = 'index' AND name IN (
+          'idx_memories_project',
+          'idx_memories_target',
+          'idx_memories_category',
+          'idx_memories_target_project_category_content'
+        )
       `).all() as Array<{ name: string }>;
       assert.deepStrictEqual(
         indexes.map((row) => row.name).sort(),
-        ['idx_memories_category', 'idx_memories_project', 'idx_memories_target'],
+        [
+          'idx_memories_category',
+          'idx_memories_project',
+          'idx_memories_target',
+          'idx_memories_target_project_category_content',
+        ],
       );
 
       migratedManager.close();

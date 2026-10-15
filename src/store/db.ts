@@ -999,6 +999,12 @@ export class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
       CREATE INDEX IF NOT EXISTS idx_memories_target ON memories(target);
       CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
+      -- Serves the per-entry syncMemoryEntry lookup
+      -- (target/project/category/content): without it the planner scans the
+      -- target slice per entry inside one reconcile transaction, which holds the
+      -- write lock long enough for other processes to hit SQLITE_BUSY (#292).
+      CREATE INDEX IF NOT EXISTS idx_memories_target_project_category_content
+        ON memories(target, project, category, content);
     `);
   }
 
