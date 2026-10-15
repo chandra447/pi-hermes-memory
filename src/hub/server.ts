@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 import https from 'node:https';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { handleHubRequest } from './routes.js';
 import { HubStore } from './hub-store.js';
 import { TokenStore } from './tokens.js';
@@ -109,5 +110,22 @@ export function startHubServer(config: HubServerConfig): Promise<HubServer> {
       console.log(`[pi-memory-hub] listening on https://${config.host}:${config.port} (db: ${config.dbPath})`);
       resolve(hub);
     });
+  });
+}
+
+// Server entry point: the systemd unit (and `tsx src/hub/server.ts`) execs
+// this file directly. Config comes from the environment (see configFromEnv).
+const isMain = (() => {
+  try {
+    return import.meta.url === pathToFileURL(process.argv[1] ?? '__none__').href;
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  startHubServer(configFromEnv()).catch((err) => {
+    console.error('[pi-memory-hub] failed to start:', err);
+    process.exit(1);
   });
 }
