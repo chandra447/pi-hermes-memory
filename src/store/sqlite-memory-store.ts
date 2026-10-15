@@ -1047,7 +1047,18 @@ export function searchMemories(
     return exactResults;
   }
 
-  return runSearch(fallbackQuery);
+  const broadenedResults = runSearch(fallbackQuery);
+  if (broadenedResults.length > 0) {
+    return broadenedResults;
+  }
+
+  // A natural-language query has no exact semantics to preserve, unlike the
+  // operator and single-term queries that return above. When both the
+  // implicit-AND search and the OR broadened search miss, degrade to the same
+  // scoped literal fallback session search ends with: terms below the trigram
+  // window — two-character CJK terms are the common case (#291) — match neither
+  // FTS search, and dropping them would report no results for stored text.
+  return runLiteralLikeFallback();
 }
 
 /**
