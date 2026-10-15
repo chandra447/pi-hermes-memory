@@ -21,6 +21,7 @@ import {
   DEFAULT_MEMORY_CHAR_LIMIT,
   DEFAULT_USER_CHAR_LIMIT,
   DEFAULT_OVERFLOW_GRACE_MS,
+  DEFAULT_OVERFLOW_COOLDOWN_MS,
   DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
   DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
   MEMORY_FILE,
@@ -37,6 +38,7 @@ import type {
 } from "../types.js";
 import { AGENT_ROOT } from "../paths.js";
 import { canonicalMarkdownIdentity, withMarkdownMutationLock } from "./markdown-mutation-lock.js";
+import { readOverflowEpisodes, writeOverflowEpisodes } from "./overflow-episodes.js";
 
 const MAX_EXTERNAL_WRITE_RETRIES = 2;
 const RECOVERY_ACTIVE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -52,6 +54,20 @@ const CONFLICT_MAX_COUNT = 32;
 const CONFLICT_MAX_BYTES = 64 * 1024 * 1024;
 
 class ExternalMemoryWriteConflict extends Error {}
+
+/** Result of one lifecycle-boundary overflow sweep (see `runOverflowSweep`). */
+export interface OverflowSweepResult {
+  /** Episodes past their grace window that were acted on this pass. */
+  attempted: number;
+  /** Episodes whose consolidation freed space and were reloaded. */
+  consolidated: number;
+  /** Episodes another session was already consolidating (#144) — not failures. */
+  deferred: number;
+  /** Episodes whose consolidation ran and changed nothing. */
+  failed: number;
+  /** Human-readable, advisory-only notes for whoever logs the sweep. */
+  notes: string[];
+}
 
 export class MemoryStore {
   private memoryEntries: string[] = [];
@@ -168,6 +184,180 @@ export class MemoryStore {
   private overflowGraceActive(target: "memory" | "user" | "failure"): boolean {
     const since = this.overflowSince[target];
     return since !== undefined && Date.now() - since < this.overflowGraceMs();
+  }
+
+  // ─── Overflow episodes (policy-only, #284) ───
+  //
+  // `overflowSince` above is cap-enforced bookkeeping: it is stamped only when a
+  // write is refused for being over the Markdown cap, and reset on the next
+  // successful write. Policy-only writes always succeed, so that window can
+  // never be open there. The episode below is the policy-only equivalent, and
+  // it is the same `overflowGraceMs()` window — see `runOverflowSweep`.
+
+  /**
+   * Whether the policy-only overflow path is live for this store. Keeps the
+   * single `capEnforced` predicate as the source of truth, and reuses the same
+   * `memoryOverflowStrategy()` + consolidator gates the cap-enforced path uses:
+   * `reject`/`fifo-evict` are legacy-only semantics, and with no consolidator
+   * registered an episode would never be acted on.
+   */
+  private overflowSweepEnabled(): boolean {
+    return !this.capEnforced
+      && this.consolidator !== null
+      && this.memoryOverflowStrategy() === "auto-consolidate";
+  }
+
+  private overflowCooldownMs(): number {
+    return DEFAULT_OVERFLOW_COOLDOWN_MS;
+  }
+
+  /**
+   * Record the overflow episode for one target after a successful mutation.
+   *
+   * The number compared is `charCount(target)` against `charLimit(target)` —
+   * the same encoded-character measure (metadata included) the cap enforces:
+   * `memoryCharLimit`, `userCharLimit`, or 2× `memoryCharLimit` for the failure
+   * tier. Policy-only deliberately does not hold the Markdown export cap
+   * (#218/#221/#248), so being over this goal is a budget question, not a
+   * defect; this episode is how that budget is spent.
+   *
+   * This is a crossing test, not a state test: being over the goal does not
+   * open a new episode while one is already open, and the cooldown stamped by
+   * `runOverflowSweep` bounds how often a fresh one may arm. Closing happens as
+   * soon as the store is back at or below the goal.
+   *
+   * Episode bookkeeping never fails a memory write — the caller has already
+   * landed it.
+   */
+  private async settleOverflowEpisode(target: "memory" | "user" | "failure"): Promise<void> {
+    try {
+      const identity = await this.getStorageIdentity(target);
+      const state = await readOverflowEpisodes(this.memoryDir);
+      const episode = state[identity];
+      const overGoal = this.charCount(target) > this.charLimit(target);
+
+      if (!overGoal) {
+        if (episode && episode.openAt !== null) {
+          state[identity] = { ...episode, openAt: null };
+          await writeOverflowEpisodes(this.memoryDir, state);
+        }
+        return;
+      }
+
+      if (episode && episode.openAt !== null) return; // already open — this is the fix
+      const now = Date.now();
+      if (episode && now < episode.cooldownUntil) return; // cooling down
+
+      state[identity] = { openAt: now, cooldownUntil: episode?.cooldownUntil ?? 0 };
+      await writeOverflowEpisodes(this.memoryDir, state);
+    } catch {
+      // Advisory only: the write already landed, so a sidecar failure must not
+      // surface as a memory error.
+    }
+  }
+
+  /**
+   * True when an overflow episode is recorded and not yet acted on. Entry is
+   * only meaningful while a gate is open, so the caller decides.
+   */
+  private async openOverflowEpisode(
+    target: "memory" | "user" | "failure",
+  ): Promise<{ identity: string; episode: { openAt: number; cooldownUntil: number } } | null> {
+    const identity = await this.getStorageIdentity(target);
+    const state = await readOverflowEpisodes(this.memoryDir);
+    const episode = state[identity];
+    if (!episode || episode.openAt === null) return null;
+    return { identity, episode: { openAt: episode.openAt, cooldownUntil: episode.cooldownUntil } };
+  }
+
+  /**
+   * Advisory appended to a successful policy-only write that left the store over
+   * its goal. It is a note, never an error: the write landed, and consolidation
+   * is deliberately not on this path (#284).
+   */
+  private async overflowAdvisory(target: "memory" | "user" | "failure"): Promise<string | null> {
+    try {
+      const usage = this.charCount(target);
+      const goal = this.charLimit(target);
+      if (usage <= goal) return null;
+      const base = `Over the policy-only budget (${usage}/${goal} chars) — `;
+      const identity = await this.getStorageIdentity(target);
+      const episode = (await readOverflowEpisodes(this.memoryDir))[identity];
+      if (episode && episode.openAt !== null) {
+        return `${base}an overflow episode is recorded; auto-consolidation runs at the next session start, not on this write.`;
+      }
+      if (episode && episode.cooldownUntil > Date.now()) {
+        return `${base}consolidation ran recently, so the next episode arms after the cooldown; nothing is consolidated inline.`;
+      }
+      return `${base}consolidation is never run inline on a write.`;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Lifecycle-boundary sweep (#284). The write path only records an episode;
+   * the LLM consolidation runs here, at session start, the way the #202
+   * recovery sweep does — so a `memory_add` that already succeeded can never
+   * block for `DEFAULT_CONSOLIDATION_TIMEOUT_MS` on a `pi -p` child.
+   *
+   * An episode is acted on only once it is past `overflowGraceMs()`, which is
+   * the documented "consolidate manually first" window, now actually honoured
+   * in policy-only. Whatever the run reports, the episode is closed and a
+   * cooldown stamped, so a store that stays over its goal cannot re-arm on
+   * every subsequent write. The existing lock/deferred/reload machinery is
+   * reused unchanged — `deferred` is another session's work, not a failure.
+   */
+  async runOverflowSweep(): Promise<OverflowSweepResult> {
+    const result: OverflowSweepResult = { attempted: 0, consolidated: 0, deferred: 0, failed: 0, notes: [] };
+    if (!this.overflowSweepEnabled()) return result;
+
+    for (const target of ["memory", "user", "failure"] as const) {
+      let open;
+      try {
+        open = await this.openOverflowEpisode(target);
+      } catch {
+        continue;
+      }
+      if (!open) continue;
+
+      const now = Date.now();
+      if (now - open.episode.openAt < this.overflowGraceMs()) continue;
+
+      result.attempted++;
+      const consolidation = await this.consolidator!(target).catch(
+        (err): ConsolidationResult => ({ consolidated: false, error: `consolidator threw ${String(err).slice(0, 200)}` }),
+      );
+
+      try {
+        const state = await readOverflowEpisodes(this.memoryDir);
+        state[open.identity] = { openAt: null, cooldownUntil: now + this.overflowCooldownMs() };
+        await writeOverflowEpisodes(this.memoryDir, state);
+      } catch {
+        // Closing the episode is bookkeeping; never let it break the sweep.
+      }
+
+      if (consolidation.deferred) {
+        result.deferred++;
+        result.notes.push(`Overflow consolidation for '${target}' is deferred — another session holds the lock (#144). Not an error.`);
+        continue;
+      }
+      if (!consolidation.consolidated) {
+        result.failed++;
+        result.notes.push(`Overflow consolidation for '${target}' ran but freed no space: ${consolidation.error || "no reason reported"}. Advisory only.`);
+        continue;
+      }
+      result.consolidated++;
+      try {
+        await this.loadFromDisk();
+      } catch {
+        // The consolidation already landed on disk; a reload failure only
+        // delays visibility, so keep the sweep result and move on.
+        result.notes.push(`Overflow consolidation for '${target}' succeeded but reloading memory failed.`);
+      }
+    }
+
+    return result;
   }
 
   // ─── Load from disk ───
@@ -305,6 +495,19 @@ export class MemoryStore {
       (markMutation) => this._add(target, content, signal, addedMessage, project, markMutation),
       signal,
     );
+    // Policy-only mode never returns the "Memory at …" error (capEnforced is
+    // false there — #218/#221), so without this the overflow trigger is dead
+    // code in the shipped default mode and the store grows unbounded. The
+    // write has already landed; the episode is recorded here and the LLM
+    // consolidation runs at the next lifecycle boundary (#284), never inline.
+    if (result.success && this.overflowSweepEnabled()) {
+      const advisory = await this.overflowAdvisory(target);
+      if (advisory) {
+        return { ...result, message: `${result.message ?? "Entry added."} ${advisory}` };
+      }
+      return result;
+    }
+
     if (
       result.success
       || retriesLeft <= 0
@@ -910,7 +1113,15 @@ export class MemoryStore {
               }
             }
           }
-          if (result.success && mutated) this.clearOverflow(target);
+          if (result.success && mutated) {
+            if (this.capEnforced) {
+              // Legacy: a successful write under an enforced cap re-opens the
+              // "consolidate manually first" window for the next refusal.
+              this.clearOverflow(target);
+            } else if (this.overflowSweepEnabled()) {
+              await this.settleOverflowEpisode(target);
+            }
+          }
           return await this.finalizeTargetMutation(target, storagePath, result);
         } catch (error) {
           delete this.fileFingerprints[storagePath];
