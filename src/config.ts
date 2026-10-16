@@ -28,6 +28,43 @@ const SESSION_SEARCH_VARIANTS: readonly SessionSearchVariant[] = ["legacy", "anc
 const REVIEW_TRANSPORTS: readonly ReviewTransport[] = ["direct", "subprocess"];
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
+/** Path separators that cannot appear in a first-level directory name. */
+const PATH_SEPARATOR_RE = /[\\/]/;
+
+/**
+ * Keep only `sessionIndexExclude` entries that can name a first-level
+ * directory under the sessions root: trimmed, non-empty, and free of path
+ * separators or `..` segments. Rejected entries are dropped with a warning.
+ *
+ * Entries are matched against first-level directory names under the sessions
+ * root (exact names or `*` globs), so a blank, separator-bearing, or `..` entry
+ * can never match one: it would sit in the config file looking like a working
+ * exclusion while excluding nothing. Malformed entries are dropped and warned
+ * about instead of trusted — a config key must not fail quietly.
+ */
+function sanitizeSessionIndexExclude(value: string[]): string[] {
+  const accepted: string[] = [];
+  const rejected: string[] = [];
+  for (const entry of value) {
+    const name = entry.trim();
+    // Separators are rejected outright, so a `..` segment can only be the
+    // whole (already trimmed) entry — the split keeps the check literal.
+    if (name.length === 0 || PATH_SEPARATOR_RE.test(name) || name.split(PATH_SEPARATOR_RE).includes("..")) {
+      rejected.push(entry);
+    } else {
+      accepted.push(name);
+    }
+  }
+  if (rejected.length > 0) {
+    console.warn(
+      `⚠️ Ignoring ${rejected.length} invalid sessionIndexExclude entr${rejected.length === 1 ? "y" : "ies"}: `
+      + `${rejected.map((entry) => JSON.stringify(entry)).join(", ")}.`
+      + " Entries must be first-level directory names — no path separators, no \"..\" segments, no empty values.",
+    );
+  }
+  return accepted;
+}
+
 function isReviewTransport(value: unknown): value is ReviewTransport {
   return typeof value === "string" && REVIEW_TRANSPORTS.includes(value as ReviewTransport);
 }
@@ -79,6 +116,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   sessionSearch: { variant: "legacy" },
   quickCheckOnOpen: true,
   sessionRetentionDays: DEFAULT_SESSION_RETENTION_DAYS,
+  sessionIndexExclude: [],
 };
 
 export const DEFAULT_CONFIG_PATH = path.join(
@@ -181,6 +219,9 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         config.sessionRetentionDays = parsed.sessionRetentionDays;
       }
       if (typeof parsed.standingInstructionsEnabled === "boolean") config.standingInstructionsEnabled = parsed.standingInstructionsEnabled;
+      if (isStringArray(parsed.sessionIndexExclude)) {
+        config.sessionIndexExclude = sanitizeSessionIndexExclude(parsed.sessionIndexExclude);
+      }
       if (typeof parsed.projectCharLimit === "number") config.projectCharLimit = parsed.projectCharLimit;
       if (typeof parsed.memoryDir === "string") {
         const normalizedMemoryDir = normalizeConfiguredMemoryDir(parsed.memoryDir);
