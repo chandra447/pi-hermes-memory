@@ -122,6 +122,12 @@ describe('HubStore.search (FTS + lifted clean-hit gates)', () => {
     store.upsert(upsertInput());
     assert.deepEqual(store.search('   ', {}), { hits: [], raw_matches: 0 });
   });
+
+  it('connector-only queries return no hits without throwing (v1 parity)', () => {
+    for (const query of ['and', 'or not', 'near']) {
+      assert.deepEqual(store.search(query, {}), { hits: [], raw_matches: 0 }, `query: ${query}`);
+    }
+  });
 });
 
 describe('HubStore.latestStatus (spine "Status entries")', () => {

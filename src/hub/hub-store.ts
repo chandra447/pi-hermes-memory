@@ -321,6 +321,10 @@ export class HubStore {
     };
 
     const runLike = (terms: string[]): SharedEntry[] => {
+      // Parity with v1 `runLiteralLikeFallback` (sqlite-memory-store.ts): a
+      // connector/stopword-only query yields no LIKE terms — without this guard
+      // the fallback builds `WHERE ()` and SQLite throws a syntax error (500).
+      if (terms.length === 0) return [];
       const conditions: string[] = [
         `(${terms.map(() => "e.content LIKE ? ESCAPE '\\'").join(' OR ')})`,
       ];
