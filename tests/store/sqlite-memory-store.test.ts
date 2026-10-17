@@ -790,6 +790,51 @@ describe('sqlite-memory-store', () => {
     });
 
 
+    it('recovers multi-term short-CJK queries through the final literal fallback', () => {
+      // Follow-up to #174 (#291): the dedicated short-CJK fallback only covers a
+      // query that is *entirely* one or two CJK characters. Terms that short are
+      // below the trigram window, so a query made of two of them reaches neither
+      // the implicit-AND search nor the OR broadened search — it must end in the
+      // same scoped literal fallback session search ends with.
+      addMemory(dbManager, '权限检查应在执行操作前完成。');
+      addMemory(dbManager, '漏洞修复后需要重新审查。');
+
+      const results = searchMemories(dbManager, '权限 漏洞');
+
+      assert.ok(results.some((r) => r.content.includes('权限检查')), 'first short-CJK term must be recovered');
+      assert.ok(results.some((r) => r.content.includes('漏洞修复')), 'second short-CJK term must be recovered');
+    });
+
+    it('applies project, target and limit on the multi-term literal fallback path', () => {
+      addMemory(dbManager, '权限检查应在执行操作前完成。', 'memory', 'project-a');
+      addMemory(dbManager, '漏洞修复后需要重新审查。', 'user');
+      addMemory(dbManager, '权限与漏洞都需要复查。');
+
+      const scopedProject = searchMemories(dbManager, '权限 漏洞', { project: 'project-a' });
+      assert.ok(scopedProject.length >= 1);
+      assert.ok(scopedProject.every((r) => r.project === 'project-a'));
+
+      const scopedTarget = searchMemories(dbManager, '权限 漏洞', { target: 'user' });
+      assert.ok(scopedTarget.length >= 1);
+      assert.ok(scopedTarget.every((r) => r.target === 'user'));
+
+      const limited = searchMemories(dbManager, '权限 漏洞', { limit: 1 });
+      assert.strictEqual(limited.length, 1);
+    });
+
+    it('keeps an explicit operator query with short CJK terms empty', () => {
+      addMemory(dbManager, '权限检查应在执行操作前完成。');
+
+      // An explicit AND is FTS5 syntax, not natural language: it keeps its exact
+      // result instead of degrading to the literal fallback, even though that
+      // fallback would match 权限. Mirrors the existing "should not broaden
+      // explicit operator queries" case for short CJK terms, which are the ones
+      // the new fallback would otherwise pick up.
+      const results = searchMemories(dbManager, '权限 AND nonexistent');
+
+      assert.deepStrictEqual(results, []);
+    });
+
     it('should match multi-word queries without requiring an exact phrase', () => {
       const results = searchMemories(dbManager, 'gpu issue');
       assert.ok(results.length > 0);
