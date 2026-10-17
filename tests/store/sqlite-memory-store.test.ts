@@ -835,6 +835,66 @@ describe('sqlite-memory-store', () => {
       assert.deepStrictEqual(results, []);
     });
 
+    it('applies target "project" on the multi-term literal fallback path', () => {
+      addMemory(dbManager, '权限检查应在执行操作前完成。', 'memory', 'project-a');
+      addMemory(dbManager, '漏洞修复后需要重新审查。', 'user', 'project-a');
+      addMemory(dbManager, '权限检查属于全局约定。');
+
+      // `project` is a virtual target: memories.target only stores memory/user/
+      // failure, and target: 'project' means "memory entries that belong to a
+      // project". Pushing it as a literal column value matches no row at all.
+      const results = searchMemories(dbManager, '权限 漏洞', { target: 'project' });
+
+      assert.ok(results.length >= 1);
+      assert.ok(results.every((r) => r.target === 'memory'));
+      assert.ok(results.every((r) => r.project === 'project-a'));
+    });
+
+    it('drops stop words from the multi-term literal fallback so they are not counted as hits', () => {
+      addMemory(dbManager, 'psdb 副本已经完成。');
+      addMemory(dbManager, 'this is fine');
+
+      // "is" is a stop word the FTS query drops, so it never determined a match
+      // there. The literal fallback used to keep it, which made every row
+      // containing "is" a hit and bumped hit_count for text the query was not
+      // about.
+      const results = searchMemories(dbManager, 'is ps db');
+
+      assert.ok(results.some((r) => r.content.includes('psdb')));
+      assert.ok(results.every((r) => !r.content.includes('this is fine')));
+      const row = dbManager
+        .getDb()
+        .prepare("SELECT hit_count FROM memories WHERE content = 'this is fine'")
+        .get() as { hit_count: number };
+      assert.strictEqual(Number(row.hit_count), 0);
+    });
+
+    it('does not turn a whitespace-only quoted phrase into a match-everything pattern', () => {
+      addMemory(dbManager, 'psdb 副本已经完成。');
+      addMemory(dbManager, '无关条目');
+
+      // A whitespace-only phrase trims to an empty LIKE pattern (`%%`), which
+      // matches every row and would make this last-resort search return the
+      // whole store.
+      const results = searchMemories(dbManager, '"   " ps db');
+
+      assert.ok(results.length >= 1);
+      assert.ok(results.every((r) => !r.content.includes('无关条目')));
+    });
+
+    it('bounds the literal fallback OR chain instead of failing on oversized queries', () => {
+      addMemory(dbManager, 'psdb 副本已经完成。');
+
+      // One OR'd LIKE per term: past SQLite's expression depth limit this throws
+      // instead of returning, and a term over SQLITE_MAX_LIKE_PATTERN_LENGTH
+      // (50 KB) makes the LIKE itself fail.
+      const manyTerms = Array.from({ length: 1200 }, (_, i) => `term${i}`).join(' ');
+      assert.doesNotThrow(() => searchMemories(dbManager, `ps db ${manyTerms}`));
+
+      const hugeTerm = 'x'.repeat(51_000);
+      assert.doesNotThrow(() => searchMemories(dbManager, `ps db ${hugeTerm}`));
+    });
+
     it('should match multi-word queries without requiring an exact phrase', () => {
       const results = searchMemories(dbManager, 'gpu issue');
       assert.ok(results.length > 0);
