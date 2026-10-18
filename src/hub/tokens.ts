@@ -11,7 +11,7 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 interface TokenRecord {
@@ -51,17 +51,26 @@ export class TokenStore {
       }
       throw err;
     }
-    const parsed = JSON.parse(raw) as TokenStoreFile;
-    if (parsed === null || typeof parsed !== 'object' || typeof parsed.machines !== 'object' || parsed.machines === null) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(`token store at ${this.filePath} is corrupt: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (parsed === null || typeof parsed !== 'object' || typeof (parsed as TokenStoreFile).machines !== 'object' || (parsed as TokenStoreFile).machines === null) {
       throw new Error(`token store at ${this.filePath} is malformed`);
     }
-    return parsed;
+    return parsed as TokenStoreFile;
   }
 
   private write(file: TokenStoreFile): void {
     mkdirSync(dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.tmp`;
     writeFileSync(tmp, JSON.stringify(file, null, 2), { mode: 0o600 });
+    // The mode option above applies only when the tmp file is CREATED — a
+    // stale .tmp left by a crashed run (written under a different umask) would
+    // otherwise be renamed into place world-readable. Force it before swap.
+    chmodSync(tmp, 0o600);
     renameSync(tmp, this.filePath);
   }
 

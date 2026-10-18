@@ -123,15 +123,9 @@ export const SearchRequest = Type.Object({
 });
 export type SearchRequest = Static<typeof SearchRequest>;
 
-/**
- * `POST /memory` request — one of three ops. All mutations are idempotent
- * upserts keyed by the client-generated UUIDv7 `id` (AD-9). No provenance
- * fields: the hub stamps them (AD-8).
- */
 const MemoryOpCommon = {
   id: Uuid7,
   project_key: Type.Optional(Type.String({ minLength: 1 })),
-  scope: Scope,
   category: Type.Optional(Category),
   /** Absent = `memory` (the store default); only status entries say otherwise. */
   kind: Type.Optional(Kind),
@@ -139,20 +133,32 @@ const MemoryOpCommon = {
   failure_reason: Type.Optional(Type.String()),
   tool_state: Type.Optional(Type.String()),
   corrected_to: Type.Optional(Type.String()),
-  session: Type.String({ minLength: 1 }),
 };
 
+/**
+ * `POST /memory` request — one of three ops. All mutations are idempotent
+ * upserts keyed by the client-generated UUIDv7 `id` (AD-9). No provenance
+ * fields: the hub stamps them (AD-8).
+ *
+ * `remove` deletes by `id` alone, so it does not require `scope`/`session`/
+ * `state` (those describe the entry being written, not the deletion).
+ */
 export const MemoryOpRequest = Type.Union([
-  Type.Object({ op: Type.Literal('add'), ...MemoryOpCommon, content: Type.String({ minLength: 1 }) }),
-  Type.Object({ op: Type.Literal('replace'), ...MemoryOpCommon, content: Type.String({ minLength: 1 }) }),
-  Type.Object({ op: Type.Literal('remove'), ...MemoryOpCommon }),
+  Type.Object({ op: Type.Literal('add'), ...MemoryOpCommon, scope: Scope, session: Type.String({ minLength: 1 }), content: Type.String({ minLength: 1 }) }),
+  Type.Object({ op: Type.Literal('replace'), ...MemoryOpCommon, scope: Scope, session: Type.String({ minLength: 1 }), content: Type.String({ minLength: 1 }) }),
+  Type.Object({ op: Type.Literal('remove'), ...MemoryOpCommon, scope: Type.Optional(Scope), session: Type.Optional(Type.String({ minLength: 1 })) }),
 ]);
 export type MemoryOpRequest = Static<typeof MemoryOpRequest>;
 
-/** `GET /status` response: the latest status-kind entry for a project. */
+/**
+ * `GET /status` response: the latest status-kind entry for a project.
+ * No status entry exists → `status: null` (the spec's response matrix —
+ * `null`, not an absent key).
+ */
 export const StatusResponse = Type.Object({
   project: Type.String({ minLength: 1 }),
-  status: Type.Optional(
+  status: Type.Union([
+    Type.Null(),
     Type.Object({
       state: State,
       content: Type.String(),
@@ -160,7 +166,7 @@ export const StatusResponse = Type.Object({
       machine: Type.String(),
       session: Type.String(),
     }),
-  ),
+  ]),
 });
 export type StatusResponse = Static<typeof StatusResponse>;
 

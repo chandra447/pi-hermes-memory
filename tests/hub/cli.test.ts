@@ -1,6 +1,6 @@
 import { after, describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runHubCli, type CliIo } from '../../src/hub/cli.js';
@@ -90,6 +90,50 @@ describe('pi-memory-hub CLI (AD-5 enrollment UX)', () => {
     const c = capture();
     assert.equal(await runHubCli(['list'], c.io), 0);
     assert.match(c.out.join('\n'), /peacewagon/);
+  });
+
+  it('enroll: invalid machine name → clean named error + exit 1 (no stack trace)', async () => {
+    const c = capture();
+    const code = await runHubCli(['enroll', 'bad machine!'], c.io);
+    assert.equal(code, 1);
+    assert.match(c.err.join(' '), /invalid machine name/);
+    assert.ok(!/\n\s+at /.test(c.err.join('\n')), 'no stack frames may reach the human');
+    assert.ok(!c.out.some((l) => l.trimStart().startsWith('{')), 'no client file on failure');
+  });
+
+  it('enroll: missing CA → exit 1 + named error, no client file printed (review: silent trust-anchor gap)', async () => {
+    process.env.PI_MEMORY_HUB_CA = path.join(dir, 'no-such-ca.crt');
+    const c = capture();
+    assert.equal(await runHubCli(['enroll', 'lincopta'], c.io), 1);
+    assert.match(c.err.join(' '), /CA cert not found/);
+    assert.ok(!c.out.some((l) => l.trimStart().startsWith('{')), 'a client file without its CA pin is not a working trust anchor');
+  });
+
+  it('enroll: PI_MEMORY_HUB_DIR steers the CA pin (no silent default-dir pinning)', async () => {
+    const customDir = path.join(dir, 'custom-hub');
+    mkdirSync(path.join(customDir, 'tls'), { recursive: true });
+    writeFileSync(path.join(customDir, 'tls', 'ca.crt'), 'FAKE-CUSTOM-CA-PEM\n');
+    process.env.PI_MEMORY_HUB_DIR = customDir;
+    delete process.env.PI_MEMORY_HUB_CA; // the default-dir CA must NOT win
+    const c = capture();
+    assert.equal(await runHubCli(['enroll', 'no5'], c.io), 0);
+    const json = c.out.find((l) => l.trimStart().startsWith('{'));
+    assert.ok(json);
+    assert.equal((JSON.parse(json!) as { ca_cert_pem: string }).ca_cert_pem, 'FAKE-CUSTOM-CA-PEM\n');
+  });
+
+  it('export: fresh hub dir without a db file → empty export, exit 0 (no crash)', async () => {
+    process.env.PI_MEMORY_HUB_DB = path.join(dir, 'does-not-exist-yet', 'shared.sqlite');
+    const c = capture();
+    assert.equal(await runHubCli(['export'], c.io), 0, c.err.join(' '));
+  });
+
+  it('serve: missing cert file → clean named error + exit 1 (no raw crash)', async () => {
+    process.env.PI_MEMORY_HUB_CERT = path.join(dir, 'no-such-cert.crt');
+    const c = capture();
+    const code = await runHubCli(['serve'], c.io);
+    assert.equal(code, 1, c.err.join(' '));
+    assert.ok(!/\n\s+at /.test(c.err.join('\n')), 'no stack frames may reach the human');
   });
 
   it('export writes JSONL to --out', async () => {

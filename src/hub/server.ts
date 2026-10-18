@@ -102,8 +102,17 @@ export function createHubServer(config: HubServerConfig): HubServer {
 
 /** Start the hub and resolve once it is listening. */
 export function startHubServer(config: HubServerConfig): Promise<HubServer> {
-  const hub = createHubServer(config);
   return new Promise((resolve, reject) => {
+    let hub: HubServer;
+    try {
+      hub = createHubServer(config);
+    } catch (err) {
+      // createHubServer throws synchronously (missing cert/key, unreadable
+      // store) — without this the throw escapes the promise and the caller
+      // (CLI `serve`, tests) sees a raw crash instead of a rejected promise.
+      reject(err);
+      return;
+    }
     hub.server.once('error', reject);
     hub.server.listen(config.port, config.host, () => {
       hub.server.removeListener('error', reject);
@@ -124,8 +133,21 @@ const isMain = (() => {
 })();
 
 if (isMain) {
-  startHubServer(configFromEnv()).catch((err) => {
-    console.error('[pi-memory-hub] failed to start:', err);
-    process.exit(1);
-  });
+  startHubServer(configFromEnv())
+    .then((hub) => {
+      let stopping = false;
+      const stop = () => {
+        // systemctl stop sends SIGTERM: checkpoint the WAL (store close)
+        // before exiting so shutdown never relies on crash recovery.
+        if (stopping) return;
+        stopping = true;
+        void hub.close().then(() => process.exit(0)).catch(() => process.exit(1));
+      };
+      process.on('SIGTERM', stop);
+      process.on('SIGINT', stop);
+    })
+    .catch((err) => {
+      console.error('[pi-memory-hub] failed to start:', err);
+      process.exit(1);
+    });
 }

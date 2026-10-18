@@ -213,6 +213,35 @@ describe('POST /memory (AD-8 provenance stamping)', () => {
     assert.deepEqual(again.json(), { id, removed: false });
   });
 
+  describe('remove: delete by id alone (review finding — the op must not be over-constrained)', () => {
+    it('removes a status entry with {op, id} only — no scope/session/state required', async () => {
+      const id = uuid7();
+      const add = await request('POST', '/memory', {
+        token: boxAToken,
+        body: { op: 'add', id, content: 'needs a reproducibility rerun', scope: 'memory', project_key: 'https://github.com/jan/demo', kind: 'status', state: 'hardening', session: 's' },
+      });
+      assert.ok([200, 201].includes(add.status), add.body);
+      const res = await request('POST', '/memory', { token: boxAToken, body: { op: 'remove', id } });
+      assert.equal(res.status, 200, res.body);
+      assert.deepEqual(res.json(), { id, removed: true });
+      // and the derived status is gone (the wire says `status: null`)
+      const st = await request('GET', '/status?project=https%3A%2F%2Fgithub.com%2Fjan%2Fdemo', { token: boxAToken });
+      assert.equal(st.status, 200);
+      assert.equal((st.json() as { status: unknown }).status, null);
+    });
+
+    it('removes a memory entry with {op, id} only', async () => {
+      const id = uuid7();
+      await request('POST', '/memory', {
+        token: boxBToken,
+        body: { op: 'add', id, content: 'a fact to delete', scope: 'memory', session: 's' },
+      });
+      const res = await request('POST', '/memory', { token: boxBToken, body: { op: 'remove', id } });
+      assert.equal(res.status, 200, res.body);
+      assert.deepEqual(res.json(), { id, removed: true });
+    });
+  });
+
   it('re-add of the same id stays idempotent (LWW upsert, AD-9)', async () => {
     const id = uuid7();
     await request('POST', '/memory', {

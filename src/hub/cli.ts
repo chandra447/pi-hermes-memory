@@ -3,7 +3,8 @@
  *
  * Subcommands:
  * - `serve`            run the hub server (env-configured; the systemd unit
- *                      uses this)
+ *                      execs `src/hub/server.ts` directly — `serve` is the
+ *                      interactive equivalent, e.g. `tsx src/hub/cli.ts serve`)
  * - `enroll <box>`     one-time human enrollment: issue a token for a machine
  *                      and print its client file (hub URL + CA pin + token).
  *                      Runs ON THE HUB BOX (same machine → direct token-store
@@ -50,15 +51,23 @@ function lanAddress(): string {
 }
 
 function caCertPath(env: NodeJS.ProcessEnv): string {
-  return env.PI_MEMORY_HUB_CA ?? `${defaultHubDir()}/tls/ca.crt`;
+  // Mirror configFromEnv: the CA lives under the (possibly overridden) hub
+  // dir unless PI_MEMORY_HUB_CA says otherwise — a client file pinned to the
+  // wrong CA would fail TLS on the enrolled box.
+  const hubDir = env.PI_MEMORY_HUB_DIR ?? defaultHubDir();
+  return env.PI_MEMORY_HUB_CA ?? `${hubDir}/tls/ca.crt`;
 }
 
-function printClientFile(io: CliIo, env: NodeJS.ProcessEnv, machine: string, token: string): void {
+/** Print the client file. Returns false (and prints an error) if the CA pin
+ *  cannot be read — a client file without its CA pin is not a working trust
+ *  anchor, so enrollment must fail rather than continue. */
+function printClientFile(io: CliIo, env: NodeJS.ProcessEnv, machine: string, token: string): boolean {
   const caPath = caCertPath(env);
-  const caPem = existsSync(caPath) ? readFileSync(caPath, 'utf8') : '';
-  if (caPem.length === 0) {
-    io.err(`warning: CA cert not found at ${caPath} — generate the hub TLS material first; the printed file carries no CA pin.`);
+  if (!existsSync(caPath)) {
+    io.err(`error: CA cert not found at ${caPath} — generate the hub TLS material before enrolling (no client file printed).`);
+    return false;
   }
+  const caPem = readFileSync(caPath, 'utf8');
   const port = env.PI_MEMORY_HUB_PORT ?? '8083';
   const clientFile = {
     hub_url: `https://${lanAddress()}:${port}`,
@@ -68,14 +77,23 @@ function printClientFile(io: CliIo, env: NodeJS.ProcessEnv, machine: string, tok
   };
   io.out(JSON.stringify(clientFile, null, 2));
   io.err(`→ save this as ~/.config/pi-hermes-memory/hub-client.json on ${machine} (local file — never chezmoi).`);
+  return true;
 }
 
 async function cmdServe(env: NodeJS.ProcessEnv): Promise<number> {
-  await startHubServer(configFromEnv(env));
-  return new Promise<number>((resolve) => {
-    process.on('SIGTERM', () => resolve(0));
-    process.on('SIGINT', () => resolve(0));
+  const hub = await startHubServer(configFromEnv(env));
+  await new Promise<void>((resolve) => {
+    const done = () => {
+      process.off('SIGTERM', done);
+      process.off('SIGINT', done);
+      // Close the store (WAL checkpoint) before exiting so a service stop
+      // never drops in-flight writes.
+      void hub.close().then(resolve).catch(resolve);
+    };
+    process.on('SIGTERM', done);
+    process.on('SIGINT', done);
   });
+  return 0;
 }
 
 function cmdEnroll(env: NodeJS.ProcessEnv, io: CliIo, args: string[]): number {
@@ -86,7 +104,12 @@ function cmdEnroll(env: NodeJS.ProcessEnv, io: CliIo, args: string[]): number {
   }
   const tokens = new TokenStore(configFromEnv(env).tokenStorePath);
   const result = tokens.enroll(box);
-  printClientFile(io, env, result.machine, result.token);
+  if (!printClientFile(io, env, result.machine, result.token)) {
+    // The token exists now (enroll wrote it) but the client file could not be
+    // completed — the human re-runs enrollment after generating the TLS
+    // material (rotation = re-enroll, AD-5).
+    return 1;
+  }
   return 0;
 }
 
@@ -126,6 +149,10 @@ function cmdExport(env: NodeJS.ProcessEnv, io: CliIo, args: string[]): number {
     }
   }
   const config = configFromEnv(env);
+  // Mirror createHubServer: the store dir may not exist yet on a machine
+  // that has never run the hub (a fresh, empty export is the right answer —
+  // not a crash).
+  mkdirSync(dirname(config.dbPath), { recursive: true });
   const store = new HubStore(config.dbPath);
   try {
     const lines = store.exportRows().map((entry) => JSON.stringify(entry));
@@ -146,6 +173,15 @@ function cmdExport(env: NodeJS.ProcessEnv, io: CliIo, args: string[]): number {
 /** CLI entry. Returns the process exit code. */
 export async function runHubCli(argv: string[], io: CliIo = defaultIo()): Promise<number> {
   const [command, ...rest] = argv;
+  try {
+    return await dispatch(command, rest, io);
+  } catch (err) {
+    io.err(err instanceof Error ? `error: ${err.message}` : `error: ${String(err)}`);
+    return 1;
+  }
+}
+
+async function dispatch(command: string | undefined, rest: string[], io: CliIo): Promise<number> {
   switch (command) {
     case 'serve':
       return cmdServe(process.env);
@@ -179,5 +215,10 @@ const isMain = (() => {
 })();
 
 if (isMain) {
-  runHubCli(process.argv.slice(2)).then((code) => process.exit(code));
+  runHubCli(process.argv.slice(2))
+    .then((code) => process.exit(code))
+    .catch((err: unknown) => {
+      process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    });
 }

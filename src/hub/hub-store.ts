@@ -18,9 +18,11 @@
 import { loadBetterSqlite3 } from '../store/sqlite-native.js';
 import {
   buildFallbackFts5Query,
+  buildNaturalLanguageFallbackQuery,
   collectLikeTerms,
   isFts5QueryError,
   normalizeFts5Query,
+  normalizeNaturalLanguageFts5Query,
 } from '../store/fts-query.js';
 import {
   cleanHit,
@@ -354,6 +356,23 @@ export class HubStore {
         const fallback = buildFallbackFts5Query(query);
         if (fallback && fallback !== normalized) {
           raw = runFts(fallback);
+        }
+      }
+      // Parity with the v1 ladder (sqlite-memory-store.ts `ftsParseError`
+      // branch): a query that passes through as raw FTS5 syntax (uppercase
+      // operator words, stray operators) fails to parse. Retry it as natural
+      // language instead of silently returning nothing — the local store
+      // finds these, so the shared store must too (C9/AD-12).
+      if (raw.length === 0 && ftsParseError) {
+        const nlQuery = normalizeNaturalLanguageFts5Query(query);
+        if (nlQuery.length > 0 && nlQuery !== normalized) {
+          raw = runFts(nlQuery);
+          if (raw.length === 0) {
+            const nlFallback = buildNaturalLanguageFallbackQuery(query);
+            if (nlFallback && nlFallback !== nlQuery) {
+              raw = runFts(nlFallback);
+            }
+          }
         }
       }
     }

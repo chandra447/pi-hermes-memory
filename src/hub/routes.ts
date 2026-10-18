@@ -148,6 +148,14 @@ async function handleMemory(req: IncomingMessage, res: ServerResponse, ctx: HubR
   const body = await parseJson<MemoryOpRequest>(res, req, MemoryOpRequest);
   if (body === null) return;
 
+  if (body.op === 'remove') {
+    // remove deletes by id alone — the state/kind cross-field rule below
+    // (which concerns entries being WRITTEN) does not apply to it.
+    const removed = ctx.store.remove(body.id);
+    sendJson(res, 200, { id: body.id, removed });
+    return;
+  }
+
   // Cross-field rule: `state` belongs to status-kind entries only (spine
   // "Status entries" — the six words live in the vocabulary, never in
   // content). Absent `kind` means the store default, `memory`.
@@ -161,12 +169,6 @@ async function handleMemory(req: IncomingMessage, res: ServerResponse, ctx: HubR
         ? 'kind "status" requires a "state" field (one of the six status words)'
         : 'a "state" field is only valid for kind "status"',
     );
-    return;
-  }
-
-  if (body.op === 'remove') {
-    const removed = ctx.store.remove(body.id);
-    sendJson(res, 200, { id: body.id, removed });
     return;
   }
 

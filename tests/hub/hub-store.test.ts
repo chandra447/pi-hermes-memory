@@ -123,6 +123,18 @@ describe('HubStore.search (FTS + lifted clean-hit gates)', () => {
     assert.deepEqual(store.search('   ', {}), { hits: [], raw_matches: 0 });
   });
 
+  it('recovers operator-style queries whose raw FTS5 form fails to parse (v1 ladder parity)', () => {
+    store.upsert(upsertInput({ content: 'Never search whole filesystem from root. Do not run find /.' }));
+    // "DO NOT USE FIND /" passes normalizeFts5Query through as raw FTS5
+    // syntax (uppercase operator words) and fails to parse — the v1 ladder
+    // retries it as natural language and finds the row. Before the port of
+    // the ftsParseError branch, the hub silently returned [] here (the local
+    // store finds it, the shared store must too — C9/AD-12).
+    const { hits, raw_matches } = store.search('DO NOT USE FIND /', {});
+    assert.ok(raw_matches >= 1, 'the parse-error retry rung must recover the row');
+    assert.ok(hits.some((h) => h.content.includes('find /')));
+  });
+
   it('connector-only queries return no hits without throwing (v1 parity)', () => {
     for (const query of ['and', 'or not', 'near']) {
       assert.deepEqual(store.search(query, {}), { hits: [], raw_matches: 0 }, `query: ${query}`);
