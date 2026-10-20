@@ -119,6 +119,7 @@ function toSearchHit(entry: SharedEntry): SearchHit {
     identity: entry.identity,
     created_at: entry.created_at,
     updated_at: entry.updated_at,
+    provenance: entry.provenance,
     source: 'shared',
   };
   if (entry.project_key !== undefined) hit.project = entry.project_key;
@@ -132,9 +133,10 @@ function toSearchHit(entry: SharedEntry): SearchHit {
 async function handleSearch(req: IncomingMessage, res: ServerResponse, ctx: HubRouteContext): Promise<void> {
   const body = await parseJson<SearchRequest>(res, req, SearchRequest);
   if (body === null) return;
-  const { query, project, scope, category, limit } = body;
+  const { query, project, project_any, scope, category, limit } = body;
   const { hits, raw_matches } = ctx.store.search(query, {
     project,
+    ...(project_any !== undefined ? { projectAny: project_any } : {}),
     scope,
     category,
     limit,
@@ -200,6 +202,9 @@ async function handleMemory(req: IncomingMessage, res: ServerResponse, ctx: HubR
     session: body.session,
     created_at: createdAt,
     updated_at: now,
+    // Replace procedure (story 2): pointer only — the hub resolves the
+    // referenced entry's provenance server-side (AD-8).
+    ...(body.inherits_from !== undefined ? { inherits_from: body.inherits_from } : {}),
   });
 
   const entry = ctx.store.getEntry(body.id)!;

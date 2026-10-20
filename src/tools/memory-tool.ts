@@ -25,6 +25,12 @@ import type { MemoryCategory, MemoryResult } from "../types.js";
 import { normalizeMemoryLookupText } from "../store/memory-lookup.js";
 import { createSharedToolResultRenderer } from "./shared-output-view.js";
 import { memoryResultView } from "./tool-result-views.js";
+import type { SharedMemoryOptions } from "../hub-client/context.js";
+import { sharedResolve } from "../hub-client/context.js";
+import { unresolvedProjectNote } from "../hub-client/merge.js";
+import type { SharedMutationTarget } from "../hub-client/mutations.js";
+import { sharedAdd, sharedRemove, sharedReplace } from "../hub-client/mutations.js";
+import { HubHttpError } from "../hub-client/client.js";
 
 function appendSyncWarning(result: MemoryResult, warning: string): MemoryResult {
   const warnings = [...(((result as any).warnings ?? []) as string[]), warning];
@@ -285,7 +291,9 @@ export function registerMemoryTool(
   dbManager: DatabaseManager | null = null,
   projectName: ProjectNameRef = null,
   bindProjectFromCwd?: (cwd?: string) => void | Promise<void>,
+  shared?: SharedMemoryOptions | null,
 ): (candidate: MemoryStore | null) => void {
+  const sharedOpts = shared ?? null;
   const reconciledStores = new WeakSet<MemoryStore>();
   const attachMutationObserver = (candidate: MemoryStore | null, isProjectStore = false): void => {
     if (!candidate || reconciledStores.has(candidate) || typeof candidate.setMutationObserver !== "function") return;
@@ -313,16 +321,57 @@ export function registerMemoryTool(
     });
   }
 
+  /**
+   * Resolve the shared-side state for a mutation (story 2): probe the hub,
+   * then (for project-scoped ops) resolve the project key. The shared op
+   * runs IN ADDITION to the local v1 flow for replace/remove (an entry may
+   * live in both stores); for add it REPLACES the local flow while the hub
+   * is up (Q3=i: shared only — the local store is the degraded tier).
+   */
+  async function sharedOpStateFor(
+    rawTarget: "memory" | "user" | "project" | "failure",
+    params: MemoryToolParams,
+    activeProjectName: string | null,
+    ctx?: { cwd?: string; sessionManager?: { getSessionId?: () => string | undefined } },
+  ): Promise<
+    | { kind: "unconfigured" }
+    | { kind: "down" }
+    | { kind: "skip"; note: string }
+    | { kind: "up"; target: SharedMutationTarget }
+  > {
+    if (!sharedOpts) return { kind: "unconfigured" };
+    const up = await sharedOpts.client.probe();
+    if (!up) return { kind: "down" };
+    let projectKey: string | undefined;
+    if (rawTarget === "project") {
+      const resolved = sharedResolve(sharedOpts, activeProjectName ?? undefined, ctx?.cwd);
+      if (resolved.key) projectKey = resolved.key;
+      else return { kind: "skip", note: unresolvedProjectNote(activeProjectName ?? "project", resolved.note) };
+    }
+    return {
+      kind: "up",
+      target: {
+        client: sharedOpts.client,
+        sessionId: ctx?.sessionManager?.getSessionId?.() ?? "unknown",
+        scope: sqliteTargetFor(rawTarget),
+        ...(projectKey !== undefined ? { projectKey } : {}),
+        ...(rawTarget === "failure" ? { category: (params.category ?? "failure") as MemoryCategory } : {}),
+      },
+    };
+  }
+
   const executeAction = async (
     action: MemoryAction,
     params: MemoryToolParams,
     signal?: AbortSignal,
+    ctx?: { cwd?: string; sessionManager?: { getSessionId?: () => string | undefined } },
   ) => {
     const { target: rawTarget, content, old_text, category, failure_reason } = params;
     const target = rawTarget === "project" ? "memory" : rawTarget;
     const activeProjectStore = resolveProjectStore(projectStore);
     const activeProjectName = resolveProjectName(projectName);
     const activeStore = rawTarget === "project" ? activeProjectStore : store;
+    const sharedState = await sharedOpStateFor(rawTarget, params, activeProjectName, ctx);
 
     if (rawTarget === "project" && !activeProjectStore) {
       return {
@@ -351,20 +400,49 @@ export function registerMemoryTool(
         if (!content) {
           throw new Error("Content is required for 'add' action.");
         }
-        if (rawTarget === "failure") {
-          const memoryCategory = category ?? "failure";
-          result = await store_.addFailure(content, {
-            category: memoryCategory,
-            failureReason: failure_reason,
-          });
-          if (result.success && !syncHandled) {
-            syncWarning = await syncAddToSqlite(rawTarget, content, memoryCategory, failure_reason, dbManager, activeProjectName);
+        if (sharedState.kind === "up") {
+          // Q3=i: hub up ⇒ shared ONLY — the local store (prompt snapshot +
+          // search mirror) is untouched while the hub is reachable.
+          const memoryCategory = rawTarget === "failure" ? (category ?? "failure") : undefined;
+          const finalContent = rawTarget === "failure"
+            ? formatFailureMemoryContent(content, { category: memoryCategory ?? "failure", failureReason: failure_reason })
+            : content;
+          try {
+            const { action: hubAction } = await sharedAdd(sharedState.target, finalContent);
+            result = {
+              success: true,
+              message: hubAction === "inserted"
+                ? "Saved to shared memory."
+                : "Shared entry already present (identical content) — provenance extended.",
+            };
+          } catch (err) {
+            // Explicit, no local fallback: a blocked-content write must not
+            // silently land in the local tier (NFR-4).
+            const detail = err instanceof HubHttpError ? err.message : err instanceof Error ? err.message : String(err);
+            result = { success: false, error: `Shared store rejected the write: ${detail}` };
           }
         } else {
-          result = await store_.add(target, content, signal);
-          if (result.success && !syncHandled) {
-            await syncEvictionsFromSqlite(rawTarget, result.evicted_entries, dbManager, activeProjectName);
-            syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, activeProjectName);
+          if (rawTarget === "failure") {
+            const memoryCategory = category ?? "failure";
+            result = await store_.addFailure(content, {
+              category: memoryCategory,
+              failureReason: failure_reason,
+            });
+            if (result.success && !syncHandled) {
+              syncWarning = await syncAddToSqlite(rawTarget, content, memoryCategory, failure_reason, dbManager, activeProjectName);
+            }
+          } else {
+            result = await store_.add(target, content, signal);
+            if (result.success && !syncHandled) {
+              await syncEvictionsFromSqlite(rawTarget, result.evicted_entries, dbManager, activeProjectName);
+              syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, activeProjectName);
+            }
+          }
+          if (sharedState.kind === "down" && result.success) {
+            result = {
+              ...result,
+              message: `${result.message ?? "Saved."} (shared memory unavailable — saved locally; visible on this box only while the hub is down)`,
+            };
           }
         }
         break;
@@ -375,12 +453,58 @@ export function registerMemoryTool(
         if (result.success && !syncHandled) {
           syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, activeProjectName);
         }
+        if (sharedState.kind === "up") {
+          try {
+            const outcome = await sharedReplace(sharedState.target, old_text, content);
+            const parts: string[] = [];
+            if (outcome.replaced > 0) parts.push(`replaced ${outcome.replaced} shared entr${outcome.replaced === 1 ? "y" : "ies"}`);
+            if (outcome.unchanged > 0) parts.push(`${outcome.unchanged} unchanged (provenance extended)`);
+            if (parts.length > 0) {
+              result = {
+                ...result,
+                success: true,
+                message: `${result.success ? (result.message ?? "") + " " : ""}Shared: ${parts.join(", ")}.`,
+              };
+            }
+            if (outcome.failed) {
+              const leftover = outcome.leftoverOldIds.length > 0 ? ` Old entry ${outcome.leftoverOldIds[0].slice(0, 8)}… is still visible — remove it explicitly if unwanted.` : "";
+              result = appendSyncWarning(result, `Shared replace partially failed: ${outcome.error}${leftover}`);
+            }
+          } catch (err) {
+            const detail = err instanceof Error ? err.message : String(err);
+            if (result.success) result = appendSyncWarning(result, `Shared replace failed: ${detail} (local replace succeeded)`);
+            else result = { ...result, error: `${result.error ?? "Operation failed"} (shared: ${detail})` };
+          }
+        } else if (sharedState.kind === "down" && result.success) {
+          result = { ...result, message: `${result.message ?? ""} (shared memory unavailable — replaced locally only)`.trim() };
+        } else if (sharedState.kind === "skip" && result.success) {
+          result = appendSyncWarning(result, sharedState.note);
+        }
         break;
       case "remove":
         if (!old_text) throw new Error("old_text is required for 'remove' action.");
         result = await store_.remove(target, old_text);
         if (result.success && !syncHandled) {
           syncWarning = await syncRemoveFromSqlite(rawTarget, old_text, dbManager, activeProjectName);
+        }
+        if (sharedState.kind === "up") {
+          try {
+            const outcome = await sharedRemove(sharedState.target, old_text);
+            if (outcome.removed > 0) {
+              result = { ...result, success: true, message: `${result.success ? (result.message ?? "") + " " : ""}Shared: removed ${outcome.removed} entr${outcome.removed === 1 ? "y" : "ies"}.` };
+            }
+            if (outcome.failed) {
+              result = appendSyncWarning(result, `Shared remove partially failed: ${outcome.error ?? "unknown error"}`);
+            }
+          } catch (err) {
+            const detail = err instanceof Error ? err.message : String(err);
+            if (result.success) result = appendSyncWarning(result, `Shared remove failed: ${detail} (local remove succeeded)`);
+            else result = { ...result, error: `${result.error ?? "Operation failed"} (shared: ${detail})` };
+          }
+        } else if (sharedState.kind === "down" && result.success) {
+          result = { ...result, message: `${result.message ?? ""} (shared memory unavailable — removed locally only)`.trim() };
+        } else if (sharedState.kind === "skip" && result.success) {
+          result = appendSyncWarning(result, sharedState.note);
         }
         break;
     }
@@ -425,11 +549,17 @@ This action-specific tool accepts only the parameters listed in its schema.`;
       ],
       renderResult: createSharedToolResultRenderer(memoryResultView),
       parameters,
-      async execute(_toolCallId, params, signal, _onUpdate, ctx?: { cwd?: string }) {
+      async execute(
+        _toolCallId,
+        params,
+        signal,
+        _onUpdate,
+        ctx?: { cwd?: string; sessionManager?: { getSessionId?: () => string | undefined } },
+      ) {
         if (bindProjectFromCwd && ctx?.cwd) {
           await bindProjectFromCwd(ctx.cwd);
         }
-        return executeAction(action, params as MemoryToolParams, signal);
+        return executeAction(action, params as MemoryToolParams, signal, ctx);
       },
     });
   };

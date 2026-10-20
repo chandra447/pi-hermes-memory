@@ -221,6 +221,16 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       ) {
         config.sessionSearch = { variant: parsed.sessionSearch.variant };
       }
+      if (parsed.sharedMemory === false) {
+        config.sharedMemory = { enabled: false };
+      } else if (typeof parsed.sharedMemory === "object" && parsed.sharedMemory !== null) {
+        const sm = parsed.sharedMemory as Record<string, unknown>;
+        const out: { enabled?: boolean; clientFile?: string; registryPath?: string } = {};
+        if (typeof sm.enabled === "boolean") out.enabled = sm.enabled;
+        if (typeof sm.clientFile === "string" && sm.clientFile.trim()) out.clientFile = sm.clientFile.trim();
+        if (typeof sm.registryPath === "string" && sm.registryPath.trim()) out.registryPath = sm.registryPath.trim();
+        if (Object.keys(out).length > 0) config.sharedMemory = out;
+      }
       if (typeof parsed.quickCheckOnOpen === "boolean") config.quickCheckOnOpen = parsed.quickCheckOnOpen;
       if (typeof parsed.llmModelOverride === "string") {
         const trimmed = parsed.llmModelOverride.trim();

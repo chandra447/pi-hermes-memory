@@ -17,6 +17,20 @@ export interface SessionSearchConfig {
   variant: SessionSearchVariant;
 }
 
+/**
+ * Shared (LAN hub) memory configuration (story 2). The enrollment client
+ * file's presence enables shared memory; this only overrides paths or turns
+ * it off.
+ */
+export interface SharedMemoryConfig {
+  /** Explicit off-switch for an enrolled box. Default: true (when enrolled). */
+  enabled?: boolean;
+  /** Override the enrollment client file path. Default: ~/.config/pi-hermes-memory/hub-client.json */
+  clientFile?: string;
+  /** Override the project registry path. Default: ~/.local/share/chezmoi/discoveries/REGISTRY.md */
+  registryPath?: string;
+}
+
 export interface MemoryConfig {
   /** Defer policy-only memory initialization until first use. Default: false */
   lazyInitialization?: boolean;
@@ -57,6 +71,12 @@ export interface MemoryConfig {
   projectsMemoryDir?: string;
   /** Session search configuration. Default: { variant: "legacy" } */
   sessionSearch?: SessionSearchConfig;
+  /**
+   * Shared (LAN hub) memory configuration (story 2). Default: enabled when
+   * the enrollment client file exists. `false` (or `{ enabled: false }`) is
+   * the off-switch for an enrolled box that should run local-only.
+   */
+  sharedMemory?: boolean | SharedMemoryConfig;
   /** Run a full SQLite quick_check asynchronously after opening. Default: true */
   quickCheckOnOpen?: boolean;
   /** Override model used for child pi -p subprocess LLM calls. Default: unset */

@@ -4,8 +4,23 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { DatabaseManager } from '../store/db.js';
 import { searchMemories, getMemoryStats, recordSearchHits } from '../store/sqlite-memory-store.js';
 import type { MemoryCategory } from '../types.js';
+import type { SqliteMemoryEntry } from '../store/sqlite-memory-store.js';
 import { createSharedToolResultRenderer } from './shared-output-view.js';
 import { searchResultView } from './tool-result-views.js';
+import { HubUnreachableError } from '../hub-client/client.js';
+import type { SharedMemoryOptions } from '../hub-client/context.js';
+import { sharedRegistryEntries, sharedResolve } from '../hub-client/context.js';
+import {
+  degradedBanner,
+  degradedTag,
+  mapLocalHit,
+  mapSharedHit,
+  mergeHits,
+  unresolvedProjectNote,
+  upStateLine,
+  type UnifiedHit,
+} from '../hub-client/merge.js';
+import type { SearchHit } from '../shared/wire.js';
 
 interface SearchResult {
   success: boolean;
@@ -24,11 +39,65 @@ function scopeLabel(project: string | null): string {
   return project ? `project:${encodeURIComponent(project)}` : "global";
 }
 
+type SharedSearchOutcome =
+  | { kind: "up"; hits: SearchHit[]; note?: string }
+  | { kind: "down"; note?: string }
+  | { kind: "error"; message: string; note?: string };
+
+/** Run the shared search (probe + call) and classify the outcome (AD-11). */
+async function runSharedSearch(
+  shared: SharedMemoryOptions,
+  args: { query: string; project?: string; target?: 'memory' | 'user' | 'failure' | 'project'; category?: MemoryCategory; limit: number },
+  cwd: string | undefined,
+): Promise<SharedSearchOutcome> {
+  // AD-10: an explicit project name must resolve to a normalized key; a
+  // missing registry entry is a client error (skip shared, say so) — never
+  // a hub concern.
+  let note: string | undefined;
+  let projectKey: string | undefined;
+  if (args.project) {
+    const resolved = sharedResolve(shared, args.project, cwd);
+    if (resolved.key) projectKey = resolved.key;
+    else note = unresolvedProjectNote(args.project, resolved.note);
+  }
+
+  const up = await shared.client.probe();
+  if (!up) return { kind: "down", note };
+
+  try {
+    const scope = args.target === 'user' ? 'user' : args.target === 'failure' ? 'failure' : undefined;
+    const hits = await shared.client.search({
+      query: args.query,
+      ...(projectKey !== undefined ? { project: projectKey } : {}),
+      // v1 `target: "project"` (no name) = project-ATTRIBUTED entries.
+      ...(!args.project && args.target === 'project' ? { project_any: true } : {}),
+      ...(scope !== undefined ? { scope } : {}),
+      ...(args.category !== undefined ? { category: args.category } : {}),
+      limit: args.limit,
+    });
+    shared.client.clearDownSignal();
+    return { kind: "up", hits, note };
+  } catch (err) {
+    if (err instanceof HubUnreachableError) return { kind: "down", note };
+    return { kind: "error", message: err instanceof Error ? err.message : String(err), note };
+  }
+}
+
+/** One-line provenance footer for a shared hit (AD-15 — provenance is visible). */
+function sharedHitFooter(hit: UnifiedHit): string {
+  const contributors = (hit.provenance ?? [{ machine: hit.machine }])
+    .map((t) => t.machine)
+    .join(', ');
+  const session = hit.session.length > 13 ? `${hit.session.slice(0, 13)}…` : hit.session;
+  return `   Shared: ${hit.machine} (session ${session}) · contributors: ${contributors}`;
+}
+
 export function registerMemorySearchTool(
   pi: ExtensionAPI,
   dbManager: DatabaseManager,
-  options: { usageTrackingEnabled?: boolean } = {},
+  options: { usageTrackingEnabled?: boolean; shared?: SharedMemoryOptions | null } = {},
 ): void {
+  const shared = options.shared ?? null;
   pi.registerTool({
     name: 'memory_search',
     label: 'Memory Search',
@@ -42,7 +111,7 @@ Use cases:
 
 target="project" returns only project-attributed memory entries (the ones labeled [target=project]); combine with project to search a named project.
 
-Returns matching memory entries with their mutation target, scope, and dates. The displayed target is the value required by memory_replace and memory_remove.`,
+${shared ? 'When shared memory is configured, results include the shared LAN store (tagged "Shared:" with the contributing machines) alongside local entries, and the result header states the shared state (up / degraded).' : ''}Returns matching memory entries with their mutation target, scope, and dates. The displayed target is the value required by memory_replace and memory_remove.`,
     promptSnippet: 'Search extended memory store (unlimited capacity)',
     promptGuidelines: [
       'Use memory_search when you need context beyond what is in the system prompt.',
@@ -57,7 +126,7 @@ Returns matching memory entries with their mutation target, scope, and dates. Th
       category: Type.Optional(StringEnum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk'] as const, { description: 'Filter by memory category.' })),
       limit: Type.Optional(Type.Number({ description: 'Maximum results to return (default: 10, max: 20).' })),
     }),
-    execute: async (_id: string, args: { query: string; project?: string; target?: 'memory' | 'user' | 'failure' | 'project'; category?: string; limit?: number }) => {
+    execute: async (_id: string, args: { query: string; project?: string; target?: 'memory' | 'user' | 'failure' | 'project'; category?: string; limit?: number }, _signal?: AbortSignal, _onUpdate?: unknown, ctx?: { cwd?: string }) => {
       const query = args.query;
       const project = args.project;
       const target = args.target;
@@ -70,42 +139,109 @@ Returns matching memory entries with their mutation target, scope, and dates. Th
       }
 
       const stats = getMemoryStats(dbManager);
-      if (stats.total === 0) {
+      // The v1 "empty store" early return applies only when shared memory is
+      // NOT active — with a client, shared hits can exist even on an empty
+      // local store (I/O matrix: "search, local empty").
+      if (stats.total === 0 && !shared) {
         const result: SearchResult = { success: false, message: 'No memories in extended store yet. Use memory_add to store memories.' };
         return { content: [{ type: 'text' as const, text: result.message! }], details: result };
       }
 
-      const results = searchMemories(dbManager, query, { project, target, category, limit });
+      const localResults = searchMemories(dbManager, query, { project, target, category, limit });
 
-      if (results.length === 0) {
-        const result: SearchResult = { success: true, count: 0, message: `No memories found matching "${query}". Try a different search term or broader query.` };
-        return { content: [{ type: 'text' as const, text: result.message! }], details: result };
+      // ── Shared side (only when configured; bounded by probe + call timeouts) ──
+      let outcome: SharedSearchOutcome | null = null;
+      let merged: UnifiedHit[] | null = null;
+      if (shared) {
+        outcome = await runSharedSearch(shared, { query, project, target, category, limit }, ctx?.cwd);
+        const entries = sharedRegistryEntries(shared);
+        const nameToKey = new Map<string, string | null>();
+        const localProjectKey = (name: string): string | null => {
+          if (!nameToKey.has(name)) {
+            nameToKey.set(name, sharedResolve(shared, name, undefined).key);
+          }
+          return nameToKey.get(name)!;
+        };
+        const localHits = localResults.map((e) => mapLocalHit(e, shared.client.machine));
+        const sharedHits = outcome?.kind === 'up' ? outcome.hits.map(mapSharedHit) : [];
+        merged = mergeHits(localHits, sharedHits, limit, localProjectKey);
       }
 
-      // Usage-hit tracking (the promotion-gate data for consolidation): one
-      // batched counter UPDATE per search. Must never break the read path.
+      const hits = merged ?? localResults.map((e) => mapLocalHit(e, shared?.client.machine ?? 'local'));
+      const count = hits.length;
+
+      if (count === 0) {
+        const base = `No memories found matching "${query}". Try a different search term or broader query.`;
+        const lines = shared && outcome ? [base, ...stateLines(shared, outcome, 0)] : [base];
+        const message = lines.join('\n');
+        const result: SearchResult = { success: true, count: 0, message };
+        return { content: [{ type: 'text' as const, text: message }], details: result };
+      }
+
+      // Usage-hit tracking (the promotion-gate data for consolidation): local
+      // entries only — the shared store has no usage counter (hub is the
+      // single writer; usage stays a local property).
       if (options.usageTrackingEnabled !== false) {
         try {
-          recordSearchHits(dbManager, results.map((entry) => entry.id));
+          recordSearchHits(dbManager, localResults.map((entry) => entry.id));
         } catch (err) {
           console.warn(`[pi-hermes-memory] usage-hit recording failed (search result unaffected): ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
-      let output = `Found ${results.length} memories matching "${query}":\n\n`;
+      let output = `Found ${count} memories matching "${query}":`;
+      if (shared && outcome) {
+        output += '\n' + stateLines(shared, outcome, outcome.kind === 'up' ? outcome.hits.length : 0).join('\n');
+      }
+      output += '\n\n';
 
-      for (const entry of results) {
-        const target = mutationTarget(entry);
-        const projectLabel = `scope=${scopeLabel(entry.project)}`;
-        const mutationTargetLabel = `[target=${target}]`;
+      for (const hit of hits) {
+        const entry = hit as UnifiedHit;
+        const t = mutationTarget({ target: entry.target as "memory" | "user" | "failure", project: entry.project ?? null });
+        const projectLabel = `scope=${scopeLabel(entry.project ?? null)}`;
+        const mutationTargetLabel = `[target=${t}]`;
         const targetLabel = entry.target === 'user' ? '👤' : entry.target === 'failure' ? '⚠️' : '🧠';
         const categoryLabel = entry.category ? ` [${entry.category}]` : '';
         output += `${targetLabel} ${projectLabel} ${mutationTargetLabel}${categoryLabel} ${entry.content}\n`;
-        output += `   Created: ${entry.created} | Last used: ${entry.lastReferenced}\n\n`;
+        output += `   Created: ${entry.created} | Last used: ${entry.lastReferenced}\n`;
+        if (entry.source === 'shared') {
+          output += sharedHitFooter(entry) + '\n';
+        }
+        output += '\n';
       }
 
-      const finalResult: SearchResult = { success: true, count: results.length, output: output.trim() };
+      const finalResult: SearchResult = { success: true, count, output: output.trim() };
       return { content: [{ type: 'text' as const, text: output.trim() }], details: finalResult };
     },
   });
 }
+
+/**
+ * The shared-state lines for a search result (FR-16/FR-18 — explicit, never
+ * silent). Down outcome: the FULL banner on the first shared-scope call of
+ * the window (one-shot budget on the client), the compact tag afterwards.
+ */
+function stateLines(shared: SharedMemoryOptions, outcome: SharedSearchOutcome, sharedCount: number): string[] {
+  const lines: string[] = [];
+  switch (outcome.kind) {
+    case 'up':
+      lines.push(upStateLine(sharedCount));
+      break;
+    case 'down':
+      if (shared.client.hasSignalledDown) {
+        lines.push(degradedTag());
+      } else {
+        shared.client.markDownSignalled();
+        lines.push(degradedBanner());
+      }
+      break;
+    case 'error':
+      lines.push(`shared: error — ${outcome.message} (local results only)`);
+      break;
+  }
+  if (outcome.note) lines.push(outcome.note);
+  return lines;
+}
+
+// Re-export for tests that build tool results directly.
+export type { SqliteMemoryEntry };

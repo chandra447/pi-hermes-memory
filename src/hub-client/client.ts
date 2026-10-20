@@ -1,0 +1,282 @@
+/**
+ * Hub client — the box's single network surface to the shared store
+ * (spine AD-11: probe ≤ 500 ms; the network never blocks a turn).
+ *
+ * - TLS pinned to the CA embedded in the enrollment client file (AD-4):
+ *   `https.Agent({ ca })` — the hub's self-signed cert verifies against
+ *   exactly that CA (hostname checks run normally; the hub cert carries the
+ *   LAN IP in its SAN).
+ * - Auth = the bearer token from the same file (AD-5: the hub is the sole
+ *   credential authority; the file is local, non-chezmoi, 0600).
+ * - Provenance is never supplied here (AD-8) — the client sends content and
+ *   (for the replace procedure) an `inherits_from` pointer only.
+ *
+ * Degraded mode (AD-11): `probe()` caches up/down with a short TTL and
+ * backoff; a failed probe means "run v1 + say so", never "wait".
+ */
+
+import { existsSync, readFileSync } from 'node:fs';
+import https from 'node:https';
+import { homedir } from 'node:os';
+import { resolve as resolvePath } from 'node:path';
+import type {
+  MemoryOpRequest,
+  SearchHit,
+  SearchRequest,
+  StatusResponse,
+} from '../shared/wire.js';
+
+export interface HubClientConfig {
+  hubUrl: string;
+  machine: string;
+  caCertPem: string;
+  token: string;
+}
+
+/** The hub could not be reached (DNS/refused/timeout/TLS) — degraded mode. */
+export class HubUnreachableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HubUnreachableError';
+  }
+}
+
+/** The hub answered with an error status — an explicit failure, not degrade. */
+export class HubHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'HubHttpError';
+  }
+}
+
+export const PROBE_TIMEOUT_MS = 500;
+export const CALL_TIMEOUT_MS = 1000;
+const PROBE_TTL_MS = 30_000; // a successful probe is trusted for 30 s
+const DOWN_BACKOFF_MS = 30_000; // a failed probe is re-tried after 30 s
+
+interface ProbeState {
+  up: boolean;
+  expiresAt: number;
+}
+
+const DEFAULT_CLIENT_FILE = resolvePath(homedir(), '.config/pi-hermes-memory/hub-client.json');
+
+/** Default enrollment client file path (local, secret, non-chezmoi). */
+export function defaultClientFilePath(): string {
+  return DEFAULT_CLIENT_FILE;
+}
+
+/**
+ * Load + validate the enrollment client file. Missing → null (shared memory
+ * simply not configured — silent v1). Corrupt/invalid → null + ONE console
+ * warning (the enroll CLI is the repair path; tool results must not spam).
+ */
+export function loadClientFile(path: string = DEFAULT_CLIENT_FILE): HubClientConfig | null {
+  let raw: string;
+  try {
+    if (!existsSync(path)) return null;
+    raw = readFileSync(path, 'utf8');
+  } catch (err) {
+    console.warn(`pi-hermes-memory: cannot read hub client file at ${path}: ${String(err)}`);
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const cfg: HubClientConfig = {
+      hubUrl: String(parsed.hub_url),
+      machine: String(parsed.machine),
+      caCertPem: String(parsed.ca_cert_pem),
+      token: String(parsed.token),
+    };
+    if (!/^https:\/\//.test(cfg.hubUrl) || !cfg.hubUrl || !cfg.machine || !cfg.token || !cfg.caCertPem.includes('BEGIN CERTIFICATE')) {
+      throw new Error('missing or malformed fields (need hub_url, machine, ca_cert_pem, token)');
+    }
+    new URL(cfg.hubUrl); // must parse
+    return cfg;
+  } catch (err) {
+    console.warn(`pi-hermes-memory: hub client file at ${path} is invalid: ${String(err)} — shared memory disabled (re-enroll to repair).`);
+    return null;
+  }
+}
+
+export class HubClient {
+  private readonly agent: https.Agent;
+  private probeState: ProbeState = { up: false, expiresAt: 0 };
+  /** One-shot CONSOLE warning (probe failures). */
+  private consoleWarned = false;
+  /** One-shot TOOL-RESULT banner budget (consumed by the tools' state lines). */
+  private toolSignalled = false;
+
+  constructor(private readonly cfg: HubClientConfig) {
+    this.agent = new https.Agent({
+      ca: cfg.caCertPem,
+      rejectUnauthorized: true,
+      keepAlive: true,
+      maxSockets: 4,
+    });
+  }
+
+  /** The box name from the enrollment file (used as `machine` on local hits). */
+  get machine(): string {
+    return this.cfg.machine;
+  }
+
+  /**
+   * Probe `GET /healthz` (≤ 500 ms) with a short cache. Cached states are
+   * free; a live probe failure flips the cache to down with backoff. Any
+   * successful call (search/op) also refreshes the cache to up.
+   */
+  async probe(): Promise<boolean> {
+    const now = Date.now();
+    if (now < this.probeState.expiresAt) return this.probeState.up;
+    try {
+      await this.request('/healthz', 'GET', undefined, PROBE_TIMEOUT_MS);
+      this.setProbe(true, now + PROBE_TTL_MS);
+      return true;
+    } catch {
+      this.setProbe(false, now + DOWN_BACKOFF_MS);
+      if (!this.consoleWarned) {
+        this.consoleWarned = true;
+        console.warn(`pi-hermes-memory: hub at ${this.cfg.hubUrl} unreachable — degraded (local-only) mode.`);
+      }
+      return false;
+    }
+  }
+
+  /** True once the tool-result banner has been shown (budget consumed). */
+  get hasSignalledDown(): boolean {
+    return this.toolSignalled;
+  }
+
+  /** Consume the one-shot down-signal budget (the tool shows the full banner). */
+  markDownSignalled(): void {
+    this.toolSignalled = true;
+  }
+
+  /** Clear the down-signal budget (e.g. when the hub comes back up). */
+  clearDownSignal(): void {
+    this.toolSignalled = false;
+  }
+
+  private setProbe(up: boolean, expiresAt: number): void {
+    this.probeState = { up, expiresAt };
+  }
+
+  async search(req: SearchRequest): Promise<SearchHit[]> {
+    const body = await this.request<{ hits: SearchHit[]; raw_matches: number }>(
+      '/search',
+      'POST',
+      req,
+      CALL_TIMEOUT_MS,
+    );
+    return body.hits;
+  }
+
+  /** One add/replace/remove op. Returns the hub's response body. */
+  async memory(op: MemoryOpRequest): Promise<Record<string, unknown>> {
+    return await this.request<Record<string, unknown>>('/memory', 'POST', op, CALL_TIMEOUT_MS);
+  }
+
+  /** `GET /status?project=<key>` (story 3's rollup surface). */
+  async status(projectKey: string): Promise<StatusResponse> {
+    return await this.request<StatusResponse>(`/status?project=${encodeURIComponent(projectKey)}`, 'GET', undefined, CALL_TIMEOUT_MS);
+  }
+
+  /** Release sockets (extension shutdown). */
+  close(): void {
+    this.agent.destroy();
+  }
+
+  private async request<T>(
+    path: string,
+    method: 'GET' | 'POST',
+    body: unknown,
+    timeoutMs: number,
+  ): Promise<T> {
+    const result = await this.rawRequest(path, method, body, timeoutMs);
+    if (result.status < 200 || result.status >= 300) {
+      const errBody = result.json as { error?: { code?: string; message?: string } } | undefined;
+      throw new HubHttpError(
+        result.status,
+        errBody?.error?.code ?? 'http_error',
+        errBody?.error?.message ?? `hub returned HTTP ${result.status}`,
+      );
+    }
+    // A live answer refreshes the probe cache (the call itself is liveness).
+    this.setProbe(true, Date.now() + PROBE_TTL_MS);
+    return result.json as T;
+  }
+
+  private rawRequest(
+    path: string,
+    method: 'GET' | 'POST',
+    body: unknown,
+    timeoutMs: number,
+  ): Promise<{ status: number; json: unknown }> {
+    return new Promise((resolvePromise, rejectPromise) => {
+      let settled = false;
+      const settle = (fn: () => void): void => {
+        if (!settled) {
+          settled = true;
+          fn();
+        }
+      };
+      const url = new URL(path, this.cfg.hubUrl);
+      const data = body !== undefined ? Buffer.from(JSON.stringify(body), 'utf8') : undefined;
+      const req = https.request(
+        {
+          hostname: url.hostname,
+          port: url.port === '' ? 443 : Number(url.port),
+          path: `${url.pathname}${url.search}`,
+          method,
+          agent: this.agent,
+          headers: {
+            authorization: `Bearer ${this.cfg.token}`,
+            ...(data
+              ? { 'content-type': 'application/json', 'content-length': String(data.length) }
+              : {}),
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            const text = Buffer.concat(chunks).toString('utf8');
+            let json: unknown = null;
+            try {
+              json = text.length > 0 ? JSON.parse(text) : null;
+            } catch {
+              // non-JSON body (shouldn't happen) — surface as an http error.
+            }
+            settle(() => resolvePromise({ status: res.statusCode ?? 0, json }));
+          });
+        },
+      );
+      req.setTimeout(timeoutMs);
+      req.on('error', (err: Error) =>
+        settle(() => rejectPromise(new HubUnreachableError(err.message))),
+      );
+      req.on('timeout', () => {
+        settle(() =>
+          rejectPromise(new HubUnreachableError(`timed out after ${timeoutMs} ms`)),
+        );
+        req.destroy();
+      });
+      if (data) req.write(data);
+      req.end();
+    });
+  }
+}
+
+/**
+ * Construct a client from a client file (path overridable for tests/config).
+ * Null when shared memory is not configured or the file is invalid.
+ */
+export function createHubClient(clientFilePath?: string): HubClient | null {
+  const cfg = loadClientFile(clientFilePath);
+  return cfg ? new HubClient(cfg) : null;
+}

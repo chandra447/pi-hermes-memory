@@ -53,6 +53,8 @@ import { registerStandingPinCommand } from "./handlers/standing-pin.js";
 import { StandingInstructions } from "./store/standing-instructions.js";
 import { STANDING_FILE } from "./constants.js";
 import { loadConfig } from "./config.js";
+import { createSharedMemoryOptions } from "./hub-client/context.js";
+import type { SharedMemoryOptions } from "./hub-client/context.js";
 import { shouldWarnAutoConsolidationFailure } from "./auto-consolidation-warning.js";
 import { detectProject, detectProjectSkills } from "./project.js";
 import { buildPromptContext } from "./prompt-context.js";
@@ -94,6 +96,14 @@ export default function (pi: ExtensionAPI) {
   const config = loadConfig();
   const lazy = config.lazyInitialization === true && config.memoryMode === "policy-only";
   let sessionContext: ExtensionContext | undefined;
+
+  // ── Shared (LAN hub) memory (story 2) ──
+  // Present + valid enrollment client file ⇒ shared memory on. `sharedMemory: false`
+  // in config is the off-switch. Null ⇒ every memory tool runs exactly v1.
+  // No network here — the client only connects lazily on the first tool call.
+  const sharedClient: SharedMemoryOptions | null = createSharedMemoryOptions(
+    typeof config.sharedMemory === "boolean" ? { enabled: config.sharedMemory } : config.sharedMemory,
+  );
 
   const agentRoot = AGENT_ROOT;
   const legacyGlobalDir = path.join(agentRoot, "memory");
@@ -347,7 +357,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── 3. Register action-specific memory write tools with SQLite sync ──
-  configureMemoryToolProjectStore = registerMemoryTool(memoryPi, store, projectStoreRef, dbManager, projectNameRef, bindProjectFromCwd);
+  configureMemoryToolProjectStore = registerMemoryTool(memoryPi, store, projectStoreRef, dbManager, projectNameRef, bindProjectFromCwd, sharedClient);
 
   // ── 4. Register the skill tool ──
   registerSkillTool(pi, skillStore);
@@ -426,7 +436,7 @@ export default function (pi: ExtensionAPI) {
   // ── 11. SQLite session search + extended memory ──
   registerSessionSearchTool(config.sessionSearch?.variant === "anchors" ? pi : memoryPi,
     dbManager, config.sessionSearch ?? { variant: "legacy" });
-  registerMemorySearchTool(memoryPi, dbManager, { usageTrackingEnabled: config.usageHitTrackingEnabled });
+  registerMemorySearchTool(memoryPi, dbManager, { usageTrackingEnabled: config.usageHitTrackingEnabled, shared: sharedClient });
   registerIndexSessionsCommand(memoryPi, config);
 
   // ── 12. Auto-index session on shutdown ──
@@ -441,6 +451,7 @@ export default function (pi: ExtensionAPI) {
   // DB-writing session_shutdown handler after this block — it would run after
   // close() and silently no-op.
   pi.on("session_shutdown", async (_event, ctx) => {
+    sharedClient?.client.close(); // release hub sockets (story 2)
     await initialization.close();
     // Release Mneme providers first (before the db close below): each provider's
     // store is independent, so this cannot race with the Hermes db close, and

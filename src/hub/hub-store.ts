@@ -35,7 +35,7 @@ import type {
   MemoryScope,
   StatusWord,
 } from '../shared/vocabulary.js';
-import type { SharedEntry } from '../shared/wire.js';
+import type { ProvenanceTouch, SharedEntry } from '../shared/wire.js';
 
 /**
  * Hub schema. Columns mirror the v1 `memories` data model (same categories,
@@ -58,7 +58,8 @@ export const HUB_SCHEMA_SQL = `
     session TEXT NOT NULL,
     identity TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    provenance TEXT NOT NULL DEFAULT '[]'
   );
 
   CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts USING fts5(
@@ -87,6 +88,14 @@ export const HUB_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_entries_updated_at ON entries(updated_at);
 `;
 
+/**
+ * Additive migrations for stores created before story 2. Checked by
+ * PRAGMA table_info so re-opening an existing store is idempotent.
+ */
+const ADDITIVE_MIGRATIONS: Array<{ column: string; alter: string }> = [
+  { column: 'provenance', alter: "ALTER TABLE entries ADD COLUMN provenance TEXT NOT NULL DEFAULT '[]'" },
+];
+
 interface EntryRow {
   id: string;
   project_key: string | null;
@@ -103,12 +112,13 @@ interface EntryRow {
   identity: string;
   created_at: string;
   updated_at: string;
+  provenance: string | null;
 }
 
 const SELECT_COLUMNS = `
   id, project_key, scope, category, kind, state, content,
   failure_reason, tool_state, corrected_to,
-  machine, session, identity, created_at, updated_at
+  machine, session, identity, created_at, updated_at, provenance
 `;
 
 // The FTS join query also sees entry_fts's `content` column, so that one
@@ -136,15 +146,57 @@ export interface HubUpsertInput {
   identity: string;
   created_at: string;
   updated_at: string;
+  /**
+   * Replace-procedure pointer (story 2): seed this entry's provenance from
+   * the referenced entry's list (plus the writing machine's touch). The
+   * hub resolves it server-side — the client never supplies provenance
+   * entries (AD-8). Absent reference / missing entry ⇒ seed empty.
+   */
+  inherits_from?: string;
 }
 
 export interface HubSearchOptions {
   project?: string | null;
+  /** Project-ATTRIBUTED entries only (project_key IS NOT NULL). Ignored when `project` is present. */
+  projectAny?: boolean;
   scope?: MemoryScope;
   category?: MemoryCategory;
   /** ISO timestamp; older hits are dropped by the recency gate. */
   minRecencyAt?: string;
   limit?: number;
+}
+
+/**
+ * Parse a stored provenance list; legacy rows (pre-story-2) have NULL/'[]'
+ * and backfill to a single touch from their existing stamps (the row's
+ * machine/session/created_at describe that first write).
+ */
+function parseProvenance(row: EntryRow): ProvenanceTouch[] {
+  if (row.provenance !== null && row.provenance.length > 0) {
+    try {
+      const parsed = JSON.parse(row.provenance) as ProvenanceTouch[];
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch {
+      // fall through to the legacy backfill — a corrupt list must not 500 reads.
+    }
+  }
+  return [{ machine: row.machine, session: row.session, at: row.created_at }];
+}
+
+/**
+ * Merge one touch into a provenance list: set semantics keyed by machine —
+ * a machine keeps its FIRST touch (earliest `at`), new machines append.
+ * Result ordered by `at` (ties broken by machine for determinism).
+ */
+export function mergeProvenance(existing: ProvenanceTouch[], touch: ProvenanceTouch): ProvenanceTouch[] {
+  const byMachine = new Map<string, ProvenanceTouch>();
+  for (const t of existing) {
+    const prev = byMachine.get(t.machine);
+    if (prev === undefined || t.at < prev.at) byMachine.set(t.machine, t);
+  }
+  const prev = byMachine.get(touch.machine);
+  if (prev === undefined || touch.at < prev.at) byMachine.set(touch.machine, touch);
+  return [...byMachine.values()].sort((a, b) => (a.at === b.at ? a.machine.localeCompare(b.machine) : a.at < b.at ? -1 : 1));
 }
 
 function mapRow(row: EntryRow): SharedEntry {
@@ -164,6 +216,7 @@ function mapRow(row: EntryRow): SharedEntry {
     identity: row.identity,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    provenance: parseProvenance(row),
   };
 }
 
@@ -201,6 +254,17 @@ export class HubStore {
     this.db = new Ctor(dbPath) as unknown as Database;
     this.db.pragma('journal_mode = WAL');
     this.db.exec(HUB_SCHEMA_SQL);
+    this.runAdditiveMigrations();
+  }
+
+  private runAdditiveMigrations(): void {
+    const columns = this.db
+      .prepare('PRAGMA table_info(entries)')
+      .all() as Array<{ name: string }>;
+    const have = new Set(columns.map((c) => c.name));
+    for (const { column, alter } of ADDITIVE_MIGRATIONS) {
+      if (!have.has(column)) this.db.exec(alter);
+    }
   }
 
   /**
@@ -214,8 +278,8 @@ export class HubStore {
    */
   upsert(input: HubUpsertInput): 'inserted' | 'replaced' | 'kept' {
     const existing = this.db
-      .prepare('SELECT created_at, updated_at FROM entries WHERE id = ?')
-      .get(input.id) as { created_at: string; updated_at: string } | undefined;
+      .prepare('SELECT machine, session, created_at, updated_at, provenance FROM entries WHERE id = ?')
+      .get(input.id) as { machine: string; session: string; created_at: string; updated_at: string; provenance: string | null } | undefined;
 
     if (existing && existing.updated_at >= input.updated_at) {
       return 'kept';
@@ -223,14 +287,69 @@ export class HubStore {
 
     const createdAt = existing ? existing.created_at : input.created_at;
 
+    // Provenance list (story 2, Q1=B): the writing machine's touch merges
+    // into the existing list (set by machine, first-touch wins) — a
+    // re-add from another box EXTENDS the list instead of overwriting.
+    // The touch time is the arrival (`updated_at`), not the entry's birth —
+    // a machine's first touch is when IT wrote the content.
+    const touch: ProvenanceTouch = { machine: input.machine, session: input.session, at: input.updated_at };
+    let base: ProvenanceTouch[];
+    if (existing) {
+      // A legacy existing row (NULL list) backfills to ITS OWN first touch —
+      // select its real stamps, not the incoming ones.
+      base = parseProvenance({
+        id: input.id,
+        project_key: null,
+        scope: input.scope,
+        category: null,
+        kind: 'memory',
+        state: null,
+        content: input.content,
+        failure_reason: null,
+        tool_state: null,
+        corrected_to: null,
+        ...existing,
+        identity: existing.machine,
+        updated_at: input.updated_at,
+      });
+    } else if (input.inherits_from && input.inherits_from !== input.id) {
+      // Replace procedure: inherit the old entry's contributor list. The
+      // reference may already be gone (concurrent remove) — seed empty. A
+      // legacy inherited row (NULL list) backfills to its own single touch
+      // from its real stamps, so select those.
+      const inherited = this.db
+        .prepare('SELECT machine, session, created_at, provenance FROM entries WHERE id = ?')
+        .get(input.inherits_from) as { machine: string; session: string; created_at: string; provenance: string | null } | undefined;
+      base = inherited
+        ? parseProvenance({
+            id: input.inherits_from,
+            project_key: null,
+            scope: input.scope,
+            category: null,
+            kind: 'memory',
+            state: null,
+            content: input.content,
+            failure_reason: null,
+            tool_state: null,
+            corrected_to: null,
+            ...inherited,
+            identity: inherited.machine,
+            updated_at: input.updated_at,
+          })
+        : [];
+    } else {
+      base = [];
+    }
+    const provenance = mergeProvenance(base, touch);
+
     this.db
       .prepare(`
         INSERT INTO entries (
           id, project_key, scope, category, kind, state, content,
           failure_reason, tool_state, corrected_to,
-          machine, session, identity, created_at, updated_at
+          machine, session, identity, created_at, updated_at, provenance
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           project_key = excluded.project_key,
           scope = excluded.scope,
@@ -245,7 +364,8 @@ export class HubStore {
           session = excluded.session,
           identity = excluded.identity,
           created_at = excluded.created_at,
-          updated_at = excluded.updated_at
+          updated_at = excluded.updated_at,
+          provenance = excluded.provenance
       `)
       .run(
         input.id,
@@ -263,6 +383,7 @@ export class HubStore {
         input.identity,
         createdAt,
         input.updated_at,
+        JSON.stringify(provenance),
       );
 
     return existing ? 'replaced' : 'inserted';
@@ -284,12 +405,14 @@ export class HubStore {
     if (query.trim().length === 0) {
       return { hits: [], raw_matches: 0 };
     }
-    const { project, scope, category, minRecencyAt, limit = 10 } = options;
+    const { project, projectAny, scope, category, minRecencyAt, limit = 10 } = options;
 
     const applyScopeFilters = (conditions: string[], params: unknown[], prefix = 'e'): void => {
       if (project !== undefined) {
         if (project === null) conditions.push(`${prefix}.project_key IS NULL`);
         else { conditions.push(`${prefix}.project_key = ?`); params.push(project); }
+      } else if (projectAny) {
+        conditions.push(`${prefix}.project_key IS NOT NULL`);
       }
       if (scope !== undefined) { conditions.push(`${prefix}.scope = ?`); params.push(scope); }
       if (category !== undefined) { conditions.push(`${prefix}.category = ?`); params.push(category); }

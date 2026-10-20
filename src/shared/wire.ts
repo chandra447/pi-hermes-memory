@@ -12,7 +12,13 @@
  *
  * Provenance (`machine`, `session`, `identity`, `created_at`, `updated_at`)
  * is stamped by the hub, never supplied by the client (AD-8). Client-facing
- * request types therefore carry no provenance fields.
+ * request types therefore carry no provenance fields — with one pointer
+ * exception (story 2): the add op's `inherits_from` references another entry
+ * id so the hub can seed the new entry's provenance list server-side.
+ *
+ * `provenance` on entries/hits = the hub-maintained per-machine first-touch
+ * list (story 2, decision Q1=B): which boxes have ever written this content,
+ * in first-touch order. `machine`/`session` stay = last touch.
  */
 
 import { Type, type Static } from 'typebox';
@@ -28,6 +34,17 @@ const ISO_8601_MS =
 
 export const Uuid7 = Type.String({ pattern: UUID_V7_PATTERN });
 export const IsoTimestamp = Type.String({ pattern: ISO_8601_MS });
+
+/**
+ * One provenance touch: the first time a machine wrote this exact content.
+ * The list is a set keyed by machine (first-touch wins), ordered by `at`.
+ */
+export const ProvenanceTouch = Type.Object({
+  machine: Type.String({ minLength: 1 }),
+  session: Type.String({ minLength: 1 }),
+  at: IsoTimestamp,
+});
+export type ProvenanceTouch = Static<typeof ProvenanceTouch>;
 
 // NOTE: the literals are spelled out (not mapped from the runtime arrays) —
 // typebox v1's `StaticUnion` recurses over TUPLES only; a mapped array is not
@@ -82,6 +99,8 @@ export const SharedEntry = Type.Object({
   identity: Type.String({ minLength: 1 }),
   created_at: IsoTimestamp,
   updated_at: IsoTimestamp,
+  /** Per-machine first-touch list (story 2); hub-maintained, ≥ 1 element. */
+  provenance: Type.Array(ProvenanceTouch, { minItems: 1 }),
 });
 export type SharedEntry = Static<typeof SharedEntry>;
 
@@ -108,15 +127,23 @@ export const SearchHit = Type.Object({
   identity: Type.String(),
   created_at: IsoTimestamp,
   updated_at: IsoTimestamp,
+  /** Per-machine first-touch list (story 2); hub-maintained, ≥ 1 element. */
+  provenance: Type.Array(ProvenanceTouch, { minItems: 1 }),
   // Source tag
   source: Type.Literal('shared'),
 });
 export type SearchHit = Static<typeof SearchHit>;
 
-/** `POST /search` request. `project` is the normalized project key (AD-10). */
+/**
+ * `POST /search` request. `project` is the normalized project key (AD-10).
+ * `project_any` selects project-ATTRIBUTED entries (project_key IS NOT NULL)
+ * — the shared counterpart of v1's `target: "project"` filter. When both are
+ * present, `project` wins.
+ */
 export const SearchRequest = Type.Object({
   query: Type.String({ minLength: 1 }),
   project: Type.Optional(Type.String({ minLength: 1 })),
+  project_any: Type.Optional(Type.Boolean()),
   scope: Type.Optional(Scope),
   category: Type.Optional(Category),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
@@ -136,6 +163,14 @@ const MemoryOpCommon = {
 };
 
 /**
+ * `inherits_from` is a POINTER to another entry id, never a provenance
+ * payload (AD-8 survives): the hub reads the referenced entry's provenance
+ * list and seeds the new entry with it (plus the writing machine's touch).
+ * The referenced entry may already be gone — the hub then seeds empty.
+ */
+const InheritsFromProp = { inherits_from: Type.Optional(Uuid7) };
+
+/**
  * `POST /memory` request — one of three ops. All mutations are idempotent
  * upserts keyed by the client-generated UUIDv7 `id` (AD-9). No provenance
  * fields: the hub stamps them (AD-8).
@@ -144,8 +179,8 @@ const MemoryOpCommon = {
  * `state` (those describe the entry being written, not the deletion).
  */
 export const MemoryOpRequest = Type.Union([
-  Type.Object({ op: Type.Literal('add'), ...MemoryOpCommon, scope: Scope, session: Type.String({ minLength: 1 }), content: Type.String({ minLength: 1 }) }),
-  Type.Object({ op: Type.Literal('replace'), ...MemoryOpCommon, scope: Scope, session: Type.String({ minLength: 1 }), content: Type.String({ minLength: 1 }) }),
+  Type.Object({ op: Type.Literal('add'), ...MemoryOpCommon, ...InheritsFromProp, scope: Scope, session: Type.String({ minLength: 1 }), content: Type.String({ minLength: 1 }) }),
+  Type.Object({ op: Type.Literal('replace'), ...MemoryOpCommon, ...InheritsFromProp, scope: Scope, session: Type.String({ minLength: 1 }), content: Type.String({ minLength: 1 }) }),
   Type.Object({ op: Type.Literal('remove'), ...MemoryOpCommon, scope: Type.Optional(Scope), session: Type.Optional(Type.String({ minLength: 1 })) }),
 ]);
 export type MemoryOpRequest = Static<typeof MemoryOpRequest>;
