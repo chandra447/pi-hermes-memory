@@ -77,9 +77,12 @@ export function mapSharedHit(hit: SearchHit): UnifiedHit {
  * rank-interleave (local #1, shared #1, local #2, …) capped at `limit`.
  *
  * `localProjectKey` maps a local hit's project NAME to its normalized key
- * (registry resolution) so the dedup identity matches the shared side;
- * unresolvable names keep the raw name (such content cannot have a shared
- * counterpart in this query — the shared project search was skipped).
+ * (registry resolution) so the dedup identity matches the shared side.
+ * Unresolvable names map to null: for a NAMED search the shared project
+ * search was skipped (AD-10), so no shared counterpart exists; for a
+ * GLOBAL search an unresolvable local name simply cannot dedup against a
+ * shared entry keyed under a different key (both copies may render — they
+ * are genuinely different project scoping).
  */
 export function mergeHits(
   local: UnifiedHit[],

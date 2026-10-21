@@ -30,7 +30,7 @@ import { sharedResolve } from "../hub-client/context.js";
 import { unresolvedProjectNote } from "../hub-client/merge.js";
 import type { SharedMutationTarget } from "../hub-client/mutations.js";
 import { sharedAdd, sharedRemove, sharedReplace } from "../hub-client/mutations.js";
-import { HubHttpError } from "../hub-client/client.js";
+import { HubHttpError, HubUnreachableError } from "../hub-client/client.js";
 
 function appendSyncWarning(result: MemoryResult, warning: string): MemoryResult {
   const warnings = [...(((result as any).warnings ?? []) as string[]), warning];
@@ -340,14 +340,14 @@ export function registerMemoryTool(
     | { kind: "up"; target: SharedMutationTarget }
   > {
     if (!sharedOpts) return { kind: "unconfigured" };
-    const up = await sharedOpts.client.probe();
-    if (!up) return { kind: "down" };
     let projectKey: string | undefined;
     if (rawTarget === "project") {
-      const resolved = sharedResolve(sharedOpts, activeProjectName ?? undefined, ctx?.cwd);
+      const resolved = await sharedResolve(sharedOpts, activeProjectName ?? undefined, ctx?.cwd);
       if (resolved.key) projectKey = resolved.key;
       else return { kind: "skip", note: unresolvedProjectNote(activeProjectName ?? "project", resolved.note) };
     }
+    const up = await sharedOpts.client.probe();
+    if (!up) return { kind: "down" };
     return {
       kind: "up",
       target: {
@@ -416,9 +416,37 @@ export function registerMemoryTool(
                 : "Shared entry already present (identical content) — provenance extended.",
             };
           } catch (err) {
-            // Explicit, no local fallback: a blocked-content write must not
-            // silently land in the local tier (NFR-4).
-            const detail = err instanceof HubHttpError ? err.message : err instanceof Error ? err.message : String(err);
+            if (err instanceof HubUnreachableError) {
+              // The hub died inside the up-cache window (probe said up, the
+              // call failed). That is the DOWN case, not a rejection: fall
+              // through to the local v1 path with the degraded note —
+              // FR-17 (a hub-down write stays local), never a mislabeled
+              // hard failure (review fix).
+              if (rawTarget === "failure") {
+                const memoryCategory = category ?? "failure";
+                result = await store_.addFailure(content, { category: memoryCategory, failureReason: failure_reason });
+                if (result.success && !syncHandled) {
+                  syncWarning = await syncAddToSqlite(rawTarget, content, memoryCategory, failure_reason, dbManager, activeProjectName);
+                }
+              } else {
+                result = await store_.add(target, content, signal);
+                if (result.success && !syncHandled) {
+                  await syncEvictionsFromSqlite(rawTarget, result.evicted_entries, dbManager, activeProjectName);
+                  syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, activeProjectName);
+                }
+              }
+              if (result.success) {
+                result = {
+                  ...result,
+                  message: `${result.message ?? "Saved."} (shared memory unavailable — saved locally; visible on this box only while the hub is down)`,
+                };
+              }
+              break;
+            }
+            // HubHttpError (e.g. blocked content 400): explicit, no local
+            // fallback — a blocked-content write must not silently land in
+            // the local tier (NFR-4).
+            const detail = err instanceof Error ? err.message : String(err);
             result = { success: false, error: `Shared store rejected the write: ${detail}` };
           }
         } else {

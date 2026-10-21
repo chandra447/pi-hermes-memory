@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { HubStore, mergeProvenance } from '../../src/hub/hub-store.js';
+import { HubStore, mergeProvenance, parseProvenance, type EntryRow } from '../../src/hub/hub-store.js';
 import { deterministicEntryId } from '../../src/shared/content-id.js';
 import type { ProvenanceTouch } from '../../src/shared/wire.js';
 
@@ -107,18 +107,12 @@ describe('hub provenance on upsert (story 2, Q1=B)', () => {
     s.close();
   });
 
-  it('legacy rows (NULL provenance) backfill to a single touch at read time', () => {
-    // Simulate a pre-story-2 row: insert with a store that has the column,
-    // then NULL the list directly.
+  it('a fresh insert through the store API reads back a valid list', () => {
     const s = store();
     const id = deterministicEntryId('legacy fact', 'memory', null, null);
     s.upsert({ id, content: 'legacy fact', scope: 'memory', machine: 'oldbox', identity: 'oldbox', session: 's0', created_at: T0, updated_at: T0 });
-    // The store API doesn't expose raw SQL; emulate the legacy state by
-    // asserting the backfill contract on a hand-built row via parseProvenance
-    // (exported indirectly through mergeProvenance is not enough) — so here
-    // we verify the read path keeps working and the list is ≥ 1 touch.
     const entry = s.getEntry(id)!;
-    assert.ok(entry.provenance.length >= 1);
+    assert.equal(entry.provenance.length, 1);
     assert.equal(entry.provenance[0].machine, 'oldbox');
     s.close();
   });
@@ -132,5 +126,60 @@ describe('hub provenance on upsert (story 2, Q1=B)', () => {
     assert.equal(s.getEntry(id)!.provenance.length, 1);
     assert.equal(s.getEntry(id)!.machine, 'a');
     s.close();
+  });
+});
+
+describe('parseProvenance legacy/corrupt branches (direct — review fix)', () => {
+  function row(provenance: string | null): EntryRow {
+    return {
+      id: 'x',
+      project_key: null,
+      scope: 'memory',
+      category: null,
+      kind: 'memory',
+      state: null,
+      content: 'c',
+      failure_reason: null,
+      tool_state: null,
+      corrected_to: null,
+      machine: 'oldbox',
+      session: 'sess-0',
+      identity: 'oldbox',
+      created_at: T0,
+      updated_at: T0,
+      provenance,
+    };
+  }
+
+  it('NULL (pre-story-2 row) backfills to the row\'s own single touch', () => {
+    assert.deepEqual(parseProvenance(row(null)), [
+      { machine: 'oldbox', session: 'sess-0', at: T0 },
+    ]);
+  });
+
+  it('empty list ("[]") backfills to the row\'s own single touch', () => {
+    assert.deepEqual(parseProvenance(row('[]')), [
+      { machine: 'oldbox', session: 'sess-0', at: T0 },
+    ]);
+  });
+
+  it('corrupt JSON backfills instead of 500ing reads', () => {
+    assert.deepEqual(parseProvenance(row('{not-json')), [
+      { machine: 'oldbox', session: 'sess-0', at: T0 },
+    ]);
+  });
+
+  it('a valid list parses as-is', () => {
+    const list = [
+      { machine: 'a', session: 's', at: T0 },
+      { machine: 'b', session: 't', at: T1 },
+    ];
+    assert.deepEqual(parseProvenance(row(JSON.stringify(list))), list);
+  });
+
+  it('a non-array JSON value backfills', () => {
+    assert.deepEqual(parseProvenance(row('{"machine":"x"}')),
+      [{ machine: 'oldbox', session: 'sess-0', at: T0 }],
+    );
   });
 });

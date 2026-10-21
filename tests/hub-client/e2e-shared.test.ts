@@ -283,3 +283,102 @@ describe('story 2 e2e — shared mutations (M1 write side)', () => {
     assert.match(parsed.error ?? '', /Shared store rejected/);
   });
 });
+
+describe('story 2 e2e — project-key wire path (acceptance criterion, review fix)', () => {
+  let projShared: SharedMemoryOptions;
+
+  before(async () => {
+    const regPath = path.join(dir, 'registry-e2e.md');
+    writeFileSync(regPath, [
+      '## myproj',
+      '- remote: git@github.com:janesser/myproj.git',
+    ].join('\n'));
+    projShared = createSharedMemoryOptions({ clientFile: clientFileA, registryPath: regPath })!;
+  });
+
+  after(() => {
+    projShared?.client.close();
+  });
+
+  const PK = 'https://github.com/janesser/myproj';
+
+  it('search(project=NAME) uses the normalized key: project-scoped hits in, global out', async () => {
+    hub.store.upsert({ id: deterministicEntryId('proj-scoped fact', 'memory', PK, null), content: 'proj-scoped fact', scope: 'memory', project_key: PK, machine: 'box-b', identity: 'box-b', session: 's', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' });
+    hub.store.upsert({ id: deterministicEntryId('global fact for proj test', 'memory', null, null), content: 'global fact for proj test', scope: 'memory', machine: 'box-b', identity: 'box-b', session: 's', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' });
+
+    const tool = captureSearchTool(projShared);
+    const result = await tool.execute('tc-20', { query: 'fact for', project: 'myproj' }, undefined, undefined, { cwd: process.cwd() });
+    const text: string = result.content[0].text;
+    assert.match(text, /proj-scoped fact/);
+    assert.doesNotMatch(text, /global fact for proj test/);
+    assert.match(text, /shared: up \(1 shared hit\)/);
+  });
+
+  it('an unresolvable project name SKIPS the shared search (no unfiltered global leak)', async () => {
+    const tool = captureSearchTool(projShared);
+    const result = await tool.execute('tc-21', { query: 'fact for', project: 'not-in-registry' }, undefined, undefined, { cwd: process.cwd() });
+    const text: string = result.content[0].text;
+    // The note says skipped — and no shared hits may be present at all:
+    assert.match(text, /not resolvable to a project key/);
+    assert.doesNotMatch(text, /shared: up \(\d+ shared hit/);
+    assert.doesNotMatch(text, /proj-scoped fact/);
+    assert.doesNotMatch(text, /global fact for proj test/);
+  });
+
+  it('target="memory" does not leak shared user/failure hits (scope parity)', async () => {
+    hub.store.upsert({ id: deterministicEntryId('a user fact', 'user', null, null), content: 'a user fact about scope parity', scope: 'user', machine: 'box-b', identity: 'box-b', session: 's', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' });
+
+    const tool = captureSearchTool(projShared);
+    const result = await tool.execute('tc-22', { query: 'scope parity', target: 'memory' }, undefined, undefined, { cwd: process.cwd() });
+    assert.doesNotMatch(result.content[0].text, /a user fact about scope parity/);
+  });
+
+  it('an explicit project name is NOT overridden by the cwd git remote', async () => {
+    // cwd IS this repo (a git checkout) — the name must still win:
+    const tool = captureSearchTool(projShared);
+    const result = await tool.execute('tc-23', { query: 'proj-scoped fact', project: 'myproj' }, undefined, undefined, { cwd: process.cwd() });
+    const text: string = result.content[0].text;
+    assert.match(text, /proj-scoped fact/);
+    assert.match(text, /shared: up \(1 shared hit\)/);
+  });
+});
+
+describe('story 2 e2e — stale-up add fallback (review fix)', () => {
+  it('a hub that dies inside the up-cache window: add falls back to local + degraded note', async () => {
+    // A second, disposable hub: prime the probe up, kill it, then add.
+    const hub2 = await startHubServer({
+      host: '127.0.0.1',
+      port: 0,
+      certPath: tls.hubCrt,
+      keyPath: tls.hubKey,
+      dbPath: path.join(dir, 'shared2.sqlite'),
+      tokenStorePath: path.join(dir, 'tokens2.json'),
+    });
+    try {
+      const t2 = hub2.tokens.enroll('box-a');
+      const url2 = `https://127.0.0.1:${(hub2.server.address() as { port: number }).port}`;
+      const staleShared = createSharedMemoryOptions({
+        clientFile: makeClientFile('box-stale', t2.token, url2),
+        registryPath: path.join(dir, 'no-registry.md'),
+      })!;
+      try {
+        assert.equal(await staleShared.client.probe(), true, 'prime the probe cache up');
+        await hub2.close(); // the hub dies inside the up-TTL
+        const tools = captureWriteTools(staleShared);
+        const result = await tools.memory_add.execute('tc-30', { target: 'memory', content: 'stale-up fact' }, undefined, undefined, { cwd: process.cwd(), sessionManager: { getSessionId: () => 's' } });
+        const parsed = JSON.parse(result.content[0].text);
+        assert.equal(parsed.success, true, JSON.stringify(parsed));
+        assert.match(parsed.message ?? '', /shared memory unavailable/);
+        assert.match(parsed.message ?? '', /saved locally/);
+        // And the NEXT call is degraded immediately (the failed call flipped
+        // the probe state — no second network round-trip to the dead hub):
+        const probe2 = await staleShared.client.probe();
+        assert.equal(probe2, false);
+      } finally {
+        staleShared.client.close();
+      }
+    } finally {
+      await hub2.close();
+    }
+  });
+});

@@ -96,7 +96,7 @@ const ADDITIVE_MIGRATIONS: Array<{ column: string; alter: string }> = [
   { column: 'provenance', alter: "ALTER TABLE entries ADD COLUMN provenance TEXT NOT NULL DEFAULT '[]'" },
 ];
 
-interface EntryRow {
+export interface EntryRow {
   id: string;
   project_key: string | null;
   scope: string;
@@ -171,7 +171,12 @@ export interface HubSearchOptions {
  * and backfill to a single touch from their existing stamps (the row's
  * machine/session/created_at describe that first write).
  */
-function parseProvenance(row: EntryRow): ProvenanceTouch[] {
+/**
+ * Exported for direct testing of the legacy/corrupt branches (a fresh store
+ * always writes a valid list, so the NULL/'[]'/corrupt paths are otherwise
+ * unreachable through the store API).
+ */
+export function parseProvenance(row: EntryRow): ProvenanceTouch[] {
   if (row.provenance !== null && row.provenance.length > 0) {
     try {
       const parsed = JSON.parse(row.provenance) as ProvenanceTouch[];

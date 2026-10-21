@@ -10,6 +10,7 @@ import { searchResultView } from './tool-result-views.js';
 import { HubUnreachableError } from '../hub-client/client.js';
 import type { SharedMemoryOptions } from '../hub-client/context.js';
 import { sharedRegistryEntries, sharedResolve } from '../hub-client/context.js';
+import { resolveProjectKey } from '../hub-client/registry.js';
 import {
   degradedBanner,
   degradedTag,
@@ -42,7 +43,20 @@ function scopeLabel(project: string | null): string {
 type SharedSearchOutcome =
   | { kind: "up"; hits: SearchHit[]; note?: string }
   | { kind: "down"; note?: string }
+  | { kind: "skipped"; note?: string }
   | { kind: "error"; message: string; note?: string };
+
+/**
+ * The wire scope for a v1 target — the shared side must mirror the local
+ * side's filter EXACTLY (review fix): v1's `target: "memory"` is
+ * `target = 'memory'` (not "all scopes"), and `target: "project"` is
+ * `target = 'memory' AND project IS NOT NULL`.
+ */
+function sharedScopeFor(target: 'memory' | 'user' | 'failure' | 'project' | undefined): 'memory' | 'user' | 'failure' | undefined {
+  if (target === 'user' || target === 'failure') return target;
+  if (target === 'memory' || target === 'project') return 'memory';
+  return undefined; // no target filter = all scopes (both tiers)
+}
 
 /** Run the shared search (probe + call) and classify the outcome (AD-11). */
 async function runSharedSearch(
@@ -51,35 +65,48 @@ async function runSharedSearch(
   cwd: string | undefined,
 ): Promise<SharedSearchOutcome> {
   // AD-10: an explicit project name must resolve to a normalized key; a
-  // missing registry entry is a client error (skip shared, say so) — never
-  // a hub concern.
-  let note: string | undefined;
-  let projectKey: string | undefined;
+  // missing registry entry is a client error — the shared project search
+  // is SKIPPED (not run unfiltered) and the result says so.
   if (args.project) {
-    const resolved = sharedResolve(shared, args.project, cwd);
-    if (resolved.key) projectKey = resolved.key;
-    else note = unresolvedProjectNote(args.project, resolved.note);
+    const resolved = await sharedResolve(shared, args.project, cwd);
+    if (!resolved.key) return { kind: "skipped", note: unresolvedProjectNote(args.project, resolved.note) };
+    const up = await shared.client.probe();
+    if (!up) return { kind: "down", note: unresolvedProjectNote(args.project, resolved.note) };
+    try {
+      const scope = sharedScopeFor(args.target);
+      const hits = await shared.client.search({
+        query: args.query,
+        project: resolved.key,
+        ...(scope !== undefined ? { scope } : {}),
+        ...(args.category !== undefined ? { category: args.category } : {}),
+        limit: args.limit,
+      });
+      shared.client.clearDownSignal();
+      return { kind: "up", hits };
+    } catch (err) {
+      if (err instanceof HubUnreachableError) return { kind: "down" };
+      return { kind: "error", message: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   const up = await shared.client.probe();
-  if (!up) return { kind: "down", note };
+  if (!up) return { kind: "down" };
 
   try {
-    const scope = args.target === 'user' ? 'user' : args.target === 'failure' ? 'failure' : undefined;
+    const scope = sharedScopeFor(args.target);
     const hits = await shared.client.search({
       query: args.query,
-      ...(projectKey !== undefined ? { project: projectKey } : {}),
-      // v1 `target: "project"` (no name) = project-ATTRIBUTED entries.
+      // v1 `target: "project"` (no name) = project-ATTRIBUTED memory entries.
       ...(!args.project && args.target === 'project' ? { project_any: true } : {}),
       ...(scope !== undefined ? { scope } : {}),
       ...(args.category !== undefined ? { category: args.category } : {}),
       limit: args.limit,
     });
     shared.client.clearDownSignal();
-    return { kind: "up", hits, note };
+    return { kind: "up", hits };
   } catch (err) {
-    if (err instanceof HubUnreachableError) return { kind: "down", note };
-    return { kind: "error", message: err instanceof Error ? err.message : String(err), note };
+    if (err instanceof HubUnreachableError) return { kind: "down" };
+    return { kind: "error", message: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -154,16 +181,22 @@ ${shared ? 'When shared memory is configured, results include the shared LAN sto
       let merged: UnifiedHit[] | null = null;
       if (shared) {
         outcome = await runSharedSearch(shared, { query, project, target, category, limit }, ctx?.cwd);
-        const entries = sharedRegistryEntries(shared);
-        const nameToKey = new Map<string, string | null>();
-        const localProjectKey = (name: string): string | null => {
-          if (!nameToKey.has(name)) {
-            nameToKey.set(name, sharedResolve(shared, name, undefined).key);
-          }
-          return nameToKey.get(name)!;
-        };
-        const localHits = localResults.map((e) => mapLocalHit(e, shared.client.machine));
         const sharedHits = outcome?.kind === 'up' ? outcome.hits.map(mapSharedHit) : [];
+        // Pre-resolve the local hits' project names ONCE (async, cached) so
+        // the merge's dedup identity matches the shared side's keys — no
+        // per-name re-read of the registry file during the merge.
+        const localProjectNames = [...new Set(localResults.map((e) => e.project).filter((p): p is string => p !== null))];
+        const nameToKeyMap = new Map<string, string | null>();
+        if (localProjectNames.length > 0) {
+          const entries = sharedRegistryEntries(shared);
+          await Promise.all(
+            localProjectNames.map(async (n) => {
+              nameToKeyMap.set(n, (await resolveProjectKey({ name: n }, entries)).key);
+            }),
+          );
+        }
+        const localProjectKey = (name: string): string | null => nameToKeyMap.get(name) ?? null;
+        const localHits = localResults.map((e) => mapLocalHit(e, shared.client.machine));
         merged = mergeHits(localHits, sharedHits, limit, localProjectKey);
       }
 
@@ -220,6 +253,8 @@ ${shared ? 'When shared memory is configured, results include the shared LAN sto
  * The shared-state lines for a search result (FR-16/FR-18 — explicit, never
  * silent). Down outcome: the FULL banner on the first shared-scope call of
  * the window (one-shot budget on the client), the compact tag afterwards.
+ * Skipped outcome (AD-10 unresolvable project): the note is the state line —
+ * no "shared: up (0)" would misrepresent a search that never ran.
  */
 function stateLines(shared: SharedMemoryOptions, outcome: SharedSearchOutcome, sharedCount: number): string[] {
   const lines: string[] = [];
@@ -235,6 +270,8 @@ function stateLines(shared: SharedMemoryOptions, outcome: SharedSearchOutcome, s
         lines.push(degradedBanner());
       }
       break;
+    case 'skipped':
+      break; // the note (below) is the entire state line
     case 'error':
       lines.push(`shared: error — ${outcome.message} (local results only)`);
       break;

@@ -19,7 +19,7 @@
  * the shared project op and says so) — never a hub concern (AD-10).
  */
 
-import { execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve as resolvePath, sep } from 'node:path';
@@ -37,12 +37,23 @@ export interface RegistryEntry {
 
 const SECTION_RE = /^##\s+(.+?)\s*$/;
 const FIELD_RE = /^-\s+([a-z_]+)\s*:\s*(.+?)\s*$/;
+const FENCE_RE = /^\s*(```|~~~)/;
 
-/** Parse registry markdown into entries. Tolerant: bad lines are skipped. */
+/**
+ * Parse registry markdown into entries. Tolerant: bad lines are skipped.
+ * Code-fence aware: `##`/`- key:` lines inside a fenced block (a pasted
+ * example) are NOT sections/fields — this file is human-maintained.
+ */
 export function parseRegistry(markdown: string): RegistryEntry[] {
   const entries: RegistryEntry[] = [];
   let current: RegistryEntry | null = null;
+  let inFence = false;
   for (const line of markdown.split(/\r?\n/)) {
+    if (FENCE_RE.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
     const section = line.match(SECTION_RE);
     if (section) {
       current = { name: section[1], locals: [], docs: [] };
@@ -78,19 +89,43 @@ export function expandPath(p: string): string {
   return resolvePath(p);
 }
 
-/** The `origin` remote URL of the repo at `cwd` (null if not in a repo). */
-export function gitRemoteOf(cwd: string): string | null {
-  try {
-    const out = execFileSync('git', ['-C', cwd, 'remote', 'get-url', 'origin'], {
-      encoding: 'utf8',
-      timeout: 1000,
+/**
+ * The `origin` remote URL of the repo at `cwd` (null if not in a repo).
+ * Async (a synchronous spawn would block the tool's event loop); bounded
+ * by a 1 s timeout; results are cached per cwd (the cwd rarely changes
+ * within a session, and `git` on a healthy repo answers in ~10 ms).
+ */
+const gitRemoteCache = new Map<string, string | null>();
+
+export function gitRemoteOf(cwd: string): Promise<string | null> {
+  const hit = gitRemoteCache.get(cwd);
+  if (hit !== undefined) return Promise.resolve(hit);
+  return new Promise((resolve) => {
+    const child = spawn('git', ['-C', cwd, 'remote', 'get-url', 'origin'], {
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    const url = out.trim();
-    return url.length > 0 ? url : null;
-  } catch {
-    return null;
-  }
+    let out = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(null);
+    }, 1000);
+    function finish(result: string | null): void {
+      clearTimeout(timer);
+      gitRemoteCache.set(cwd, result);
+      resolve(result);
+    }
+    child.stdout.on('data', (d: Buffer) => { out += d.toString('utf8'); });
+    child.on('error', () => finish(null));
+    child.on('close', (code) => {
+      const url = out.trim();
+      finish(code === 0 && url.length > 0 ? url : null);
+    });
+  });
+}
+
+/** Test hook: clear the per-cwd git-remote cache. */
+export function clearGitRemoteCache(): void {
+  gitRemoteCache.clear();
 }
 
 export interface ResolveOptions {
@@ -111,24 +146,20 @@ export interface ResolveResult {
 
 /**
  * Resolve a tool call's project reference to a normalized project key.
- * Pure in its inputs (`entries`, `cwd`); the git lookup is a bounded spawn.
+ * The git lookup is a bounded, cached async spawn.
+ *
+ * PRECEDENCE (review-fixed): an EXPLICIT name is authoritative — it
+ * resolves via the registry, and a missing registry entry is an AD-10
+ * client error (null + note), never silently redirected to the cwd's
+ * repo. The cwd's git remote is consulted only for nameless calls (the
+ * "the agent is working inside this repo" case), then advisory local
+ * paths. (Git-first for named calls let `search(project="chezmoi")` from
+ * inside repo Y search Y's key — the wrong project.)
  */
-export function resolveProjectKey(opts: ResolveOptions, entries: RegistryEntry[]): ResolveResult {
+export async function resolveProjectKey(opts: ResolveOptions, entries: RegistryEntry[]): Promise<ResolveResult> {
   const { name, cwd } = opts;
 
-  // 1. cwd's git remote — the identity lives in git, not in the registry.
-  if (cwd) {
-    const remote = gitRemoteOf(cwd);
-    if (remote) {
-      try {
-        return { key: normalizeProjectKey(remote), via: 'git' };
-      } catch {
-        // unparseable remote — fall through to the registry.
-      }
-    }
-  }
-
-  // 2. explicit name → section match (case-insensitive).
+  // 1. Explicit name → registry section match (case-insensitive).
   if (name) {
     const entry = entries.find((e) => e.name.toLowerCase() === name.trim().toLowerCase());
     if (entry) {
@@ -140,6 +171,21 @@ export function resolveProjectKey(opts: ResolveOptions, entries: RegistryEntry[]
         }
       }
       return { key: null, via: null, note: `registry entry "${entry.name}" has no remote` };
+    }
+    // Name not in the registry: AD-10 client error — do NOT fall back to
+    // the cwd's git remote (that would search a different project).
+    return { key: null, via: null, note: `registry has no entry for "${name}"` };
+  }
+
+  // 2. Nameless: the cwd's git remote — the identity lives in git.
+  if (cwd) {
+    const remote = await gitRemoteOf(cwd);
+    if (remote) {
+      try {
+        return { key: normalizeProjectKey(remote), via: 'git' };
+      } catch {
+        // unparseable remote — fall through to the local paths.
+      }
     }
   }
 

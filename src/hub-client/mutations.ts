@@ -96,6 +96,7 @@ export async function sharedReplace(
     // (v1's SQLite mirror keeps the row's category column on replace), so
     // the new entry's id hashes with the HIT's category.
     const newId = deterministicEntryId(newContent, target.scope, target.projectKey ?? null, (hit.category as MemoryCategory | undefined) ?? target.category ?? null);
+    let addLanded = false;
     try {
       if (newId === oldId) {
         // Same content (modulo trim): pure upsert — provenance extends,
@@ -105,16 +106,17 @@ export async function sharedReplace(
         continue;
       }
       await sharedAdd(target, newContent, oldId);
+      addLanded = true;
       await target.client.memory({ op: 'remove', id: oldId });
       outcome.replaced += 1;
     } catch (err) {
       outcome.failed = true;
       outcome.error = err instanceof Error ? err.message : String(err);
-      if (err instanceof HubUnreachableError) {
-        // The add may have landed before the hub dropped — the old version
-        // is definitely still there; surface it so it can be cleaned up.
-        outcome.leftoverOldIds.push(oldId);
-      }
+      // Any failure AFTER the add landed leaves BOTH versions visible
+      // (unreachable AND http-error classes — a 500 on the remove is the
+      // spec's partial-failure case too). The old id is actionable
+      // cleanup: name it.
+      if (addLanded) outcome.leftoverOldIds.push(oldId);
       break; // stop the procedure; report what happened
     }
   }
@@ -133,9 +135,11 @@ export async function sharedRemove(target: SharedMutationTarget, oldText: string
   const matches = await findSharedMatches(target, oldText);
   for (const hit of matches) {
     try {
-      const res = await target.client.memory({ op: 'remove', id: hit.id });
-      if (res.removed === true) outcome.removed += 1;
-      else outcome.removed += 1; // already gone (concurrent op) — idempotent
+      // Delete-by-id is idempotent on the hub: `removed: true` for a real
+      // deletion AND for an already-gone entry (concurrent op) — both count
+      // as "the match is no longer there".
+      await target.client.memory({ op: 'remove', id: hit.id });
+      outcome.removed += 1;
     } catch (err) {
       outcome.failed = true;
       outcome.error = err instanceof Error ? err.message : String(err);

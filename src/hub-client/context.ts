@@ -58,11 +58,11 @@ export function createSharedMemoryOptions(
  * Resolve a tool call's project reference against the registry (loaded fresh
  * — the file is small; `cz update` may have refreshed it since startup).
  */
-export function sharedResolve(
+export async function sharedResolve(
   opts: SharedMemoryOptions,
   name: string | null | undefined,
   cwd: string | null | undefined,
-): ResolveResult {
+): Promise<ResolveResult> {
   const entries: RegistryEntry[] = loadRegistry(opts.registryPath) ?? [];
   return resolveProjectKey({ name, cwd }, entries);
 }

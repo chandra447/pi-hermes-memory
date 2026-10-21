@@ -197,7 +197,17 @@ export class HubClient {
     body: unknown,
     timeoutMs: number,
   ): Promise<T> {
-    const result = await this.rawRequest(path, method, body, timeoutMs);
+    let result: { status: number; json: unknown };
+    try {
+      result = await this.rawRequest(path, method, body, timeoutMs);
+    } catch (err) {
+      // A failed CALL is liveness evidence too: flip the probe state to
+      // down so the NEXT call takes the degraded path instead of trusting
+      // a stale up-cache (review fix — otherwise a hub that dies inside the
+      // up-TTL mislabels hub-down writes as content rejections).
+      this.setProbe(false, Date.now() + DOWN_BACKOFF_MS);
+      throw err;
+    }
     if (result.status < 200 || result.status >= 300) {
       const errBody = result.json as { error?: { code?: string; message?: string } } | undefined;
       throw new HubHttpError(
