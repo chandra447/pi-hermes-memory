@@ -752,7 +752,17 @@ export async function runDirectMemoryCompletion(
     providerNoticeState?: { logged: boolean };
   } = {},
 ): Promise<DirectReviewResult> {
-  const complete = deps.completeSimple ?? completeSimple;
+  // Extension-registered providers (kiro, antigravity, ...) live in the session's
+  // model runtime, not in pi-ai's global api registry, so route through the
+  // registry when it can stream and keep the global call as the fallback.
+  // Older hosts type `ModelRegistry` without `streamSimple`, hence the structural cast.
+  const registry = ctx.modelRegistry as unknown as {
+    streamSimple?: (...args: Parameters<typeof completeSimple>) => { result(): ReturnType<typeof completeSimple> };
+  } | undefined;
+  const complete: typeof completeSimple = deps.completeSimple
+    ?? (typeof registry?.streamSimple === "function"
+      ? (model, context, options) => registry.streamSimple!(model, context, options).result()
+      : completeSimple);
   const aborted = (): DirectReviewResult => ({ ok: false, appliedCount: 0, fallbackReason: "aborted" });
   if (options.signal?.aborted) return aborted();
 
