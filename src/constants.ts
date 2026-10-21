@@ -70,6 +70,14 @@ export const CONSOLIDATION_CHUNK_CHARS_MIN = 500;
 export const MAX_CONSOLIDATION_ROUNDS = 6;
 /** Wall-clock grace after overflow before an automatic consolidation may run. */
 export const DEFAULT_OVERFLOW_GRACE_MS = 180000;
+/**
+ * Cross-session cooldown after an overflow episode has been acted on (#284).
+ * A policy-only store that stays over its goal is the normal steady state, so
+ * without this the episode would re-arm on the next write and every session
+ * start would spawn another consolidation child. One attempt per store per
+ * cooldown window is enough to keep the budget honest.
+ */
+export const DEFAULT_OVERFLOW_COOLDOWN_MS = 30 * 60 * 1000;
 export const DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS = 7;
 export const DEFAULT_FAILURE_INJECTION_MAX_ENTRIES = 5;
 
@@ -85,6 +93,12 @@ export const DEFAULT_SESSION_RETENTION_DAYS = 0;
 
 // ─── File names ───
 export const MEMORY_FILE = "MEMORY.md";
+/**
+ * Sidecar holding the open-overflow-episode / cooldown state per store, keyed
+ * by `MemoryStore.getStorageIdentity(target)`. It lives next to the memory
+ * files so other sessions pointing at the same store can see it (#284).
+ */
+export const OVERFLOW_EPISODE_FILE = ".overflow-episodes.json";
 export const USER_FILE = "USER.md";
 export const STANDING_FILE = "STANDING.md";
 

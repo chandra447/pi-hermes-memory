@@ -28,6 +28,27 @@ _Done when: memory full no longer returns an error — it triggers automatic con
 - [x] `tests/handlers/auto-consolidate.test.ts` — consolidation trigger, pi.exec call, success/failure paths (`83e7c46`)
 - [x] `tests/store/memory-store.test.ts` — migrate all `store.add()` calls to `await store.add()`; consolidator tests (`83e7c46`)
 
+### Policy-only overflow budget (#284)
+
+Policy-only memory deliberately does not hold the Markdown export cap (#218, #221, #248).
+Being over it in that mode is a **budget question, not a defect**, and the two
+statements below are the reconciled answer — "policy-only bypasses the cap" and
+"policy-only consolidates at the cap" do not contradict each other once the
+number and the trigger are written down.
+
+- **The number the trigger compares against.** `charCount(target)` > `charLimit(target)`,
+  both the same encoded-character measure the cap enforces (entry metadata included):
+  `memoryCharLimit`, `userCharLimit`, or 2× `memoryCharLimit` for the failure tier.
+  Not the prompt-side, metadata-stripped size, and not a percentage.
+- **Intended budget.** The store is allowed to exceed `charLimit` — the write always
+  lands and nothing is FIFO-evicted in policy-only. The budget spent is one automatic
+  consolidation per *crossing*: an episode opens when the store crosses the goal with
+  no episode already open, waits out `overflowGraceMs` so a manual consolidation can
+  happen first, runs at session start, then a cross-session cooldown
+  (`DEFAULT_OVERFLOW_COOLDOWN_MS`) stops the same steady state from re-arming.
+  A store that is permanently over the goal is therefore never consolidated on every
+  write, and no new subprocess path is introduced.
+
 ---
 
 ## Epic 3: Correction Detection + Immediate Save
