@@ -135,15 +135,20 @@ export const SearchHit = Type.Object({
 export type SearchHit = Static<typeof SearchHit>;
 
 /**
- * `POST /search` request. `project` is the normalized project key (AD-10).
+ * `POST /search` request. `project` is the normalized project key (AD-10);
+ * `null` selects GLOBAL-ONLY entries (project_key IS NULL) — the shared
+ * counterpart of v1's `project: null` ("global memories only").
  * `project_any` selects project-ATTRIBUTED entries (project_key IS NOT NULL)
- * — the shared counterpart of v1's `target: "project"` filter. When both are
- * present, `project` wins.
+ * — the shared counterpart of v1's `target: "project"` filter. `contains`
+ * switches to a literal substring (LIKE) match — the mutation path's
+ * v1-parity semantics, immune to FTS tokenization of short/label text.
+ * When present, `project` wins over `project_any`.
  */
 export const SearchRequest = Type.Object({
   query: Type.String({ minLength: 1 }),
-  project: Type.Optional(Type.String({ minLength: 1 })),
+  project: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
   project_any: Type.Optional(Type.Boolean()),
+  contains: Type.Optional(Type.Boolean()),
   scope: Type.Optional(Scope),
   category: Type.Optional(Category),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),

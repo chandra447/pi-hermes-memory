@@ -159,6 +159,13 @@ export interface HubSearchOptions {
   project?: string | null;
   /** Project-ATTRIBUTED entries only (project_key IS NOT NULL). Ignored when `project` is present. */
   projectAny?: boolean;
+  /**
+   * Literal substring match (LIKE) instead of the FTS relevance ladder —
+   * the mutation path's v1 parity semantics: short terms (<3 chars, no FTS
+   * trigram) and label-prefixed text must match by containment, not by
+   * tokenization (EC-5).
+   */
+  contains?: boolean;
   scope?: MemoryScope;
   category?: MemoryCategory;
   /** ISO timestamp; older hits are dropped by the recency gate. */
@@ -287,6 +294,30 @@ export class HubStore {
       .get(input.id) as { machine: string; session: string; created_at: string; updated_at: string; provenance: string | null } | undefined;
 
     if (existing && existing.updated_at >= input.updated_at) {
+      // Provenance is a set-valued fact, not LWW data: same id ⇒ same
+      // content, so a re-add from ANOTHER machine must extend the
+      // contributor list even when the LWW content update is a no-op —
+      // equal timestamps or a lagging clock on the second box (EC-4). The
+      // client's "provenance extended" message is only true when this runs.
+      const keptTouch: ProvenanceTouch = { machine: input.machine, session: input.session, at: input.updated_at };
+      const keptCurrent = parseProvenance({
+        id: input.id,
+        project_key: null,
+        scope: input.scope,
+        category: null,
+        kind: 'memory',
+        state: null,
+        content: input.content,
+        failure_reason: null,
+        tool_state: null,
+        corrected_to: null,
+        identity: existing.machine,
+        ...existing,
+      });
+      const keptMerged = mergeProvenance(keptCurrent, keptTouch);
+      if (JSON.stringify(keptMerged) !== existing.provenance) {
+        this.db.prepare('UPDATE entries SET provenance = ? WHERE id = ?').run(JSON.stringify(keptMerged), input.id);
+      }
       return 'kept';
     }
 
@@ -410,7 +441,7 @@ export class HubStore {
     if (query.trim().length === 0) {
       return { hits: [], raw_matches: 0 };
     }
-    const { project, projectAny, scope, category, minRecencyAt, limit = 10 } = options;
+    const { project, projectAny, scope, category, minRecencyAt, limit = 10, contains } = options;
 
     const applyScopeFilters = (conditions: string[], params: unknown[], prefix = 'e'): void => {
       if (project !== undefined) {
@@ -422,6 +453,26 @@ export class HubStore {
       if (scope !== undefined) { conditions.push(`${prefix}.scope = ?`); params.push(scope); }
       if (category !== undefined) { conditions.push(`${prefix}.category = ?`); params.push(category); }
     };
+
+    if (contains) {
+      // Literal containment (mutation path): one LIKE on the whole query —
+      // no FTS ladder, no relevance ordering. Wildcards escaped; the same
+      // scope filters and the SAME clean-hit gates as the FTS path apply
+      // (parity by construction, C9/AD-12).
+      const conditions: string[] = [`e.content LIKE ? ESCAPE '\\'`];
+      const params: unknown[] = [`%${escapeLikePattern(query.trim())}%`];
+      applyScopeFilters(conditions, params, 'e');
+      const rows = this.db
+        .prepare(`
+          SELECT ${SELECT_COLUMNS}
+          FROM entries e
+          WHERE ${conditions.join(' AND ')}
+          ORDER BY e.updated_at DESC
+          LIMIT ?
+        `)
+        .all(...params, limit) as EntryRow[];
+      return this.cleanRows(rows.map(mapRow), query, { category, minRecencyAt });
+    }
 
     let ftsParseError = false;
 
@@ -505,9 +556,21 @@ export class HubStore {
       }
     }
 
-    // Gate the raw rows through the SAME lifted clean-hit layer the local
-    // providers use (scope / recency / scanContent).
-    const shaped: ProviderSearchHit[] = raw.map((entry) => ({
+    return this.cleanRows(raw, query, { category, minRecencyAt });
+  }
+
+  /**
+   * Gate raw rows through the SAME lifted clean-hit layer the local
+   * providers use (scope / recency / scanContent). Shared by the FTS ladder
+   * and the literal-`contains` path so the two match modes agree by
+   * construction (C9/AD-12).
+   */
+  private cleanRows(
+    rows: SharedEntry[],
+    query: string,
+    opts: { category?: MemoryCategory; minRecencyAt?: string },
+  ): { hits: SharedEntry[]; raw_matches: number } {
+    const shaped: ProviderSearchHit[] = rows.map((entry) => ({
       id: entry.id,
       content: entry.content,
       created_at: entry.created_at,
@@ -519,8 +582,8 @@ export class HubStore {
       recall: () => shaped,
     };
     const { hits } = cleanHit(provider, query, {
-      category: category ?? undefined,
-      minRecencyAt,
+      category: opts.category ?? undefined,
+      minRecencyAt: opts.minRecencyAt,
     });
 
     return {

@@ -115,3 +115,36 @@ describe('state lines (FR-16/FR-18 — explicit, never silent)', () => {
     assert.match(unresolvedProjectNote('mystery', 'no remote'), /no remote/);
   });
 });
+
+describe('merge edges (VG-17, VG-20)', () => {
+  it('category is part of the dedup identity: same content, different category ⇒ both render', () => {
+    const local = [mapLocalHit({ ...localEntry('the fact'), category: 'insight' as never }, 'box-a')];
+    const shared: UnifiedHit[] = [{ ...sharedHit('the fact', 'box-b'), category: 'correction' as never }];
+    assert.equal(mergeHits(local, shared, 10, noKey).length, 2, 'different categories are different entries');
+    // Same category on both sides → deduped:
+    const sharedSame: UnifiedHit[] = [{ ...sharedHit('the fact', 'box-b'), category: 'insight' as never }];
+    assert.equal(mergeHits(local, sharedSame, 10, noKey).length, 1);
+  });
+
+  it('unresolvable local project name in a GLOBAL search: both copies may render (BH-15)', () => {
+    // The local hit's project name cannot be resolved to a key; the shared
+    // hit is keyed. The identities differ → both render (they are genuinely
+    // different project scoping — the shared project search was not run).
+    const local = [mapLocalHit(localEntry('scoped fact', 'mystery-name'), 'box-a')];
+    const shared = [sharedHit('scoped fact', 'box-b', 'https://github.com/x/y')];
+    assert.equal(mergeHits(local, shared, 10, noKey).length, 2);
+    // …while a RESOLVABLE local name dedups against the shared key:
+    const nameToKey = (name: string): string | null => (name === 'mystery-name' ? 'https://github.com/x/y' : null);
+    assert.equal(mergeHits(local, shared, 10, nameToKey).length, 1);
+  });
+
+  it('local hits carry the box name in the unified shape (VG-20)', () => {
+    const hit = mapLocalHit(localEntry('machine check'), 'cyberkleiber');
+    assert.equal(hit.machine, 'cyberkleiber', 'the local machine is this box\'s enrolled name');
+    assert.equal(hit.source, 'local');
+  });
+
+  it('zero shared hits still produce the up state line (count 0 is a state, not an error)', () => {
+    assert.equal(upStateLine(0), 'shared: up (0 shared hits)');
+  });
+});

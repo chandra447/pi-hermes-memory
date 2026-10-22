@@ -107,24 +107,31 @@ describe('hub provenance on upsert (story 2, Q1=B)', () => {
     s.close();
   });
 
-  it('a fresh insert through the store API reads back a valid list', () => {
-    const s = store();
-    const id = deterministicEntryId('legacy fact', 'memory', null, null);
-    s.upsert({ id, content: 'legacy fact', scope: 'memory', machine: 'oldbox', identity: 'oldbox', session: 's0', created_at: T0, updated_at: T0 });
-    const entry = s.getEntry(id)!;
-    assert.equal(entry.provenance.length, 1);
-    assert.equal(entry.provenance[0].machine, 'oldbox');
-    s.close();
-  });
-
-  it('an LWW-kept upsert does not touch the provenance list', () => {
+  it('an LWW-kept upsert from another machine still extends provenance (EC-4)', () => {
+    // The content update is a no-op (existing is newer), BUT provenance is a
+    // set-valued fact: the second machine wrote this content, so it belongs
+    // in the contributor list even with equal/lagging clocks. Same id ⇒ same
+    // content, so this is the cross-box dedup contract.
     const s = store();
     const id = deterministicEntryId('lww', 'memory', null, null);
     s.upsert({ id, content: 'lww', scope: 'memory', machine: 'a', identity: 'a', session: 's1', created_at: T1, updated_at: T1 });
     const action = s.upsert({ id, content: 'lww', scope: 'memory', machine: 'b', identity: 'b', session: 's2', created_at: T0, updated_at: T0 });
     assert.equal(action, 'kept');
-    assert.equal(s.getEntry(id)!.provenance.length, 1);
+    // Content LWW: the newer machine's row wins (machine 'a').
     assert.equal(s.getEntry(id)!.machine, 'a');
+    // Provenance: BOTH machines are contributors now.
+    const machines = s.getEntry(id)!.provenance.map((t) => t.machine).sort();
+    assert.deepEqual(machines, ['a', 'b']);
+    s.close();
+  });
+
+  it('an LWW-kept upsert from the SAME machine does not duplicate the touch', () => {
+    const s = store();
+    const id = deterministicEntryId('samebox', 'memory', null, null);
+    s.upsert({ id, content: 'samebox', scope: 'memory', machine: 'a', identity: 'a', session: 's1', created_at: T1, updated_at: T1 });
+    const action = s.upsert({ id, content: 'samebox', scope: 'memory', machine: 'a', identity: 'a', session: 's1', created_at: T0, updated_at: T0 });
+    assert.equal(action, 'kept');
+    assert.equal(s.getEntry(id)!.provenance.length, 1);
     s.close();
   });
 });

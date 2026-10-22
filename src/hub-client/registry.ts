@@ -19,7 +19,7 @@
  * the shared project op and says so) — never a hub concern (AD-10).
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, type SpawnOptions } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve as resolvePath, sep } from 'node:path';
@@ -37,7 +37,13 @@ export interface RegistryEntry {
 
 const SECTION_RE = /^##\s+(.+?)\s*$/;
 const FIELD_RE = /^-\s+([a-z_]+)\s*:\s*(.+?)\s*$/;
-const FENCE_RE = /^\s*(```|~~~)/;
+/**
+ * Code-fence delimiters. The OPENING char is tracked: a block opened with
+ * ``` only closes on ``` — a ~~~ line inside a ``` block is content, not a
+ * fence toggle (mixed styles in a human-maintained file would otherwise
+ * re-enter fence state mid-file and swallow/phantom sections, EC-13).
+ */
+const FENCE_OPEN_RE = /^\s*(`{3,}|~{3,})/;
 
 /**
  * Parse registry markdown into entries. Tolerant: bad lines are skipped.
@@ -47,13 +53,16 @@ const FENCE_RE = /^\s*(```|~~~)/;
 export function parseRegistry(markdown: string): RegistryEntry[] {
   const entries: RegistryEntry[] = [];
   let current: RegistryEntry | null = null;
-  let inFence = false;
+  let fenceChar: '`' | '~' | null = null;
   for (const line of markdown.split(/\r?\n/)) {
-    if (FENCE_RE.test(line)) {
-      inFence = !inFence;
+    const fence = line.match(FENCE_OPEN_RE);
+    if (fence) {
+      const ch = fence[1][0] as '`' | '~';
+      if (fenceChar === null) fenceChar = ch;
+      else if (ch === fenceChar) fenceChar = null;
       continue;
     }
-    if (inFence) continue;
+    if (fenceChar !== null) continue;
     const section = line.match(SECTION_RE);
     if (section) {
       current = { name: section[1], locals: [], docs: [] };
@@ -94,14 +103,25 @@ export function expandPath(p: string): string {
  * Async (a synchronous spawn would block the tool's event loop); bounded
  * by a 1 s timeout; results are cached per cwd (the cwd rarely changes
  * within a session, and `git` on a healthy repo answers in ~10 ms).
+ * `spawnImpl` is injectable for tests (a counting spawner proves the cache
+ * actually prevents the second spawn — VG-21).
  */
 const gitRemoteCache = new Map<string, string | null>();
 
-export function gitRemoteOf(cwd: string): Promise<string | null> {
+export interface SpawnedChild {
+  stdout: { on(event: string, cb: (d: Buffer) => void): void };
+  on(event: string, cb: (...args: unknown[]) => void): void;
+  kill(): void;
+}
+export type SpawnImpl = (cmd: string, args: string[], opts: SpawnOptions) => SpawnedChild;
+
+const defaultSpawn: SpawnImpl = (cmd, args, opts) => spawn(cmd, args, opts) as unknown as SpawnedChild;
+
+export function gitRemoteOf(cwd: string, spawnImpl: SpawnImpl = defaultSpawn): Promise<string | null> {
   const hit = gitRemoteCache.get(cwd);
   if (hit !== undefined) return Promise.resolve(hit);
   return new Promise((resolve) => {
-    const child = spawn('git', ['-C', cwd, 'remote', 'get-url', 'origin'], {
+    const child = spawnImpl('git', ['-C', cwd, 'remote', 'get-url', 'origin'], {
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     let out = '';

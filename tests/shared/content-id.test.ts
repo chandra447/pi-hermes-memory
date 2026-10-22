@@ -57,4 +57,20 @@ describe('content-id (frozen deterministic identity, story 2 Q1=B)', () => {
       assert.equal(deterministicEntryId('x', 'user', 'https://h/p', 'preference'), id);
     }
   });
+
+  it('GOLDEN VECTOR (frozen, VG-13): a re-implementation must reproduce these exact ids', () => {
+    // These pin the FROZEN hash (algorithm + field shaping + trim) to known
+    // answers. Self-consistency tests alone would pass for ANY re-hash and
+    // silently orphan every deployed entry on every box — the exact failure
+    // the FROZEN comment in content-id.ts warns about. If you must change
+    // the hash, change these deliberately and re-seed the hub.
+    assert.equal(
+      deterministicEntryId('fixed content', 'memory', 'https://github.com/x/y', null),
+      '5e017a80-c63d-73d4-87c9-47fc7f4c28b8',
+    );
+    assert.equal(
+      deterministicEntryId('fixed content', 'memory', null, 'failure'),
+      '9d12bef5-2736-7fb7-90bc-b405d804d743',
+    );
+  });
 });

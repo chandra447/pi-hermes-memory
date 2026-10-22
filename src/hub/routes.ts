@@ -133,10 +133,11 @@ function toSearchHit(entry: SharedEntry): SearchHit {
 async function handleSearch(req: IncomingMessage, res: ServerResponse, ctx: HubRouteContext): Promise<void> {
   const body = await parseJson<SearchRequest>(res, req, SearchRequest);
   if (body === null) return;
-  const { query, project, project_any, scope, category, limit } = body;
+  const { query, project, project_any, contains, scope, category, limit } = body;
   const { hits, raw_matches } = ctx.store.search(query, {
     project,
     ...(project_any !== undefined ? { projectAny: project_any } : {}),
+    ...(contains !== undefined ? { contains } : {}),
     scope,
     category,
     limit,

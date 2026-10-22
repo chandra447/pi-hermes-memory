@@ -33,26 +33,44 @@ export interface SharedMutationTarget {
   category?: MemoryCategory;
 }
 
-/** Search the hub for entries whose content contains `oldText` (v1 semantics). */
+/**
+ * Search the hub for entries whose content contains `oldText` (v1 semantics).
+ * Literal containment (`contains: true` — one escaped LIKE), NOT the FTS
+ * relevance ladder: short terms (<3 chars, no trigram) and label-prefixed
+ * text must match by containment or the shared op silently no-ops while the
+ * local op succeeds (EC-5). The label is stripped before the hub call so the
+ * LIKE matches the STORED content (the hub never stored the label).
+ */
 export async function findSharedMatches(target: SharedMutationTarget, oldText: string): Promise<SearchHit[]> {
   const lookup = normalizeMemoryLookupText(oldText);
   if (!lookup) return [];
   const hits = await target.client.search({
-    query: oldText,
+    query: lookup,
+    contains: true,
     ...(target.projectKey !== undefined ? { project: target.projectKey } : {}),
-    ...(target.scope !== 'memory' ? { scope: target.scope } : {}),
+    // ALWAYS scope-filtered (EC-1): a `target="memory"` mutation must never
+    // op user/failure-scope entries just because their content contains the
+    // substring — v1's local replace/remove matches memory rows only.
+    scope: target.scope,
     limit: 50,
   });
   return hits.filter((hit) => hit.content.includes(lookup));
 }
 
-/** One shared add (deterministic id; the hub upserts + merges provenance). */
+/**
+ * One shared add (deterministic id; the hub upserts + merges provenance).
+ * `categoryOverride` lets a replace write the HIT's category instead of the
+ * target default — the id hash and the stored category must agree, or the
+ * hash-equal guard and the upsert land on different identities (EC-3).
+ */
 export async function sharedAdd(
   target: SharedMutationTarget,
   content: string,
   inheritsFrom?: string,
+  categoryOverride?: MemoryCategory | null,
 ): Promise<{ action: string; entry: unknown }> {
-  const id = deterministicEntryId(content, target.scope, target.projectKey ?? null, target.category ?? null);
+  const category = categoryOverride !== undefined ? categoryOverride : target.category ?? null;
+  const id = deterministicEntryId(content, target.scope, target.projectKey ?? null, category);
   const op: MemoryOpRequest = {
     op: 'add',
     id,
@@ -60,7 +78,7 @@ export async function sharedAdd(
     session: target.sessionId,
     content,
     ...(target.projectKey !== undefined ? { project_key: target.projectKey } : {}),
-    ...(target.category !== undefined ? { category: target.category } : {}),
+    ...(category !== null && category !== undefined ? { category } : {}),
     ...(inheritsFrom !== undefined ? { inherits_from: inheritsFrom } : {}),
   };
   const res = await target.client.memory(op);
@@ -92,20 +110,22 @@ export async function sharedReplace(
   const matches = await findSharedMatches(target, oldText);
   for (const hit of matches) {
     const oldId = hit.id;
-    // Parity with v1: a replace preserves each matched row's own category
-    // (v1's SQLite mirror keeps the row's category column on replace), so
-    // the new entry's id hashes with the HIT's category.
-    const newId = deterministicEntryId(newContent, target.scope, target.projectKey ?? null, (hit.category as MemoryCategory | undefined) ?? target.category ?? null);
+    // The HIT's category is the identity: v1's local replace preserves the
+    // row's category, so the new entry's id (and the stored category) must
+    // both use it — a target-default category here would hash a different id
+    // than the guard computed and duplicate the entry (EC-3).
+    const hitCategory = (hit.category as MemoryCategory | undefined) ?? null;
+    const newId = deterministicEntryId(newContent, target.scope, target.projectKey ?? null, hitCategory);
     let addLanded = false;
     try {
       if (newId === oldId) {
         // Same content (modulo trim): pure upsert — provenance extends,
         // nothing is removed (self-destruction guard).
-        await sharedAdd(target, newContent);
+        await sharedAdd(target, newContent, undefined, hitCategory);
         outcome.unchanged += 1;
         continue;
       }
-      await sharedAdd(target, newContent, oldId);
+      await sharedAdd(target, newContent, oldId, hitCategory);
       addLanded = true;
       await target.client.memory({ op: 'remove', id: oldId });
       outcome.replaced += 1;

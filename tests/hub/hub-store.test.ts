@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { HubStore, type HubUpsertInput } from '../../src/hub/hub-store.js';
+import { loadBetterSqlite3 } from '../../src/store/sqlite-native.js';
 
 const T1 = '2026-10-14T10:00:00.000Z';
 const T2 = '2026-10-14T11:00:00.000Z';
@@ -215,6 +216,58 @@ describe('HubStore persistence (durability, AD-14)', () => {
       assert.equal(reopened.getEntry(upsertInput().id)?.content, 'the hub keeps one brain for many machines');
     } finally {
       reopened.close();
+    }
+  });
+});
+
+describe('additive migration from a pre-story-2 database (VG-11)', () => {
+  it('opens an old-schema DB (no provenance column), adds the column, and backfills legacy rows at read time', () => {
+    const dbPath = path.join(dir, 'legacy.sqlite');
+    // Build the PRE-story-2 schema by hand: the entries table WITHOUT the
+    // provenance column (everything else as it was).
+    const Ctor = loadBetterSqlite3();
+    const raw = new (Ctor as new (p: string) => { exec: (s: string) => void; prepare: (s: string) => { run: (...a: unknown[]) => unknown }; close: () => void })(dbPath);
+    raw.exec(`
+      CREATE TABLE entries (
+        id TEXT PRIMARY KEY,
+        project_key TEXT,
+        scope TEXT NOT NULL CHECK (scope IN ('memory', 'user', 'failure')),
+        category TEXT,
+        kind TEXT NOT NULL DEFAULT 'memory' CHECK (kind IN ('memory', 'status')),
+        state TEXT,
+        content TEXT NOT NULL,
+        failure_reason TEXT,
+        tool_state TEXT,
+        corrected_to TEXT,
+        machine TEXT NOT NULL,
+        session TEXT NOT NULL,
+        identity TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    raw.prepare('INSERT INTO entries (id, scope, content, machine, session, identity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run('01999999-0000-7000-8000-000000000099', 'memory', 'a pre-story-2 legacy fact', 'oldbox', 'sess-old', 'oldbox', T1, T1);
+    raw.close();
+
+    // Now open it through the production path:
+    const store = new HubStore(dbPath);
+    try {
+      const cols = new Set<string>();
+      // PRAGMA via the store's own db is private — verify through behavior
+      // instead: the legacy row must READ back with a backfilled list.
+      const entry = store.getEntry('01999999-0000-7000-8000-000000000099');
+      assert.ok(entry, 'legacy row survived the migration');
+      assert.equal(entry!.content, 'a pre-story-2 legacy fact');
+      assert.equal(entry!.provenance.length, 1);
+      assert.equal(entry!.provenance[0].machine, 'oldbox');
+      assert.equal(entry!.provenance[0].session, 'sess-old');
+      assert.equal(entry!.provenance[0].at, T1);
+      // And the store stays fully functional (a new insert works too):
+      store.upsert({ id: '01999999-0000-7000-8000-000000000098', content: 'new fact', scope: 'memory', machine: 'newbox', identity: 'newbox', session: 's', created_at: T2, updated_at: T2 });
+      assert.equal(store.count(), 2);
+    } finally {
+      store.close();
     }
   });
 });

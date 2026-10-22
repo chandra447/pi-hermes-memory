@@ -11,6 +11,7 @@ import { HubUnreachableError } from '../hub-client/client.js';
 import type { SharedMemoryOptions } from '../hub-client/context.js';
 import { sharedRegistryEntries, sharedResolve } from '../hub-client/context.js';
 import { resolveProjectKey } from '../hub-client/registry.js';
+import { normalizeProjectKey } from '../shared/project-key.js';
 import {
   degradedBanner,
   degradedTag,
@@ -71,7 +72,9 @@ async function runSharedSearch(
     const resolved = await sharedResolve(shared, args.project, cwd);
     if (!resolved.key) return { kind: "skipped", note: unresolvedProjectNote(args.project, resolved.note) };
     const up = await shared.client.probe();
-    if (!up) return { kind: "down", note: unresolvedProjectNote(args.project, resolved.note) };
+    // Down is down — the project resolved FINE, so no "unresolvable" note
+    // may be attached (EC-7: a false claim would contradict the banner).
+    if (!up) return { kind: "down" };
     try {
       const scope = sharedScopeFor(args.target);
       const hits = await shared.client.search({
@@ -98,6 +101,10 @@ async function runSharedSearch(
       query: args.query,
       // v1 `target: "project"` (no name) = project-ATTRIBUTED memory entries.
       ...(!args.project && args.target === 'project' ? { project_any: true } : {}),
+      // v1 `project: null` = GLOBAL memories only (EC-2): the hub maps null
+      // to `project_key IS NULL`; absent means unfiltered (local ∪ shared
+      // parity). Undefined and null must NOT collapse.
+      ...(args.project === null ? { project: null } : {}),
       ...(scope !== undefined ? { scope } : {}),
       ...(args.category !== undefined ? { category: args.category } : {}),
       limit: args.limit,
@@ -158,7 +165,10 @@ ${shared ? 'When shared memory is configured, results include the shared LAN sto
       const project = args.project;
       const target = args.target;
       const category = args.category as MemoryCategory | undefined;
-      const limit = Math.min(args.limit || 10, 20);
+      // Clamp to [1, 20] (EC-10): a negative limit would hit SQLite as
+      // "unlimited" locally, 400 on the wire, and merge to "no memories
+      // found" despite local matches.
+      const limit = Math.max(1, Math.min(Math.trunc(args.limit ?? 10) || 10, 20));
 
       if (!query || query.trim().length === 0) {
         const result: SearchResult = { success: false, message: 'query is required' };
@@ -228,10 +238,26 @@ ${shared ? 'When shared memory is configured, results include the shared LAN sto
       }
       output += '\n\n';
 
+      // Display names for shared hits (EC-12): the hub stores the normalized
+      // KEY (a URL); v1 local hits display the short project name. Map
+      // key→name via the registry so the SAME project renders identically on
+      // both sides (a copied shared line feeds the name, not the URL, into
+      // later project ops). The "Last used" label is kept as-is: v1 renders
+      // updated_at under that label too (parity, not a shared divergence).
+      let keyToName = new Map<string, string>();
+      if (shared) {
+        for (const e of sharedRegistryEntries(shared)) {
+          if (e.remote) {
+            const key = normalizeProjectKey(e.remote);
+            if (key && !keyToName.has(key)) keyToName.set(key, e.name);
+          }
+        }
+      }
       for (const hit of hits) {
         const entry = hit as UnifiedHit;
         const t = mutationTarget({ target: entry.target as "memory" | "user" | "failure", project: entry.project ?? null });
-        const projectLabel = `scope=${scopeLabel(entry.project ?? null)}`;
+        const projectDisplay = entry.project && entry.source === 'shared' ? (keyToName.get(entry.project) ?? entry.project) : entry.project;
+        const projectLabel = `scope=${scopeLabel(projectDisplay ?? null)}`;
         const mutationTargetLabel = `[target=${t}]`;
         const targetLabel = entry.target === 'user' ? '👤' : entry.target === 'failure' ? '⚠️' : '🧠';
         const categoryLabel = entry.category ? ` [${entry.category}]` : '';

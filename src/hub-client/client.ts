@@ -95,7 +95,13 @@ export function loadClientFile(path: string = DEFAULT_CLIENT_FILE): HubClientCon
     if (!/^https:\/\//.test(cfg.hubUrl) || !cfg.hubUrl || !cfg.machine || !cfg.token || !cfg.caCertPem.includes('BEGIN CERTIFICATE')) {
       throw new Error('missing or malformed fields (need hub_url, machine, ca_cert_pem, token)');
     }
-    new URL(cfg.hubUrl); // must parse
+    const url = new URL(cfg.hubUrl); // must parse
+    // A path in hub_url is a config error, not hub-down: /healthz would 404
+    // forever and the box would sit in degraded mode with misleading banners
+    // (EC-11). Reject it explicitly at load time instead.
+    if (url.pathname !== '/' && url.pathname !== '') {
+      throw new Error(`hub_url must be scheme://host[:port] with no path (got ${cfg.hubUrl})`);
+    }
     return cfg;
   } catch (err) {
     console.warn(`pi-hermes-memory: hub client file at ${path} is invalid: ${String(err)} — shared memory disabled (re-enroll to repair).`);

@@ -371,8 +371,10 @@ export function registerMemoryTool(
     const activeProjectStore = resolveProjectStore(projectStore);
     const activeProjectName = resolveProjectName(projectName);
     const activeStore = rawTarget === "project" ? activeProjectStore : store;
-    const sharedState = await sharedOpStateFor(rawTarget, params, activeProjectName, ctx);
 
+    // The immediate error comes BEFORE any shared resolution (EC-9): a
+    // project op with no bound store must not pay up to ~1.5 s of git
+    // spawn + probe to discover it (C5: network never blocks a turn).
     if (rawTarget === "project" && !activeProjectStore) {
       return {
         content: [{
@@ -389,6 +391,8 @@ export function registerMemoryTool(
       };
     }
 
+    const sharedState = await sharedOpStateFor(rawTarget, params, activeProjectName, ctx);
+
     const store_ = activeStore!;
     attachMutationObserver(store_);
     let result: MemoryResult;
@@ -399,6 +403,14 @@ export function registerMemoryTool(
       case "add":
         if (!content) {
           throw new Error("Content is required for 'add' action.");
+        }
+        // v1 parity (EC-14): whitespace-only content is rejected BEFORE the
+        // hub call — the wire allows a single space, but the deterministic id
+        // hashes the TRIMMED content, so a whitespace-only add would mint an
+        // empty-content entry the local tier would never have accepted.
+        if (!content.trim()) {
+          result = { success: false, error: "Content cannot be empty." };
+          break;
         }
         if (sharedState.kind === "up") {
           // Q3=i: hub up ⇒ shared ONLY — the local store (prompt snapshot +
@@ -471,6 +483,10 @@ export function registerMemoryTool(
               ...result,
               message: `${result.message ?? "Saved."} (shared memory unavailable — saved locally; visible on this box only while the hub is down)`,
             };
+          } else if (sharedState.kind === "skip" && result.success) {
+            // AD-10: the shared project op was skipped (unresolvable name) —
+            // say so, exactly as replace/remove do (EC-6).
+            result = appendSyncWarning(result, sharedState.note);
           }
         }
         break;
@@ -482,16 +498,21 @@ export function registerMemoryTool(
           syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, activeProjectName);
         }
         if (sharedState.kind === "up") {
+          // The local error must survive the shared merge (EC-8): a local
+          // failure (e.g. "Multiple entries matched") is not swallowed just
+          // because the shared tier did work — NFR-4, explicit reporting.
+          const localError = result.success ? null : (result.error ?? "local replace failed");
           try {
             const outcome = await sharedReplace(sharedState.target, old_text, content);
             const parts: string[] = [];
             if (outcome.replaced > 0) parts.push(`replaced ${outcome.replaced} shared entr${outcome.replaced === 1 ? "y" : "ies"}`);
             if (outcome.unchanged > 0) parts.push(`${outcome.unchanged} unchanged (provenance extended)`);
             if (parts.length > 0) {
+              const localNote = localError ? ` Local tier: ${localError}` : "";
               result = {
                 ...result,
                 success: true,
-                message: `${result.success ? (result.message ?? "") + " " : ""}Shared: ${parts.join(", ")}.`,
+                message: `${result.success ? (result.message ?? "") + " " : ""}Shared: ${parts.join(", ")}.${localNote}`,
               };
             }
             if (outcome.failed) {
@@ -516,10 +537,12 @@ export function registerMemoryTool(
           syncWarning = await syncRemoveFromSqlite(rawTarget, old_text, dbManager, activeProjectName);
         }
         if (sharedState.kind === "up") {
+          const localError = result.success ? null : (result.error ?? "local remove failed"); // EC-8
           try {
             const outcome = await sharedRemove(sharedState.target, old_text);
             if (outcome.removed > 0) {
-              result = { ...result, success: true, message: `${result.success ? (result.message ?? "") + " " : ""}Shared: removed ${outcome.removed} entr${outcome.removed === 1 ? "y" : "ies"}.` };
+              const localNote = localError ? ` Local tier: ${localError}` : "";
+              result = { ...result, success: true, message: `${result.success ? (result.message ?? "") + " " : ""}Shared: removed ${outcome.removed} entr${outcome.removed === 1 ? "y" : "ies"}.${localNote}` };
             }
             if (outcome.failed) {
               result = appendSyncWarning(result, `Shared remove partially failed: ${outcome.error ?? "unknown error"}`);
