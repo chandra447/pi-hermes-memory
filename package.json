@@ -3,8 +3,9 @@
   "version": "0.9.11",
   "description": "🧠 Persistent memory + 🔍 session search + 🛡️ secret scanning for Pi. Token-aware policy-only memory by default, SQLite FTS5 search, auto-consolidation, procedural skills. 732 tests. Ported from Hermes agent.",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
   "files": [
+    "dist",
     "src",
     "scripts",
     "README.md",
@@ -13,13 +14,15 @@
   ],
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./dist/index.js"
     ]
   },
   "scripts": {
+    "build": "node scripts/build.mjs",
     "check": "node scripts/ensure-dev.mjs check && tsc --noEmit",
     "check:min-sdk": "node scripts/ensure-dev.mjs check && node scripts/check-min-sdk.mjs",
-    "check:production": "node scripts/check-production-install.mjs",
+    "check:production": "npm run build && node scripts/check-production-install.mjs",
+    "prepare": "npm run build",
     "test": "node scripts/ensure-dev.mjs test && tests/run-all.sh"
   },
   "keywords": [
@@ -57,6 +60,7 @@
     "@earendil-works/pi-coding-agent": "^0.80.2",
     "@earendil-works/pi-tui": "^0.80.2",
     "@types/better-sqlite3": "^7.6.13",
+    "esbuild": "~0.28.0",
     "tsx": "^4.21.0",
     "typebox": "^1.1.33",
     "typescript": "^6.0.3"

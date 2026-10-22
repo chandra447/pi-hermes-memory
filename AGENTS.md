@@ -8,7 +8,7 @@ This is a Pi coding agent extension that brings Hermes-style persistent memory a
 
 ## Architecture
 
-- **Language**: TypeScript (loaded via jiti, no compilation needed at runtime)
+- **Language**: TypeScript (bundled to `dist/index.js` before packaging; Pi loads the bundle via jiti)
 - **Runtime**: Pi extension API (`@earendil-works/pi-coding-agent`)
 - **Storage**: Two markdown files (`MEMORY.md`, `USER.md`) in `~/.pi/agent/memory/`
 - **Entry point**: `src/index.ts` — registers tools, event handlers, and commands
@@ -62,10 +62,11 @@ The implementation is ported from the Hermes agent harness. See `PLAN.md` → "H
 ## Development
 
 ```bash
-# Type check
+# Build and type check
+npm run build
 npm run check
 
-# Test locally
+# Test locally from source
 pi -e ./src/index.ts
 ```
 

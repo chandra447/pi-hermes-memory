@@ -94,12 +94,15 @@ Every write — memory and skills — passes through a scanner before being acce
 
 ## Development
 
-`npm run check` and `npm test` only work from a **full git checkout** after `npm install`. The published npm package intentionally omits `tests/`, TypeScript, and `tsconfig.json` (production install for Pi). Validate from source or rely on CI before publish.
+`npm run check` and `npm test` only work from a **full git checkout** after `npm install`. The published npm package intentionally omits `tests/`, the TypeScript compiler, and `tsconfig.json` (production install for Pi). Validate from source or rely on CI before publish.
+
+Production installs load `dist/index.js`, a prebuilt bundle of the extension's local TypeScript modules. Package dependencies and Pi's host SDK remain external. The `prepare` lifecycle builds the bundle for package and Git installs; run the build directly when validating a checkout.
 
 ```bash
 git clone https://github.com/chandra447/pi-hermes-memory.git
 cd pi-hermes-memory
 npm install
+npm run build
 npm run check
 npm test
 ```
@@ -642,10 +645,11 @@ Important boundaries:
   Shutdown joins in-flight preparation and memory tool/command execution before
   closing SQLite. Escape cancels a tool's wait without cancelling shared work.
 - Project listing, prompt preview and anchor search do not activate SQLite.
-- This defers data initialization, not extension SDK imports. The direct
-  completion SDK remains a static import so Pi's jiti aliases also work in
-  production installs without package-local SDK peers. First use pays the
-  deferred data-loading cost; this is not a guarantee of faster searches.
+- This defers data initialization, not extension SDK imports. The prebuilt
+  extension bundle keeps the direct completion SDK as a static external import
+  so Pi's loader aliases also work in production installs without package-local
+  SDK peers. First use pays the deferred data-loading cost; this is not a
+  guarantee of faster searches.
 
 The default remains `false`, so existing installations keep eager initialization.
 
