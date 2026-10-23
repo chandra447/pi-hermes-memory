@@ -219,6 +219,14 @@ export interface MemoryMutationOperation {
 export interface MemorySnapshot {
   memory: string;
   user: string;
+  /**
+   * The frozen user-scope entries (metadata stripped) at load time — the
+   * same set the rendered `user` block shows. Exposed so prompt composition
+   * (story 4's shared-profile dedup) can conflict-check against exactly what
+   * the prompt renders, never against live mid-session state (the snapshot
+   * is frozen for prompt-cache stability).
+   */
+  userEntries: string[];
 }
 
 export interface ConsolidationResult {

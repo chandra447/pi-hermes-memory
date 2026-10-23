@@ -59,7 +59,7 @@ export class MemoryStore {
   private failureEntries: string[] = [];
   private fileFingerprints: Record<string, string> = {};
   private storagePaths: Partial<Record<"memory" | "user" | "failure", string>> = {};
-  private snapshot: MemorySnapshot = { memory: "", user: "" };
+  private snapshot: MemorySnapshot = { memory: "", user: "", userEntries: [] };
   private consolidator: ((target: "memory" | "user" | "failure", signal?: AbortSignal) => Promise<ConsolidationResult>) | null = null;
   /**
    * Mirror successful writes to a coexisting provider (e.g. Holographic's
@@ -215,7 +215,19 @@ export class MemoryStore {
     this.snapshot = {
       memory: this.renderBlock("memory", strippedMemory),
       user: this.renderBlock("user", strippedUser),
+      userEntries: strippedUser,
     };
+  }
+
+  /**
+   * The frozen user-scope entries exactly as the system-prompt block renders
+   * them (metadata stripped, load-time state). Story 4's shared-profile
+   * dedup conflicts against THIS set — never the live entries — so the
+   * composed prompt is a pure function of the frozen snapshot + the settled
+   * shared profile (prompt-cache invariant).
+   */
+  getSnapshotUserEntries(): string[] {
+    return this.snapshot.userEntries;
   }
 
   /**

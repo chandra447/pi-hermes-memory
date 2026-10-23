@@ -23,6 +23,7 @@ import type {
   MemoryOpRequest,
   SearchHit,
   SearchRequest,
+  SharedEntry,
   StatusResponse,
 } from '../shared/wire.js';
 
@@ -55,6 +56,14 @@ export class HubHttpError extends Error {
 
 export const PROBE_TIMEOUT_MS = 500;
 export const CALL_TIMEOUT_MS = 1000;
+/**
+ * Session-start budget for the shared user-profile fetch (story 4). The
+ * export is the whole store in NDJSON — bigger than a turn-path op, and it
+ * happens OFF the turn path (session start, once per session), so it gets
+ * its own, larger bound. It must still be bounded: the network may never
+ * hold a session hostage (AD-11).
+ */
+export const EXPORT_TIMEOUT_MS = 5000;
 const PROBE_TTL_MS = 30_000; // a successful probe is trusted for 30 s
 const DOWN_BACKOFF_MS = 30_000; // a failed probe is re-tried after 30 s
 
@@ -192,6 +201,41 @@ export class HubClient {
     return await this.request<StatusResponse>(`/status?project=${encodeURIComponent(projectKey)}`, 'GET', undefined, CALL_TIMEOUT_MS);
   }
 
+  /**
+   * `GET /export` — the NDJSON dump of the whole shared store (NFR-13).
+   * Session-start surface (the story-4 profile fetch), never turn-path:
+   * one call per session, bounded by EXPORT_TIMEOUT_MS. The body is
+   * newline-delimited JSON, so this parses line-by-line instead of going
+   * through the generic JSON `request()`.
+   */
+  async export(): Promise<SharedEntry[]> {
+    let result: { status: number; text: string };
+    try {
+      result = await this.rawRequest('/export', 'GET', undefined, EXPORT_TIMEOUT_MS);
+    } catch (err) {
+      // Liveness contract identical to request(): a failed call is liveness
+      // evidence — flip the probe so the next call takes the degraded path.
+      this.setProbe(false, Date.now() + DOWN_BACKOFF_MS);
+      throw err;
+    }
+    if (result.status < 200 || result.status >= 300) {
+      let code = 'http_error';
+      let message = `hub returned HTTP ${result.status}`;
+      try {
+        const errBody = JSON.parse(result.text) as { error?: { code?: string; message?: string } };
+        if (errBody?.error?.code) code = errBody.error.code;
+        if (errBody?.error?.message) message = errBody.error.message;
+      } catch { /* non-JSON error body — keep the generic message */ }
+      throw new HubHttpError(result.status, code, message);
+    }
+    // A live answer refreshes the probe cache (the call itself is liveness).
+    this.setProbe(true, Date.now() + PROBE_TTL_MS);
+    return result.text
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as SharedEntry);
+  }
+
   /** Release sockets (extension shutdown). */
   close(): void {
     this.agent.destroy();
@@ -203,7 +247,7 @@ export class HubClient {
     body: unknown,
     timeoutMs: number,
   ): Promise<T> {
-    let result: { status: number; json: unknown };
+    let result: { status: number; text: string };
     try {
       result = await this.rawRequest(path, method, body, timeoutMs);
     } catch (err) {
@@ -215,7 +259,12 @@ export class HubClient {
       throw err;
     }
     if (result.status < 200 || result.status >= 300) {
-      const errBody = result.json as { error?: { code?: string; message?: string } } | undefined;
+      let errBody: { error?: { code?: string; message?: string } } | undefined;
+      try {
+        errBody = JSON.parse(result.text) as { error?: { code?: string; message?: string } };
+      } catch {
+        // non-JSON error body — surface the generic message.
+      }
       throw new HubHttpError(
         result.status,
         errBody?.error?.code ?? 'http_error',
@@ -224,7 +273,13 @@ export class HubClient {
     }
     // A live answer refreshes the probe cache (the call itself is liveness).
     this.setProbe(true, Date.now() + PROBE_TTL_MS);
-    return result.json as T;
+    let json: unknown = null;
+    try {
+      json = result.text.length > 0 ? JSON.parse(result.text) : null;
+    } catch {
+      // non-JSON body (shouldn't happen) — surface as null, as before.
+    }
+    return json as T;
   }
 
   private rawRequest(
@@ -232,7 +287,7 @@ export class HubClient {
     method: 'GET' | 'POST',
     body: unknown,
     timeoutMs: number,
-  ): Promise<{ status: number; json: unknown }> {
+  ): Promise<{ status: number; text: string }> {
     return new Promise((resolvePromise, rejectPromise) => {
       let settled = false;
       const settle = (fn: () => void): void => {
@@ -262,13 +317,7 @@ export class HubClient {
           res.on('data', (c: Buffer) => chunks.push(c));
           res.on('end', () => {
             const text = Buffer.concat(chunks).toString('utf8');
-            let json: unknown = null;
-            try {
-              json = text.length > 0 ? JSON.parse(text) : null;
-            } catch {
-              // non-JSON body (shouldn't happen) — surface as an http error.
-            }
-            settle(() => resolvePromise({ status: res.statusCode ?? 0, json }));
+            settle(() => resolvePromise({ status: res.statusCode ?? 0, text }));
           });
         },
       );

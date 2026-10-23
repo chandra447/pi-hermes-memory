@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { buildPromptContext } from "../../src/prompt-context.js";
+import type { SharedProfileState } from "../../src/hub-client/shared-profile.js";
 import { MEMORY_POLICY_PROMPT, MEMORY_POLICY_PROMPT_COMPACT } from "../../src/constants.js";
 
 describe("buildPromptContext", () => {
@@ -162,5 +163,148 @@ describe("buildPromptContext", () => {
     const result = await buildPromptContext({ memoryMode: "policy-only" }, store, projectStore, "demo");
 
     assert.strictEqual(result, MEMORY_POLICY_PROMPT);
+  });
+});
+
+
+describe("story 4 — shared user profile composition (CAP-5 / FR-14/FR-15)", () => {
+  const localUser = "prefers terse answers over long explanations";
+
+  const makeStore = (userEntries: string[]) => ({
+    formatForSystemPrompt: () =>
+      `<memory-context>\nlocal block\n${userEntries.join("\n")}\n</memory-context>`,
+    getSnapshotUserEntries: () => userEntries,
+  }) as any;
+
+  it("renders the shared block after the local block, entries joined with the delimiter", async () => {
+    const profile: SharedProfileState = {
+      kind: "up",
+      entries: ["works in the evening", "background: systems + AI"],
+    };
+    const result = await buildPromptContext(
+      { memoryMode: "legacy-inject" },
+      makeStore([]),
+      null,
+      "demo",
+      null,
+      profile,
+    );
+    assert.match(result, /local block/);
+    assert.match(result, /SHARED user profile from the LAN memory hub/);
+    assert.match(result, /USER PROFILE \(shared across the LAN[^\n]*\) \[2 entries\]/);
+    assert.match(result, /works in the evening\n§\nbackground: systems \+ AI/);
+    // The shared block comes AFTER the local block.
+    assert.ok(result.indexOf("local block") < result.indexOf("SHARED user profile"));
+  });
+
+  it("local wins on conflict: a shared entry duplicating a local one renders exactly once", async () => {
+    const profile: SharedProfileState = {
+      kind: "up",
+      entries: [localUser, "background: systems + AI"],
+    };
+    const result = await buildPromptContext(
+      { memoryMode: "legacy-inject" },
+      makeStore([localUser]),
+      null,
+      "demo",
+      null,
+      profile,
+    );
+    const count = result.split(localUser).length - 1;
+    assert.strictEqual(count, 1, `the conflicted entry must appear exactly once, got ${count}`);
+    assert.match(result, /background: systems \+ AI/);
+    assert.match(result, /\[1 entry\]/);
+  });
+
+  it("diverged entries both render (local augments shared — the union)", async () => {
+    const profile: SharedProfileState = {
+      kind: "up",
+      entries: ["prefers terse answers over long explanations (v2)"],
+    };
+    const result = await buildPromptContext(
+      { memoryMode: "legacy-inject" },
+      makeStore(["prefers terse answers over long explanations"]),
+      null,
+      "demo",
+      null,
+      profile,
+    );
+    assert.match(result, /prefers terse answers over long explanations\n/);
+    assert.match(result, /prefers terse answers over long explanations \(v2\)/);
+  });
+
+  it("down renders the explicit degraded line with the local block intact (FR-16)", async () => {
+    const result = await buildPromptContext(
+      { memoryMode: "legacy-inject" },
+      makeStore([localUser]),
+      null,
+      "demo",
+      null,
+      { kind: "down", entries: [] },
+    );
+    assert.match(result, /local block/);
+    assert.match(result, /SHARED USER PROFILE — degraded/);
+    assert.match(result, /hub was unreachable at session start/);
+    assert.doesNotMatch(result, /works in the evening/);
+  });
+
+  it("an empty up-profile renders nothing (no empty block)", async () => {
+    const result = await buildPromptContext(
+      { memoryMode: "legacy-inject" },
+      makeStore([]),
+      null,
+      "demo",
+      null,
+      { kind: "up", entries: [] },
+    );
+    assert.doesNotMatch(result, /SHARED/);
+  });
+
+  it("whitespace-only shared entries are filtered out", async () => {
+    const result = await buildPromptContext(
+      { memoryMode: "legacy-inject" },
+      makeStore([]),
+      null,
+      "demo",
+      null,
+      { kind: "up", entries: ["   ", "real entry"] },
+    );
+    assert.match(result, /real entry/);
+    assert.match(result, /\[1 entry\]/);
+  });
+
+  it("no client file (null profile) ⇒ byte-identical to the v1 prompt (M4)", async () => {
+    const store = makeStore([localUser]);
+    const v1 = await buildPromptContext(
+      { memoryMode: "legacy-inject" },
+      store,
+      null,
+      "demo",
+      null,
+    );
+    const explicit = await buildPromptContext(
+      { memoryMode: "legacy-inject" },
+      store,
+      null,
+      "demo",
+      null,
+      null,
+    );
+    assert.strictEqual(explicit, v1);
+  });
+
+  it("policy-only mode excludes the shared profile, exactly like the local block", async () => {
+    const profile: SharedProfileState = { kind: "up", entries: ["works in the evening"] };
+    const result = await buildPromptContext(
+      { memoryMode: "policy-only" },
+      makeStore([]),
+      null,
+      "demo",
+      null,
+      profile,
+    );
+    assert.doesNotMatch(result, /SHARED/);
+    assert.doesNotMatch(result, /works in the evening/);
+    assert.match(result, /Use memory_search/);
   });
 });

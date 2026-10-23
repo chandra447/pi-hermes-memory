@@ -6,7 +6,7 @@
 import { describe, it, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import https from 'node:https';
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import * as os from 'node:os';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -18,10 +18,12 @@ import { addMemory } from '../../src/store/sqlite-memory-store.js';
 import { registerMemorySearchTool } from '../../src/tools/memory-search-tool.js';
 import { registerMemoryTool } from '../../src/tools/memory-tool.js';
 import { registerMemoryStatusTool } from '../../src/tools/memory-status-tool.js';
-import type { MemoryStore } from '../../src/store/memory-store.js';
+import { MemoryStore } from '../../src/store/memory-store.js';
 import { createSharedMemoryOptions } from '../../src/hub-client/context.js';
 import type { SharedMemoryOptions } from '../../src/hub-client/context.js';
 import { deterministicEntryId } from '../../src/shared/content-id.js';
+import { fetchSharedProfile } from '../../src/hub-client/shared-profile.js';
+import { buildPromptContext } from '../../src/prompt-context.js';
 import type { MemoryOpRequest } from '../../src/shared/wire.js';
 
 let dir = '';
@@ -1031,5 +1033,109 @@ describe('story 3 e2e — status rollup (CAP-2 / FR-11)', () => {
     // Last touch is box-a (the tc-44b re-set); the footer's contributor
     // list proves both boxes touched this entry.
     assert.match(text, /Shared: box-a \(session sess-status\) · contributors: box-b, box-a/);
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Story 4 — one agent, everywhere (the shared user profile in the prompt)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('story 4 e2e — shared user profile (CAP-5 / M2)', () => {
+  let boxBStoreDir: string;
+
+  before(() => {
+    boxBStoreDir = path.join(dir, 'box-b-store');
+    mkdirSync(boxBStoreDir, { recursive: true });
+  });
+
+  const boxBStore = async () => {
+    const store = new MemoryStore({
+      memoryDir: boxBStoreDir,
+      memoryCharLimit: 100000,
+      userCharLimit: 100000,
+      failureCharLimit: 100000,
+    } as any);
+    await store.loadFromDisk();
+    return store;
+  };
+
+  it('M2: a user entry added on box A appears in box B\'s prompt snapshot (fetched live)', async () => {
+    // Box A writes a shared user-scope entry through the same op the memory
+    // tool sends (story-2 write path, already covered by its own tests).
+    const content = 'prefers terse answers over long explanations';
+    await sharedA.client.memory({
+      op: 'add',
+      id: deterministicEntryId(content, 'user', null, null),
+      scope: 'user',
+      session: 'sess-m2-a',
+      content,
+    } as MemoryOpRequest);
+
+    // Box B fetches its session profile: the entry is there (live, not a
+    // file, not a mirror).
+    const profile = await fetchSharedProfile(sharedB.client);
+    assert.equal(profile.kind, 'up');
+    assert.ok(profile.entries.includes(content), `shared profile missing the box-A entry: ${JSON.stringify(profile.entries)}`);
+
+    // Box B composes its prompt with its OWN local profile + the shared one.
+    // The local entry is written BEFORE the session snapshot is captured
+    // (the prompt renders the FROZEN snapshot — a mid-session add would only
+    // appear next session, exactly like v1).
+    const prep = await boxBStore();
+    await prep.add('user', 'works best in the evening');
+    const storeB = await boxBStore();
+    const prompt = await buildPromptContext(
+      { memoryMode: 'legacy-inject' } as any,
+      storeB,
+      null,
+      'boxb',
+      null,
+      profile,
+    );
+    assert.match(prompt, /works best in the evening/);
+    assert.match(prompt, /prefers terse answers over long explanations/);
+    assert.match(prompt, /SHARED user profile from the LAN memory hub/);
+  });
+
+  it('M4: no client file ⇒ the prompt is byte-identical to v1 (no profile at all)', async () => {
+    const storeB = await boxBStore();
+    const v1 = await buildPromptContext({ memoryMode: 'legacy-inject' } as any, storeB, null, 'boxb', null);
+    const explicit = await buildPromptContext({ memoryMode: 'legacy-inject' } as any, storeB, null, 'boxb', null, null);
+    assert.strictEqual(explicit, v1);
+    assert.doesNotMatch(explicit, /SHARED/);
+  });
+
+  it('conflict: a local entry equal to a shared one renders exactly once (local wins)', async () => {
+    const content = 'prefers terse answers over long explanations';
+    // On-disk BEFORE the session snapshot (a real box B session whose local
+    // profile already carries the entry):
+    const prep = await boxBStore();
+    const already = await prep.getUserEntries();
+    if (!already.includes(content)) await prep.add('user', content);
+    const storeB = await boxBStore();
+    const profile = await fetchSharedProfile(sharedB.client);
+    assert.equal(profile.kind, 'up');
+    const prompt = await buildPromptContext({ memoryMode: 'legacy-inject' } as any, storeB, null, 'boxb', null, profile);
+    const count = prompt.split(content).length - 1;
+    assert.equal(count, 1, `the conflicted entry must appear exactly once, got ${count}`);
+  });
+
+  it('hub down at session start ⇒ degraded line in the prompt, local profile intact', async () => {
+    const dead = createSharedMemoryOptions({
+      clientFile: makeClientFile('box-profile-dead', tokenA, 'https://127.0.0.1:1'),
+      registryPath: path.join(dir, 'registry-status.md'),
+    })!;
+    try {
+      const profile = await fetchSharedProfile(dead.client);
+      assert.deepEqual(profile, { kind: 'down', entries: [] });
+      const storeB = await boxBStore();
+      const prompt = await buildPromptContext({ memoryMode: 'legacy-inject' } as any, storeB, null, 'boxb', null, profile);
+      assert.match(prompt, /SHARED USER PROFILE — degraded/);
+      assert.match(prompt, /hub was unreachable at session start/);
+      assert.match(prompt, /works best in the evening/, 'the local profile must stay intact');
+    } finally {
+      dead.client.close();
+    }
   });
 });

@@ -56,6 +56,7 @@ import { STANDING_FILE } from "./constants.js";
 import { loadConfig } from "./config.js";
 import { createSharedMemoryOptions } from "./hub-client/context.js";
 import type { SharedMemoryOptions } from "./hub-client/context.js";
+import { fetchSharedProfile, type SharedProfileState } from "./hub-client/shared-profile.js";
 import { shouldWarnAutoConsolidationFailure } from "./auto-consolidation-warning.js";
 import { detectProject, detectProjectSkills } from "./project.js";
 import { buildPromptContext } from "./prompt-context.js";
@@ -97,6 +98,20 @@ export default function (pi: ExtensionAPI) {
   const config = loadConfig();
   const lazy = config.lazyInitialization === true && config.memoryMode === "policy-only";
   let sessionContext: ExtensionContext | undefined;
+  // Story 4 (CAP-5): the shared user profile fetch — ONE promise per session
+  // (kicked off at session start, reset on session replacement), awaited at
+  // most usefully once (the first agent start); later starts read the
+  // settled state so the composed prompt is frozen for the session
+  // (prompt-cache invariant). Null ⇒ shared memory not configured ⇒ the
+  // prompt stays byte-identical to v1 (M4).
+  let sharedProfilePromise: Promise<SharedProfileState> | null = null;
+  const ensureSharedProfile = (): Promise<SharedProfileState> | null => {
+    if (!sharedClient) return null;
+    if (!sharedProfilePromise) {
+      sharedProfilePromise = fetchSharedProfile(sharedClient.client);
+    }
+    return sharedProfilePromise;
+  };
 
   // ── Shared (LAN hub) memory (story 2) ──
   // Present + valid enrollment client file ⇒ shared memory on. `sharedMemory: false`
@@ -307,6 +322,11 @@ export default function (pi: ExtensionAPI) {
   // Skills and pinned instructions must be available even without a lookup.
   pi.on("session_start", async (_event, ctx) => {
     sessionContext = ctx;
+    // Story 4: a fresh profile fetch per session (best-effort, bounded —
+    // fetchSharedProfile never rejects; a failure settles to 'down', which
+    // renders as the explicit degraded line, not a blocked session start).
+    sharedProfilePromise = null;
+    ensureSharedProfile();
     // Pinned directives must not depend on migration/SQLite being healthy.
     if (standingStore) await standingStore.load();
     if (!lazy) await ensureMemoryReady(ctx);
@@ -322,7 +342,13 @@ export default function (pi: ExtensionAPI) {
 
   // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
   pi.on("before_agent_start", async (event, _ctx) => {
-    const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectNameRef(), standingStore);
+    // The shared profile state is settled by the session-start fetch (or
+    // null when shared memory is not configured — v1 prompt, byte-identical).
+    // Awaiting an already-resolved promise costs nothing, so the composed
+    // text is the same frozen block on every agent start of the session.
+    const profilePromise = ensureSharedProfile();
+    const sharedProfile = profilePromise ? await profilePromise : null;
+    const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectNameRef(), standingStore, sharedProfile);
     // Mneme's static provider section plus this turn's prefetch, combined with
     // the memory promptContext above. An empty block is filtered out, so a
     // disabled Mneme layer leaves the prompt untouched.
