@@ -25,6 +25,12 @@ export interface UnifiedHit {
   correctedTo?: string;
   created: string;
   lastReferenced: string;
+  /**
+   * Status-kind marker (story 3): present on shared status entries only.
+   * Rendered as a tag — never detected from content (spine "Status entries").
+   */
+  kind?: 'memory' | 'status';
+  state?: string;
   // Provenance + source (AD-15).
   machine: string;
   session: string;
@@ -65,6 +71,8 @@ export function mapSharedHit(hit: SearchHit): UnifiedHit {
     ...(hit.correctedTo !== undefined ? { correctedTo: hit.correctedTo } : {}),
     created: hit.created,
     lastReferenced: hit.lastReferenced,
+    ...(hit.kind !== undefined ? { kind: hit.kind } : {}),
+    ...(hit.state !== undefined ? { state: hit.state } : {}),
     machine: hit.machine,
     session: hit.session,
     provenance: hit.provenance,

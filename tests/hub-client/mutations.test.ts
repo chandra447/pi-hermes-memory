@@ -8,8 +8,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  defaultStatusContent,
   sharedReplace,
   sharedRemove,
+  sharedStatusSet,
   type SharedMutationTarget,
 } from '../../src/hub-client/mutations.js';
 import { HubHttpError, HubUnreachableError } from '../../src/hub-client/client.js';
@@ -157,5 +159,45 @@ describe('sharedRemove idempotency (BH-11)', () => {
     const outcome = await sharedRemove(target, 'dupe');
     assert.equal(outcome.failed, true);
     assert.match(outcome.error ?? '', /remove failed/);
+  });
+});
+
+describe('sharedStatusSet (story 3 — the reserved status entry kind)', () => {
+  it('sends a kind/status add op with the deterministic id (scope memory, category null)', async () => {
+    const key = 'https://github.com/jan/demo';
+    const target = { ...stubTarget({}), projectKey: key } as SharedMutationTarget;
+    const seen: unknown[] = [];
+    const client = target.client as unknown as { memory: (op: unknown) => Promise<Record<string, unknown>> };
+    const original = client.memory;
+    client.memory = async (op: unknown) => { seen.push(op); return original(op); };
+
+    const { action } = await sharedStatusSet(target, 'hardening', 'needs a reproducibility rerun');
+
+    assert.equal(action, 'inserted');
+    const op = seen[0] as Record<string, unknown>;
+    assert.equal(op.op, 'add');
+    assert.equal(op.kind, 'status');
+    assert.equal(op.state, 'hardening');
+    assert.equal(op.scope, 'memory');
+    assert.equal(op.project_key, key);
+    assert.equal(op.category, undefined, 'status entries are un-categorized');
+    assert.equal(op.content, 'needs a reproducibility rerun');
+    assert.equal(op.session, 'sess-test');
+    // The frozen id: content + scope memory + key + NULL category (cross-box dedup).
+    assert.equal(op.id, deterministicEntryId('needs a reproducibility rerun', 'memory', key, null));
+    assert.equal(op.machine, undefined, 'no provenance fields — the hub stamps them (AD-8)');
+  });
+
+  it('defaultStatusContent is the shared convention: "status: <word>"', async () => {
+    const target = { ...stubTarget({}), projectKey: 'https://github.com/jan/demo' } as SharedMutationTarget;
+    const client = target.client as unknown as { memory: (op: unknown) => Promise<Record<string, unknown>> };
+    const seen: unknown[] = [];
+    const original = client.memory;
+    client.memory = async (op: unknown) => { seen.push(op); return original(op); };
+
+    await sharedStatusSet(target, 'active', defaultStatusContent('active'));
+    const op = seen[0] as Record<string, unknown>;
+    assert.equal(op.content, 'status: active');
+    assert.equal(op.id, deterministicEntryId('status: active', 'memory', 'https://github.com/jan/demo', null));
   });
 });

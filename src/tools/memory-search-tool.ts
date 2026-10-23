@@ -261,7 +261,10 @@ ${shared ? 'When shared memory is configured, results include the shared LAN sto
         const mutationTargetLabel = `[target=${t}]`;
         const targetLabel = entry.target === 'user' ? '👤' : entry.target === 'failure' ? '⚠️' : '🧠';
         const categoryLabel = entry.category ? ` [${entry.category}]` : '';
-        output += `${targetLabel} ${projectLabel} ${mutationTargetLabel}${categoryLabel} ${entry.content}\n`;
+        // Status-kind shared hits are tagged from the wire `kind`/`state`
+        // FIELDS — never by content parsing (spine "Status entries", FR-10).
+        const statusLabel = entry.kind === 'status' && entry.state ? ` [status: ${entry.state}]` : '';
+        output += `${targetLabel} ${projectLabel} ${mutationTargetLabel}${categoryLabel}${statusLabel} ${entry.content}\n`;
         output += `   Created: ${entry.created} | Last used: ${entry.lastReferenced}\n`;
         if (entry.source === 'shared') {
           output += sharedHitFooter(entry) + '\n';

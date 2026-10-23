@@ -121,6 +121,13 @@ export const SearchHit = Type.Object({
   correctedTo: Type.Optional(Type.String()),
   created: Type.String(),
   lastReferenced: Type.String(),
+  /**
+   * Entry kind (story 3): present on status-kind entries only (absent = the
+   * store default `memory`). The client renders a status tag from these
+   * FIELDS, never from content parsing (spine "Status entries").
+   */
+  kind: Type.Optional(Kind),
+  state: Type.Optional(State),
   // Mandatory provenance (hub-stamped)
   machine: Type.String(),
   session: Type.String(),

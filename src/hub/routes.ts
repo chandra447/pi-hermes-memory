@@ -124,6 +124,13 @@ function toSearchHit(entry: SharedEntry): SearchHit {
   };
   if (entry.project_key !== undefined) hit.project = entry.project_key;
   if (entry.category !== undefined) hit.category = entry.category;
+  // Status-kind entries carry their kind/state on the hit (story 3, FR-10):
+  // the client tags the result from these fields, never by parsing content.
+  // Absent = the store default `memory` — only the reserved kind is emitted.
+  if (entry.kind === 'status') {
+    hit.kind = entry.kind;
+    hit.state = entry.state;
+  }
   if (entry.failure_reason !== undefined) hit.failureReason = entry.failure_reason;
   if (entry.tool_state !== undefined) hit.toolState = entry.tool_state;
   if (entry.corrected_to !== undefined) hit.correctedTo = entry.corrected_to;

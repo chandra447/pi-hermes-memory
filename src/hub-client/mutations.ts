@@ -18,7 +18,7 @@ import {
 } from './client.js';
 import { deterministicEntryId } from '../shared/content-id.js';
 import { normalizeMemoryLookupText } from '../store/memory-lookup.js';
-import type { MemoryCategory } from '../shared/vocabulary.js';
+import type { MemoryCategory, StatusWord } from '../shared/vocabulary.js';
 import type { MemoryOpRequest, SearchHit } from '../shared/wire.js';
 
 export interface SharedMutationTarget {
@@ -141,6 +141,47 @@ export async function sharedReplace(
     }
   }
   return outcome;
+}
+
+/**
+ * The deterministic content a status entry carries when the caller gives no
+ * note (story 3). One rule, shared by every box: identical state transitions
+ * with no note hash to the SAME id on every machine (cross-box dedup), so
+ * the default lives next to the mutation helpers, not in the tool.
+ */
+export function defaultStatusContent(state: StatusWord): string {
+  return `status: ${state}`;
+}
+
+/**
+ * Record a project status change (story 3, FR-11). A status entry is the
+ * RESERVED KIND: scope `memory`, category null, project_key = the resolved
+ * key, `kind: "status"` + `state` = one of the six shared-vocabulary words.
+ * The id is the frozen deterministic content hash — same note + state
+ * convention ⇒ same id on every box, so the hub upserts instead of
+ * duplicating. Provenance is stamped by the hub (AD-8): this sends only
+ * content + key + state + session pointer.
+ */
+export async function sharedStatusSet(
+  target: SharedMutationTarget,
+  state: StatusWord,
+  content: string,
+): Promise<{ action: string; entry: unknown }> {
+  // Status entries are memory-scoped, project-attributed, un-categorized —
+  // the id hash and the stored fields must agree on all three (EC-3 rule).
+  const id = deterministicEntryId(content, 'memory', target.projectKey ?? null, null);
+  const op: MemoryOpRequest = {
+    op: 'add',
+    id,
+    scope: 'memory',
+    session: target.sessionId,
+    content,
+    ...(target.projectKey !== undefined ? { project_key: target.projectKey } : {}),
+    kind: 'status',
+    state,
+  };
+  const res = await target.client.memory(op);
+  return { action: String(res.action ?? 'unknown'), entry: res.entry };
 }
 
 export interface SharedRemoveOutcome {

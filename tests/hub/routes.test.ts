@@ -312,6 +312,31 @@ describe('POST /search (AD-15 wire shape)', () => {
     assert.equal(res.status, 400);
     assert.equal((res.json() as { error: { code: string } }).error.code, 'invalid_request');
   });
+
+  it('status-kind hits carry kind/state; memory-kind hits carry neither (story 3, FR-10)', async () => {
+    const project = 'https://github.com/jan/status-tag-proj';
+    await request('POST', '/memory', {
+      token: boxAToken,
+      body: { op: 'add', id: uuid7(), content: 'quartz status entry note', scope: 'memory', session: 's', kind: 'status', state: 'hardening', project_key: project },
+    });
+    await request('POST', '/memory', {
+      token: boxAToken,
+      body: { op: 'add', id: uuid7(), content: 'quartz ordinary fact', scope: 'memory', session: 's', project_key: project },
+    });
+    const res = await request('POST', '/search', {
+      token: boxBToken,
+      body: { query: 'quartz', project },
+    });
+    assert.equal(res.status, 200);
+    const { hits } = res.json() as { hits: Record<string, unknown>[] };
+    assert.equal(hits.length, 2);
+    const statusHit = hits.find((h) => h.content === 'quartz status entry note')!;
+    assert.equal(statusHit.kind, 'status');
+    assert.equal(statusHit.state, 'hardening');
+    const memoryHit = hits.find((h) => h.content === 'quartz ordinary fact')!;
+    assert.equal(memoryHit.kind, undefined, 'absent kind = the store default memory');
+    assert.equal(memoryHit.state, undefined);
+  });
 });
 
 describe('GET /status (spine "Status entries")', () => {

@@ -148,3 +148,49 @@ describe('merge edges (VG-17, VG-20)', () => {
     assert.equal(upStateLine(0), 'shared: up (0 shared hits)');
   });
 });
+
+describe('status-kind pass-through (story 3 — tagged by fields, never by content)', () => {
+  it('mapSharedHit carries kind/state from the wire hit', () => {
+    const hit = mapSharedHit({
+      id: '01900000-0000-7000-8000-000000000002',
+      project: 'https://github.com/jan/proj',
+      target: 'memory',
+      content: 'status: hardening — needs a rerun',
+      created: '2026-01-01T00:00:00.000Z',
+      lastReferenced: '2026-01-02T00:00:00.000Z',
+      kind: 'status',
+      state: 'hardening',
+      machine: 'box-b',
+      session: 'session-abc',
+      identity: 'box-b',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+      provenance: [{ machine: 'box-b', session: 'session-abc', at: '2026-01-01T00:00:00.000Z' }],
+      source: 'shared',
+    });
+    assert.equal(hit.kind, 'status');
+    assert.equal(hit.state, 'hardening');
+  });
+
+  it('mapSharedHit leaves kind/state absent for ordinary hits; mapLocalHit never has them', () => {
+    const plain = mapSharedHit({
+      id: '01900000-0000-7000-8000-000000000003',
+      target: 'memory',
+      content: 'a fact that merely says "status: active" in its text',
+      created: '2026-01-01T00:00:00.000Z',
+      lastReferenced: '2026-01-01T00:00:00.000Z',
+      machine: 'box-b',
+      session: 's',
+      identity: 'box-b',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+      provenance: [{ machine: 'box-b', session: 's', at: '2026-01-01T00:00:00.000Z' }],
+      source: 'shared',
+    });
+    assert.equal(plain.kind, undefined, 'content mentioning a status word is NOT a status entry');
+    assert.equal(plain.state, undefined);
+    const local = mapLocalHit(localEntry('status: active'), 'box-a');
+    assert.equal(local.kind, undefined);
+    assert.equal(local.state, undefined);
+  });
+});

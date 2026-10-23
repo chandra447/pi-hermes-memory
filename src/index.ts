@@ -37,6 +37,7 @@ import { registerMemoryTool } from "./tools/memory-tool.js";
 import { registerSkillTool } from "./tools/skill-tool.js";
 import { registerSessionSearchTool } from "./tools/session-search-tool.js";
 import { registerMemorySearchTool } from "./tools/memory-search-tool.js";
+import { registerMemoryStatusTool } from "./tools/memory-status-tool.js";
 import { setupBackgroundReview } from "./handlers/background-review.js";
 import { setupSessionFlush } from "./handlers/session-flush.js";
 import { registerInsightsCommand } from "./handlers/insights.js";
@@ -437,6 +438,16 @@ export default function (pi: ExtensionAPI) {
   registerSessionSearchTool(config.sessionSearch?.variant === "anchors" ? pi : memoryPi,
     dbManager, config.sessionSearch ?? { variant: "legacy" });
   registerMemorySearchTool(memoryPi, dbManager, { usageTrackingEnabled: config.usageHitTrackingEnabled, shared: sharedClient });
+  // Story 3: the live status rollup tool exists ONLY when shared memory is
+  // configured — no client file ⇒ the v1 tool surface is untouched (M4).
+  if (sharedClient) {
+    registerMemoryStatusTool(memoryPi, dbManager, {
+      shared: sharedClient,
+      projectStoreRef,
+      projectNameRef,
+      bindProjectFromCwd,
+    });
+  }
   registerIndexSessionsCommand(memoryPi, config);
 
   // ── 12. Auto-index session on shutdown ──
