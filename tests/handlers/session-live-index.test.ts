@@ -9,6 +9,7 @@ import {
   waitForLiveSessionIndex,
   type SessionLiveIndexState,
 } from '../../src/handlers/session-live-index.js';
+import { rmTestDirSync } from "../helpers/cleanup.js";
 
 describe('session live indexing handler', () => {
   let tmpDir: string;
@@ -21,7 +22,7 @@ describe('session live indexing handler', () => {
 
   afterEach(() => {
     dbManager.close();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    rmTestDirSync(tmpDir);
   });
 
   function createSnapshot(entries: unknown[]) {

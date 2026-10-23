@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
+import { rmTestDir } from "./helpers/cleanup.js";
 
 interface MockPi {
   handlers: Record<string, Array<(event: any, ctx: any) => unknown>>;
@@ -101,9 +102,9 @@ describe("session project memory rebinding", () => {
       process.chdir(previousCwd);
       if (previousAgentRoot === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentRoot;
-      await fs.rm(agentRoot, { recursive: true, force: true });
-      await fs.rm(launchDir, { recursive: true, force: true });
-      await fs.rm(targetDir, { recursive: true, force: true });
+      await rmTestDir(agentRoot);
+      await rmTestDir(launchDir);
+      await rmTestDir(targetDir);
     }
   });
 });

@@ -23,6 +23,7 @@ import {
   DIRECT_REVIEW_SYSTEM_PROMPT,
   MEMORY_FILE,
 } from "../../src/constants.js";
+import { rmTestDir } from "../helpers/cleanup.js";
 
 function mockModel(reasoning: boolean): Model<Api> {
   return {
@@ -643,7 +644,7 @@ describe("applyReviewOperations", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await rmTestDir(tmpDir);
   });
 
   it("applies add operations to memory store", async () => {
@@ -1407,7 +1408,7 @@ describe("thinking-channel CoT recovery (#197)", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await rmTestDir(tmpDir);
   });
 
   function registry() {
@@ -1462,7 +1463,7 @@ describe("thinking-channel trust rules (#235)", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await rmTestDir(tmpDir);
   });
 
   function registry() {
@@ -1617,7 +1618,7 @@ describe("opencode session header (#250)", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await rmTestDir(tmpDir);
   });
 
   async function makeStore() {
