@@ -472,6 +472,17 @@ async function migrateDatabaseGeneration(
   } | null = null;
   let corruptGeneration = false;
   let generationNames = sourceNames;
+  // Windows refuses to rename a file that still has an open handle, and the
+  // SQLite connection holds sessions.db plus its -wal/-shm sidecars open. The
+  // write lock has served its purpose once the snapshot is staged, so drop it
+  // before moving the generation out of legacyRoot. Closing also checkpoints
+  // the WAL, which is why the file list is re-read afterwards.
+  const releaseWriteLock = (): void => {
+    if (!writeLock) return;
+    const lock = writeLock;
+    writeLock = null;
+    try { lock.close(); } catch {}
+  };
   try {
     await fs.writeFile(pendingMarker, `${process.pid}:${randomUUID()}\n`, { mode: 0o600 });
     await fs.mkdir(stagingDir, { mode: 0o700 });
@@ -509,6 +520,8 @@ async function migrateDatabaseGeneration(
         }
       }
       if (corruptGeneration) {
+        releaseWriteLock();
+        generationNames = await databaseFilesAt(legacyRoot);
         try {
           retired = await moveDatabaseGeneration(generationNames, legacyRoot, retirementDir, retire);
         } catch (error) {
@@ -526,6 +539,8 @@ async function migrateDatabaseGeneration(
     }
 
     if (!corruptGeneration) {
+      releaseWriteLock();
+      generationNames = await databaseFilesAt(legacyRoot);
       try {
         retired = await moveDatabaseGeneration(generationNames, legacyRoot, retirementDir, retire);
       } catch (error) {
@@ -537,16 +552,7 @@ async function migrateDatabaseGeneration(
       published.set(target, await fileIdentity(target));
     }
 
-    if (writeLock) {
-      // Every generation file has already been moved out of legacyRoot, so this
-      // transaction can no longer guard anything and its database no longer
-      // exists at this path. bun:sqlite reports SQLITE_IOERR here where
-      // better-sqlite3 succeeds; either way a failed cleanup COMMIT must not
-      // roll back an otherwise completed migration.
-      // The connection is closed in `finally` either way.
-      try { writeLock.exec("COMMIT"); } catch {}
-    }
-    result.moved += generationNames.length;
+    result.moved += retired.length;
   } catch (error) {
     for (const [target, identity] of [...published.entries()].reverse()) {
       try { await unlinkIfOwned(target, identity); } catch {}
