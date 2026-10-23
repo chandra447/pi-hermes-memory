@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { AtomicLockCoordinator } from "../../src/store/atomic-lock-coordinator.js";
 import { withMarkdownMutationLock } from "../../src/store/markdown-mutation-lock.js";
+import { rmTestDirSync } from "../helpers/cleanup.js";
 
 describe("markdown mutation lock", () => {
   it("preserves a committed result and recovers release before the next acquire", async () => {
@@ -28,7 +29,7 @@ describe("markdown mutation lock", () => {
       assert.ok(deleteAttempts >= 4);
     } finally {
       prototype.deleteOwnedLock = originalDeleteOwnedLock;
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 });
