@@ -184,6 +184,19 @@ describe('HubStore.latestStatus (spine "Status entries")', () => {
     }));
     assert.equal(store.latestStatus('https://github.com/jan/y'), null);
   });
+
+  it('removing the latest status falls back to the PREVIOUS one (the rollup is a live query over history)', () => {
+    const project = 'https://github.com/jan/fallback';
+    const older = '01999999-0000-7000-8000-0000000000a1';
+    const newer = '01999999-0000-7000-8000-0000000000a2';
+    store.upsert(upsertInput({ id: older, project_key: project, kind: 'status', state: 'active', content: 'started', updated_at: T1 }));
+    store.upsert(upsertInput({ id: newer, project_key: project, kind: 'status', state: 'done', content: 'shipped', updated_at: T3 }));
+    assert.equal(store.latestStatus(project)!.state, 'done');
+    assert.equal(store.remove(newer), true);
+    const fallback = store.latestStatus(project)!;
+    assert.equal(fallback.state, 'active');
+    assert.equal(fallback.content, 'started');
+  });
 });
 
 describe('HubStore.remove / exportRows / count', () => {
