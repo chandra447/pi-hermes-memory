@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The legacy SQLite migration no longer trades its write lock for a lost commit** ([#304](https://github.com/chandra447/pi-hermes-memory/issues/304)): the root migration held `BEGIN IMMEDIATE` open across the generation move, and Windows refuses to rename a file with an open handle — so the move failed with EBUSY on `sessions.db-wal` and the store never migrated. Where closing is mandatory the migration now closes first; where it is not (POSIX renames an open file) the lock stays held through the move, which is what keeps a concurrent writer out. Closing re-opens the window that lock was holding, so Windows additionally refuses to move a generation whose checkpointed WAL survived (another process still has it open) and revalidates the moved files against the staged snapshot, rolling back rather than publishing an older snapshot that a concurrent commit has overtaken. The Windows-skipped WAL and generation cases now assert the platform-appropriate outcome, and two new tests cover a write that lands during retirement and a cross-process holder of the legacy generation.
+
 ## [0.9.11] - 2026-10-22
 
 ### Changed

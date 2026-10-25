@@ -1,6 +1,8 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -19,6 +21,18 @@ beforeEach(() => {
 afterEach(() => {
   rmTestDirSync(tmpDir);
 });
+
+/**
+ * POSIX renames a file that is still open, so a live second connection can sit
+ * on the legacy generation while it moves. Windows refuses that rename (EBUSY),
+ * which is why the migration closes its own handle there and revalidates instead.
+ * The cases below therefore assert the platform-appropriate outcome instead of
+ * being skipped for Windows.
+ */
+const WINDOWS = process.platform === "win32";
+const LIVE_RENAME_SKIP = WINDOWS
+  ? "needs a live second connection during the backup, which Windows cannot rename past"
+  : false;
 
 describe("migrateExtensionRoot", () => {
   it("moves legacy files into new extension root", async () => {
@@ -85,6 +99,10 @@ describe("migrateExtensionRoot", () => {
       sourceDb.pragma("wal_checkpoint(TRUNCATE)");
       sourceDb.prepare("INSERT INTO memories VALUES (?)").run("committed only in WAL");
       assert.equal(fs.existsSync(path.join(legacy, "sessions.db-wal")), true);
+      // Windows cannot rename a file that still has an open handle, so the WAL
+      // generation is exercised there with the fixture connection closed; the
+      // open-handle case is covered by the cross-process test below.
+      if (WINDOWS) sourceDb.close();
 
       const result = await migrateExtensionRoot(legacy, target);
 
@@ -106,7 +124,7 @@ describe("migrateExtensionRoot", () => {
     }
   });
 
-  it("migrates one SQLite snapshot while a checkpoint runs", async () => {
+  it("migrates one SQLite snapshot while a checkpoint runs", { skip: LIVE_RENAME_SKIP }, async () => {
     const legacy = path.join(tmpDir, "memory");
     const target = path.join(tmpDir, "pi-hermes-memory");
     fs.mkdirSync(legacy, { recursive: true });
@@ -174,6 +192,20 @@ describe("migrateExtensionRoot", () => {
       });
 
       assert.equal(concurrentWriteCode, "SQLITE_BUSY");
+      if (WINDOWS) {
+        // Closing the write lock is mandatory for the rename here, and the
+        // fixture's live connection keeps the WAL present, so the migration
+        // refuses and leaves the legacy generation for a retry instead of
+        // moving a file it cannot rename.
+        assert.deepStrictEqual(result.criticalFailures.map((failure) => failure.name), ["sessions.db"]);
+        assert.match(
+          result.criticalFailures[0]!.message,
+          /another process still has the legacy SQLite generation open/,
+        );
+        assert.equal(fs.existsSync(path.join(target, "sessions.db")), false);
+        assert.equal(fs.existsSync(path.join(legacy, "sessions.db")), true);
+        return;
+      }
       assert.deepStrictEqual(result.criticalFailures, []);
       const migrated = new Database(path.join(target, "sessions.db"), { readonly: true });
       try {
@@ -187,6 +219,128 @@ describe("migrateExtensionRoot", () => {
       assert.equal(fs.existsSync(path.join(legacy, "sessions.db")), false);
     } finally {
       sourceDb.close();
+    }
+  });
+
+  it("never publishes a snapshot a write overtook during source retirement", async () => {
+    const legacy = path.join(tmpDir, "memory");
+    const target = path.join(tmpDir, "pi-hermes-memory");
+    fs.mkdirSync(legacy, { recursive: true });
+    const setup = new Database(path.join(legacy, "sessions.db"));
+    setup.pragma("journal_mode = WAL");
+    setup.exec("CREATE TABLE memories (content TEXT); INSERT INTO memories VALUES ('before migration')");
+    setup.close();
+
+    let writeLanded = false;
+    const result = await migrateExtensionRoot(legacy, target, {
+      retireDatabaseFile: async (source, destination) => {
+        if (!writeLanded) {
+          const racer = new Database(source);
+          try {
+            racer.prepare("INSERT INTO memories VALUES (?)").run("raced migration");
+            writeLanded = true;
+          } catch {
+            // The platform that still holds the write lock refuses this one; the
+            // code is not asserted because SQLite reports it differently across
+            // builds and only the outcome matters here.
+          } finally {
+            racer.close();
+          }
+        }
+        await fs.promises.rename(source, destination);
+      },
+    });
+
+    if (!writeLanded) {
+      // POSIX keeps the write lock held through the move, so the window never
+      // opens and the snapshot is the whole generation.
+      assert.deepStrictEqual(result.criticalFailures, []);
+      const migrated = new Database(path.join(target, "sessions.db"), { readonly: true });
+      try {
+        assert.deepStrictEqual(
+          migrated.prepare("SELECT content FROM memories ORDER BY rowid").all(),
+          [{ content: "before migration" }],
+        );
+      } finally {
+        migrated.close();
+      }
+      return;
+    }
+
+    // Windows has to close the lock before the rename, so this write lands. The
+    // migration must notice and refuse to publish the older snapshot rather than
+    // retire a generation that is newer than the one it staged.
+    assert.deepStrictEqual(result.criticalFailures.map((failure) => failure.name), ["sessions.db"]);
+    assert.match(result.criticalFailures[0]!.message, /a concurrent write reached the legacy SQLite generation/);
+    assert.equal(fs.existsSync(path.join(target, "sessions.db")), false);
+    const restored = new Database(path.join(legacy, "sessions.db"), { readonly: true });
+    try {
+      assert.deepStrictEqual(
+        restored.prepare("SELECT content FROM memories ORDER BY rowid").all(),
+        [{ content: "before migration" }, { content: "raced migration" }],
+      );
+    } finally {
+      restored.close();
+    }
+  });
+
+  it("refuses to migrate while another process holds the legacy generation", {
+    skip: WINDOWS ? false : "Windows-only guard: POSIX renames an open generation past a live holder",
+  }, async () => {
+    const legacy = path.join(tmpDir, "memory");
+    const target = path.join(tmpDir, "pi-hermes-memory");
+    fs.mkdirSync(legacy, { recursive: true });
+    const setup = new Database(path.join(legacy, "sessions.db"));
+    setup.pragma("journal_mode = WAL");
+    setup.exec("CREATE TABLE memories (content TEXT); INSERT INTO memories VALUES ('held by a child')");
+    setup.close();
+
+    const holder = spawn(
+      process.execPath,
+      [
+        "-e",
+        `const Database = require(${JSON.stringify(createRequire(import.meta.url).resolve("better-sqlite3"))});
+         const db = new Database(${JSON.stringify(path.join(legacy, "sessions.db"))});
+         db.pragma("journal_mode = WAL");
+         db.prepare("SELECT COUNT(*) AS count FROM memories").get();
+         process.stdout.write("ready\\n");
+         setInterval(() => {}, 1000);`,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    try {
+      await new Promise<void>((resolve, reject) => {
+        holder.stdout!.once("data", (chunk: Buffer) => {
+          if (chunk.toString().includes("ready")) resolve();
+          else reject(new Error(`unexpected holder output: ${chunk.toString()}`));
+        });
+        holder.once("exit", (code) => reject(new Error(`holder exited before ready: ${code}`)));
+      });
+
+      const blocked = await migrateExtensionRoot(legacy, target);
+
+      assert.deepStrictEqual(blocked.criticalFailures.map((failure) => failure.name), ["sessions.db"]);
+      assert.equal(fs.existsSync(path.join(target, "sessions.db")), false);
+      assert.equal(fs.existsSync(path.join(legacy, "sessions.db")), true);
+
+      await new Promise<void>((resolve) => {
+        holder.once("exit", () => resolve());
+        holder.kill();
+      });
+      const retried = await migrateExtensionRoot(legacy, target);
+
+      assert.deepStrictEqual(retried.criticalFailures, []);
+      const migrated = new Database(path.join(target, "sessions.db"), { readonly: true });
+      try {
+        assert.deepStrictEqual(
+          migrated.prepare("SELECT content FROM memories").all(),
+          [{ content: "held by a child" }],
+        );
+      } finally {
+        migrated.close();
+      }
+    } finally {
+      holder.kill();
     }
   });
 
