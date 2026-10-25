@@ -231,15 +231,18 @@ describe("migrateExtensionRoot", () => {
     setup.exec("CREATE TABLE memories (content TEXT); INSERT INTO memories VALUES ('before migration')");
     setup.close();
 
-    let writeCode = "";
+    let writeLanded = false;
     const result = await migrateExtensionRoot(legacy, target, {
       retireDatabaseFile: async (source, destination) => {
-        if (!writeCode) {
+        if (!writeLanded) {
           const racer = new Database(source);
           try {
             racer.prepare("INSERT INTO memories VALUES (?)").run("raced migration");
-          } catch (error) {
-            writeCode = (error as { code?: string }).code ?? "unknown";
+            writeLanded = true;
+          } catch {
+            // The platform that still holds the write lock refuses this one; the
+            // code is not asserted because SQLite reports it differently across
+            // builds and only the outcome matters here.
           } finally {
             racer.close();
           }
@@ -248,7 +251,7 @@ describe("migrateExtensionRoot", () => {
       },
     });
 
-    if (writeCode === "SQLITE_BUSY") {
+    if (!writeLanded) {
       // POSIX keeps the write lock held through the move, so the window never
       // opens and the snapshot is the whole generation.
       assert.deepStrictEqual(result.criticalFailures, []);
