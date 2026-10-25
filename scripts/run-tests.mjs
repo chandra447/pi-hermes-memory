@@ -11,18 +11,32 @@
  * many files share a single process.
  */
 import { spawn } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const TIMEOUT_MS = Number(process.env.TEST_TIMEOUT ?? 120) * 1000;
+const TESTS_DIR = join(root, "tests");
 // Spawn the tsx CLI through node directly: Windows refuses to spawn .cmd shims
 // without `shell: true` (EINVAL), and shell mode would reintroduce quoting bugs.
 const TSX_CLI = join(root, "node_modules", "tsx", "dist", "cli.mjs");
+const DEFAULT_TIMEOUT_SECONDS = "120";
 
-if (!Number.isFinite(TIMEOUT_MS) || TIMEOUT_MS < 0) {
+const requestedTimeout = (process.env.TEST_TIMEOUT ?? "").trim();
+const timeoutSeconds = requestedTimeout === "" ? DEFAULT_TIMEOUT_SECONDS : requestedTimeout;
+// Same grammar as the shell runner it replaces: whole or fractional seconds.
+if (!/^[0-9]+([.][0-9]+)?$/.test(timeoutSeconds)) {
   console.error(`Invalid TEST_TIMEOUT: ${process.env.TEST_TIMEOUT} (expected a non-negative number of seconds)`);
+  process.exit(2);
+}
+const TIMEOUT_MS = Number(timeoutSeconds) * 1000;
+
+for (const [label, target] of [
+  ["tests directory", TESTS_DIR],
+  ["tsx CLI", TSX_CLI],
+]) {
+  if (existsSync(target)) continue;
+  console.error(`Cannot run the suite: missing ${label} at ${target}. Run \`npm install\` first.`);
   process.exit(2);
 }
 
@@ -34,22 +48,39 @@ function collectTests(dir) {
     if (entry.isDirectory()) files.push(...collectTests(full));
     else if (entry.name.endsWith(".test.ts")) files.push(full);
   }
-  return files;
+  return files.sort();
 }
 
-/** Kill the child and anything it spawned (npx wraps node on both platforms). */
+/**
+ * Kill the child and anything it spawned.
+ *
+ * On POSIX the child is the tsx CLI, and the real `node --test` process (plus
+ * its isolation worker) are its descendants, so signalling the child alone
+ * leaves the test running: the whole process group the detached spawn created
+ * has to be signalled, which is what `timeout --kill-after` used to do. Windows
+ * has no process groups; `taskkill /T` walks the tree instead.
+ */
 function killTree(child) {
   if (child.exitCode !== null) return;
   if (process.platform === "win32") {
     spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-  } else {
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
     child.kill("SIGKILL");
   }
 }
 
 function runTestFile(file) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [TSX_CLI, "--test", file], { cwd: root, stdio: "inherit" });
+    const child = spawn(process.execPath, [TSX_CLI, "--test", file], {
+      cwd: root,
+      stdio: "inherit",
+      // Detach on POSIX so the timeout can signal the whole tree, not just tsx.
+      detached: process.platform !== "win32",
+    });
     let timedOut = false;
     const timer = TIMEOUT_MS > 0
       ? setTimeout(() => { timedOut = true; killTree(child); }, TIMEOUT_MS)
@@ -66,7 +97,7 @@ function runTestFile(file) {
   });
 }
 
-const tests = collectTests(join(root, "tests"));
+const tests = collectTests(TESTS_DIR);
 const failures = [];
 let passed = 0;
 
