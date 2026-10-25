@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
 import { AtomicLockCoordinator } from '../../src/store/atomic-lock-coordinator.js';
+import { rmTestDirSync } from "../helpers/cleanup.js";
 
 describe('AtomicLockCoordinator', () => {
   it('cannot release a successor with a stale ownership token', () => {
@@ -41,7 +42,7 @@ describe('AtomicLockCoordinator', () => {
       successor.release();
       assert.ok(coordinator.tryAcquire('shared-target', { staleMs: 0 }));
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 
@@ -55,7 +56,7 @@ describe('AtomicLockCoordinator', () => {
       assert.ok(coordinator.tryAcquire('second', { staleMs: 0 }));
       first.release();
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 
@@ -81,7 +82,7 @@ describe('AtomicLockCoordinator', () => {
       observedIncarnation = 'successor-start';
       assert.ok(contender.tryAcquire('shared', { staleMs: 0 }));
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 
@@ -106,7 +107,7 @@ describe('AtomicLockCoordinator', () => {
       lease.release();
       assert.ok(contender.tryAcquire('shared', { staleMs: 0 }));
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 
@@ -139,7 +140,7 @@ describe('AtomicLockCoordinator', () => {
       stolen.release();
       lease.release();
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 
@@ -164,7 +165,7 @@ describe('AtomicLockCoordinator', () => {
       lease.release();
       assert.ok(contender.tryAcquire('shared', { staleMs: 0 }));
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 
@@ -201,7 +202,7 @@ describe('AtomicLockCoordinator', () => {
 
       successor.release();
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 
@@ -228,7 +229,7 @@ describe('AtomicLockCoordinator', () => {
       second.release();
     } finally {
       prototype.deleteOwnedLock = originalDeleteOwnedLock;
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 
@@ -258,7 +259,7 @@ describe('AtomicLockCoordinator', () => {
       assert.ok(recovered, 'coordinator must reopen after a failed rollback');
       recovered.release();
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 
@@ -272,7 +273,7 @@ describe('AtomicLockCoordinator', () => {
       assert.strictEqual(AtomicLockCoordinator.shared(path.join(tmpDir, '.', 'locks.sqlite')), first);
       assert.notStrictEqual(AtomicLockCoordinator.shared(path.join(tmpDir, 'other.sqlite')), first);
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 
@@ -307,7 +308,7 @@ describe('AtomicLockCoordinator', () => {
       assert.strictEqual(contender.tryAcquire('shared', { staleMs: 5_000 }), null);
       lease.release();
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 
@@ -341,7 +342,7 @@ describe('AtomicLockCoordinator', () => {
       assert.strictEqual(successor.renew(), true);
       successor.release();
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 
@@ -375,7 +376,7 @@ describe('AtomicLockCoordinator', () => {
         verifyDb.close();
       }
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      rmTestDirSync(tmpDir);
     }
   });
 });
