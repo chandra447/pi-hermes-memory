@@ -4,6 +4,7 @@ import {
   buildFallbackFts5Query,
   buildNaturalLanguageFallbackQuery,
   collectLikeTerms,
+  collectNaturalLanguageTerms,
   isFts5QueryError,
   normalizeFts5Query,
   normalizeNaturalLanguageFts5Query,
@@ -257,6 +258,13 @@ function maxDate(a: string, b: string): string {
 function escapeLikePattern(text: string): string {
   return text.replace(/[\\%_]/g, '\\$&');
 }
+
+// The literal fallback builds one OR'd LIKE per term, so its shape is bounded:
+// a whitespace-only phrase trims to an empty pattern that matches every row, an
+// OR chain past SQLite's expression depth limit throws, and a pattern over
+// SQLITE_MAX_LIKE_PATTERN_LENGTH (50 KB) makes the LIKE itself fail.
+const LITERAL_FALLBACK_MAX_TERMS = 32;
+const LITERAL_FALLBACK_MAX_TERM_CHARS = 256;
 
 function isShortCjkLiteralQuery(query: string): boolean {
   const trimmed = query.trim();
@@ -959,17 +967,18 @@ export function searchMemories(
   };
 
   // Every term a stop word or connector leaves FTS5 nothing to match.
-  // Degrade to a scoped literal substring search (OR over the raw terms) —
-  // the same fallback session search uses for this case — instead of a hard
-  // [].
-  const runLiteralLikeFallback = (): SqliteMemoryEntry[] => {
-    const terms = collectLikeTerms(query);
-    if (terms.length === 0) return [];
+  const runLiteralLikeFallback = (terms: string[]): SqliteMemoryEntry[] => {
+    const literalTerms = terms
+      .map((term) => term.trim())
+      .filter((term) => term.length > 0)
+      .slice(0, LITERAL_FALLBACK_MAX_TERMS)
+      .map((term) => term.slice(0, LITERAL_FALLBACK_MAX_TERM_CHARS));
+    if (literalTerms.length === 0) return [];
 
     const conditions: string[] = [
-      `(${terms.map(() => "m.content LIKE ? ESCAPE '\\'").join(' OR ')})`,
+      `(${literalTerms.map(() => "m.content LIKE ? ESCAPE '\\'").join(' OR ')})`,
     ];
-    const params: unknown[] = terms.map((term) => `%${escapeLikePattern(term.trim())}%`);
+    const params: unknown[] = literalTerms.map((term) => `%${escapeLikePattern(term)}%`);
 
     if (project !== undefined) {
       if (project === null) {
@@ -979,10 +988,7 @@ export function searchMemories(
         params.push(project);
       }
     }
-    if (target) {
-      conditions.push('m.target = ?');
-      params.push(target);
-    }
+    conditions.push(...buildSearchTargetConditions(params, target, 'm'));
     if (category) {
       conditions.push('m.category = ?');
       params.push(category);
@@ -1010,7 +1016,9 @@ export function searchMemories(
   };
 
   if (normalizedQuery.length === 0) {
-    return runLiteralLikeFallback();
+    // Nothing survived normalization, so the raw terms are the only thing left
+    // to search for.
+    return runLiteralLikeFallback(collectLikeTerms(query));
   }
 
   const exactResults = runSearch(normalizedQuery);
@@ -1047,7 +1055,20 @@ export function searchMemories(
     return exactResults;
   }
 
-  return runSearch(fallbackQuery);
+  const broadenedResults = runSearch(fallbackQuery);
+  if (broadenedResults.length > 0) {
+    return broadenedResults;
+  }
+
+  // A natural-language query has no exact semantics to preserve, unlike the
+  // operator and single-term queries that return above. When both the
+  // implicit-AND search and the OR broadened search miss, degrade to the same
+  // scoped literal fallback session search ends with: terms below the trigram
+  // window — two-character CJK terms are the common case (#291) — match neither
+  // FTS search, and dropping them would report no results for stored text. The
+  // terms are the ones the FTS query searched for, so stop words the FTS search
+  // dropped cannot match — or count as a hit — here either.
+  return runLiteralLikeFallback(collectNaturalLanguageTerms(query));
 }
 
 /**
