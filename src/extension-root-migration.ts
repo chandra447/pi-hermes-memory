@@ -137,6 +137,11 @@ export interface ExtensionRootMigrationOptions {
 
 const MIGRATION_LOCK_WAIT_MS = 5000;
 const MIGRATION_LOCK_POLL_MS = 50;
+// Windows refuses to rename a file that still has an open handle, so the SQLite
+// connection behind the write lock has to be closed before the generation moves
+// there. POSIX renames an open file, which lets that lock stay held through the
+// move and keep a concurrent writer out.
+const CLOSE_HANDLES_BEFORE_GENERATION_MOVE = process.platform === "win32";
 
 export function isDatabaseMigrationPending(legacyRoot: string, targetRoot: string): boolean {
   return existsSync(path.join(targetRoot, DATABASE_MIGRATION_PENDING_FILE))
@@ -168,6 +173,55 @@ async function databaseFilesAt(root: string): Promise<string[]> {
     if (await pathEntryExists(path.join(root, name))) names.push(name);
   }
   return names;
+}
+
+/**
+ * Identity of each generation file that a concurrent commit would change. The
+ * shared-memory file is excluded: any reader attaching to the database touches
+ * it, which is not evidence of a write.
+ */
+async function generationFingerprints(root: string): Promise<Map<string, string>> {
+  const fingerprints = new Map<string, string>();
+  for (const name of await databaseFilesAt(root)) {
+    if (name === "sessions.db-shm") continue;
+    try {
+      const stat = await fs.stat(path.join(root, name));
+      fingerprints.set(name, `${stat.size}:${stat.mtimeMs}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  return fingerprints;
+}
+
+/**
+ * Windows has to close its write lock before the generation moves, which opens
+ * the window that lock was holding: another process can commit to the legacy
+ * generation after the snapshot was staged. On POSIX that commit would be moved
+ * into the retirement directory and deleted along with it while the published
+ * snapshot is older, and the migration would still report success. Refuse to
+ * publish in that case so the rollback restores the source for a retry.
+ */
+async function assertGenerationUnmoved(
+  fingerprints: Map<string, string>,
+  legacyRoot: string,
+  retirementDir: string,
+): Promise<void> {
+  const recreated = await databaseFilesAt(legacyRoot);
+  const moved = await generationFingerprints(retirementDir);
+  const touched: string[] = [];
+  for (const [name, fingerprint] of moved) {
+    if (fingerprints.get(name) !== fingerprint) touched.push(name);
+  }
+  for (const name of fingerprints.keys()) {
+    if (!moved.has(name)) touched.push(name);
+  }
+  if (recreated.length === 0 && touched.length === 0) return;
+
+  const names = [...new Set([...recreated, ...touched])].join(", ");
+  throw new Error(
+    `a concurrent write reached the legacy SQLite generation (${names}) while it was being retired; the migration was rolled back`,
+  );
 }
 
 async function moveFileSafe(source: string, target: string): Promise<void> {
@@ -473,10 +527,10 @@ async function migrateDatabaseGeneration(
   let corruptGeneration = false;
   let generationNames = sourceNames;
   // Windows refuses to rename a file that still has an open handle, and the
-  // SQLite connection holds sessions.db plus its -wal/-shm sidecars open. The
-  // write lock has served its purpose once the snapshot is staged, so drop it
-  // before moving the generation out of legacyRoot. Closing also checkpoints
-  // the WAL, which is why the file list is re-read afterwards.
+  // SQLite connection holds sessions.db plus its -wal/-shm sidecars open. Where
+  // closing is mandatory the write lock is dropped once the snapshot is staged
+  // (closing also checkpoints the WAL, so the file list is re-read afterwards).
+  // POSIX keeps the lock held through the move instead; see the call site.
   const releaseWriteLock = (): void => {
     if (!writeLock) return;
     const lock = writeLock;
@@ -539,13 +593,37 @@ async function migrateDatabaseGeneration(
     }
 
     if (!corruptGeneration) {
-      releaseWriteLock();
-      generationNames = await databaseFilesAt(legacyRoot);
+      let snapshotFingerprints: Map<string, string> | null = null;
+      if (CLOSE_HANDLES_BEFORE_GENERATION_MOVE) {
+        releaseWriteLock();
+        generationNames = await databaseFilesAt(legacyRoot);
+        // Closing the last connection checkpoints and removes the WAL, so a
+        // surviving sessions.db-wal means another process still holds the legacy
+        // generation open — the cross-process case this path exists for.
+        if (generationNames.includes("sessions.db-wal")) {
+          throw new Error(
+            "another process still has the legacy SQLite generation open; the migration was left pending so it can be retried after that process exits",
+          );
+        }
+        snapshotFingerprints = await generationFingerprints(legacyRoot);
+      }
       try {
         retired = await moveDatabaseGeneration(generationNames, legacyRoot, retirementDir, retire);
       } catch (error) {
         if (error instanceof DatabaseGenerationMoveError) retired = error.moved;
         throw error;
+      }
+      if (snapshotFingerprints) {
+        await assertGenerationUnmoved(snapshotFingerprints, legacyRoot, retirementDir);
+      } else if (writeLock) {
+        // The lock outlived the move here, which is what kept a concurrent writer
+        // out; its database file no longer exists at this path, so a failed
+        // cleanup COMMIT must not fail an otherwise completed move.
+        try {
+          writeLock.exec("COMMIT");
+        } catch {
+          // Cleanup only: the generation is already out of legacyRoot.
+        }
       }
       const target = path.join(targetRoot, "sessions.db");
       await publish(staged, target);
