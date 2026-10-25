@@ -4,7 +4,7 @@
  *
  * The published tarball intentionally omits tests/ and TypeScript (devDependency).
  * When those scripts are run from an installed package (e.g. after `pi install`),
- * fail with a clear message instead of `tsc: not found` / `tests/run-all.sh: not found`.
+ * fail with a clear message instead of `tsc: not found` / `tests: not found`.
  *
  * @see https://github.com/chandra447/pi-hermes-memory/issues/108
  */
@@ -47,7 +47,7 @@ if (mode === "check") {
     );
   }
 } else if (mode === "test") {
-  if (!existsSync(join(root, "tests", "run-all.sh"))) {
+  if (!existsSync(join(root, "tests"))) {
     fail(
       "`npm test` requires the tests/ directory. The published npm package intentionally omits it.",
     );
