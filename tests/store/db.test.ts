@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import Database from 'better-sqlite3';
 import { DatabaseManager, SQLITE_BUSY_TIMEOUT_MS, SQLITE_WAL_AUTOCHECKPOINT_PAGES } from '../../src/store/db.js';
 import { AtomicLockCoordinator } from '../../src/store/atomic-lock-coordinator.js';
+import { rmTestDirSync } from "../helpers/cleanup.js";
 
 describe('DatabaseManager', () => {
   let tmpDir: string;
@@ -19,7 +20,7 @@ describe('DatabaseManager', () => {
 
   afterEach(() => {
     dbManager.close();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    rmTestDirSync(tmpDir);
   });
 
   function assertQuickCheckOk(db: InstanceType<typeof Database>): void {

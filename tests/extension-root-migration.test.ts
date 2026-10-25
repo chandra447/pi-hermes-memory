@@ -8,6 +8,7 @@ import {
   isDatabaseMigrationPending,
   migrateExtensionRoot,
 } from "../src/extension-root-migration.js";
+import { rmTestDirSync } from "./helpers/cleanup.js";
 
 let tmpDir = "";
 
@@ -16,7 +17,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  rmTestDirSync(tmpDir);
 });
 
 /**
