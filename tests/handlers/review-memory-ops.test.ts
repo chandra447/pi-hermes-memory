@@ -23,6 +23,7 @@ import {
   DIRECT_REVIEW_SYSTEM_PROMPT,
   MEMORY_FILE,
 } from "../../src/constants.js";
+import { rmTestDir } from "../helpers/cleanup.js";
 
 function mockModel(reasoning: boolean): Model<Api> {
   return {
@@ -439,6 +440,37 @@ describe("provider auth resolution", () => {
       assert.strictEqual(isAuthRejection(message), false, message);
     }
   });
+
+  it("keeps the cause of an error response instead of settling it as parse_error", async () => {
+    // Pi reports provider failures (and registry setup failures such as an
+    // unconfigured provider) as an error message with no content, not a throw.
+    const complete = async () => ({ stopReason: "error", content: [], errorMessage: "HTTP 500: upstream exploded" });
+
+    const result = await runReview(registryWithHeaderAuth({ Authorization: "Bearer k" }), complete);
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.fallbackReason, "provider_error");
+    assert.match(result.error ?? "", /upstream exploded/);
+  });
+
+  it("points to a Pi upgrade only when the host cannot stream through the registry", async () => {
+    const unregistered = async () => {
+      throw new Error("No API provider registered for api: kiro-api");
+    };
+
+    const oldHost = await runReview(registryWithHeaderAuth({ Authorization: "Bearer k" }), unregistered);
+    assert.strictEqual(oldHost.fallbackReason, "provider_error");
+    assert.match(oldHost.error ?? "", /No API provider registered for api: kiro-api/);
+    assert.match(oldHost.error ?? "", /upgrade Pi to 0\.86\.0/);
+
+    // A host that can stream has nothing to upgrade: the hint would mislead.
+    const newHost = await runReview(
+      { ...registryWithHeaderAuth({ Authorization: "Bearer k" }), streamSimple: () => ({ result: async () => ({}) }) },
+      unregistered,
+    );
+    assert.strictEqual(newHost.fallbackReason, "provider_error");
+    assert.doesNotMatch(newHost.error ?? "", /upgrade Pi/);
+  });
 });
 
 describe("fallback model chain", () => {
@@ -612,7 +644,7 @@ describe("applyReviewOperations", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await rmTestDir(tmpDir);
   });
 
   it("applies add operations to memory store", async () => {
@@ -1376,7 +1408,7 @@ describe("thinking-channel CoT recovery (#197)", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await rmTestDir(tmpDir);
   });
 
   function registry() {
@@ -1431,7 +1463,7 @@ describe("thinking-channel trust rules (#235)", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await rmTestDir(tmpDir);
   });
 
   function registry() {
@@ -1586,7 +1618,7 @@ describe("opencode session header (#250)", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await rmTestDir(tmpDir);
   });
 
   async function makeStore() {
@@ -1714,6 +1746,45 @@ describe("opencode session header (#250)", () => {
     assert.strictEqual(result.ok, true);
     assert.deepStrictEqual(captured, [registryHeaders]);
     assert.deepStrictEqual(registryHeaders, { Authorization: "Bearer k" });
+  });
+
+  it("streams through the model registry so extension-registered providers resolve", async () => {
+    // `kiro-api` only exists in the session's model runtime (pi.registerProvider),
+    // never in pi-ai's global api registry, so the global completeSimple throws
+    // "No API provider registered" for it.
+    const model = { ...mockModel(false), provider: "kiro", api: "kiro-api" } as Model<Api>;
+    const calls: Array<{ self: unknown; model: unknown; apiKey: string | undefined }> = [];
+    const modelRegistry = {
+      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "sk-test", headers: undefined }),
+      hasConfiguredAuth: () => true,
+      isUsingOAuth: () => false,
+      getAll: () => [model],
+      getAvailable: () => [model],
+      streamSimple(this: unknown, streamModel: unknown, _request: unknown, options: { apiKey?: string }) {
+        calls.push({ self: this, model: streamModel, apiKey: options.apiKey });
+        return {
+          result: async () => ({
+            stopReason: "stop",
+            content: [{ type: "text", text: JSON.stringify({ operations: [] }) }],
+          }),
+        };
+      },
+    };
+
+    const result = await runDirectMemoryCompletion(
+      { model, modelRegistry, sessionManager: { getSessionId: () => "ses_ext" } } as never,
+      null as never,
+      null,
+      { userPrompt: "u", systemPrompt: "s", config: {} },
+      null,
+      null,
+    );
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0]!.self, modelRegistry, "streamSimple must stay bound to the registry");
+    assert.strictEqual(calls[0]!.model, model);
+    assert.strictEqual(calls[0]!.apiKey, "sk-test");
   });
 
   it("keeps an operator-configured session header instead of overwriting it", async () => {

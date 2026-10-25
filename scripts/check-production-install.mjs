@@ -44,7 +44,9 @@ function npm(args, cwd) {
 try {
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   await mkdir(process.env.PI_CODING_AGENT_DIR);
-  const [packed] = JSON.parse(npm(["pack", "--ignore-scripts", "--json", "--pack-destination", root], repo));
+  // npm <= 11 prints a one-element array; npm 12+ prints an object keyed by package name.
+  const packOutput = JSON.parse(npm(["pack", "--ignore-scripts", "--json", "--pack-destination", root], repo));
+  const [packed] = Array.isArray(packOutput) ? packOutput : Object.values(packOutput);
   const install = join(root, "install");
   await mkdir(install);
   await writeFile(join(install, "package.json"), JSON.stringify({ name: "production-smoke", private: true }));

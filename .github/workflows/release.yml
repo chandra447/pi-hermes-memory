@@ -1,0 +1,177 @@
+name: Prepare release
+
+# One dispatch to cut a release: bump package.json, promote the CHANGELOG's
+# [Unreleased] section, commit to main, push the version tag, then dispatch
+# publish.yml (a tag pushed with GITHUB_TOKEN triggers nothing, and a
+# workflow_call would make npm validate release.yml instead of publish.yml).
+#
+# Requires the [Unreleased] section to describe the release. Run with
+# dry-run first to see the computed version and the changelog check.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump, applied to the current package.json version."
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      version:
+        description: "Explicit version instead of bump (e.g. 0.10.0 or 0.10.0-beta.1)."
+        required: false
+        type: string
+      dist-tag:
+        description: "npm dist-tag to publish under."
+        required: true
+        default: latest
+        type: string
+      dry-run:
+        description: "Compute the version and validate the changelog; commit, tag and publish nothing."
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Bump, tag and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      # Compute and validate the version before touching anything.
+      - name: Compute version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_BUMP: ${{ inputs.bump }}
+          DIST_TAG: ${{ inputs.dist-tag }}
+        run: |
+          set -euo pipefail
+          current="$(node -p "require('./package.json').version")"
+
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            version="${INPUT_VERSION#v}"
+          else
+            case "$current" in
+              *-*)
+                echo "::error::Current version $current is a prerelease. Pass an explicit version instead of a $INPUT_BUMP bump."
+                exit 1
+                ;;
+            esac
+            IFS=. read -r major minor patch <<< "$current"
+            case "$INPUT_BUMP" in
+              major) version="$((major + 1)).0.0" ;;
+              minor) version="$major.$((minor + 1)).0" ;;
+              patch) version="$major.$minor.$((patch + 1))" ;;
+              *)
+                echo "::error::Unknown bump \"$INPUT_BUMP\"."
+                exit 1
+                ;;
+            esac
+          fi
+
+          if ! node -e 'process.exit(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(process.argv[1]) ? 0 : 1)' "$version"; then
+            echo "::error::\"$version\" is not a valid version."
+            exit 1
+          fi
+
+          if [ "$version" = "$current" ]; then
+            echo "::error::Version is unchanged at $current."
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "::error::Tag v$version already exists."
+            exit 1
+          fi
+          if npm view "pi-hermes-memory@$version" version >/dev/null 2>&1; then
+            echo "::error::pi-hermes-memory@$version is already on npm."
+            exit 1
+          fi
+          case "$version" in
+            *-*)
+              if [ "$DIST_TAG" = "latest" ]; then
+                echo "::error::$version is a prerelease. Pass a non-latest dist-tag (for example: next)."
+                exit 1
+              fi
+              ;;
+          esac
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $current -> $version (dist-tag $DIST_TAG)"
+
+      - name: Check changelog
+        run: node scripts/promote-changelog.mjs "${{ steps.version.outputs.version }}" --check
+
+      - name: Stop here on dry run
+        if: inputs.dry-run
+        run: |
+          echo "Dry run: would commit the version bump, push tag v${{ steps.version.outputs.version }}, and call the publish workflow."
+          node scripts/release-notes.mjs "${{ steps.version.outputs.version }}" > /dev/null 2>&1 \
+            || echo "note: the ${{ steps.version.outputs.version }} section does not exist yet — it is created by the promotion below."
+
+      - name: Bump package.json and promote the changelog
+        if: ${{ !inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          npm version "${{ steps.version.outputs.version }}" --no-git-tag-version
+          node scripts/promote-changelog.mjs "${{ steps.version.outputs.version }}"
+
+      - name: Commit and tag
+        if: ${{ !inputs.dry-run }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json CHANGELOG.md
+          git commit -m "chore(release): v$VERSION"
+          git push origin "HEAD:main"
+
+          git tag -a "v$VERSION" -m "v$VERSION"
+          git push origin "v$VERSION"
+          echo "Pushed v$VERSION ($(git rev-parse HEAD))"
+
+  publish:
+    name: Dispatch publish ${{ needs.prepare.outputs.version }}
+    needs: prepare
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      # Dispatch instead of workflow_call: npm validates the trusted publisher
+      # against the top-level workflow, which must be publish.yml. GITHUB_TOKEN
+      # may dispatch workflows even though it cannot trigger push events.
+      - name: Dispatch publish.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          DIST_TAG: ${{ inputs.dist-tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f ref="v$VERSION" -f dist-tag="$DIST_TAG" -f stage=false -f dry-run=false
+          echo "Dispatched publish.yml for v$VERSION — follow it under Actions → Publish to npm."
