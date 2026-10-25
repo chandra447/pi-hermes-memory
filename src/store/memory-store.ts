@@ -462,6 +462,9 @@ export class MemoryStore {
         if (scanError) return { success: false, error: scanError };
         const replacementError = this.validateWholeEntryReplacement(matches, oldText, content);
         if (replacementError) return { success: false, error: replacementError };
+        if (this.replacementWouldDuplicate(target, plannedEntries, matches, content)) {
+          return { success: false, error: "Replacement would create a duplicate entry." };
+        }
         const replacements = new Map(matches.map((entry) => {
           const decoded = this.decodeEntry(entry);
           return [entry, this.encodeEntry(content, decoded.created, today, decoded.project ?? undefined)];
@@ -529,6 +532,9 @@ export class MemoryStore {
 
     const replacementError = this.validateWholeEntryReplacement(matches, oldText, newContent);
     if (replacementError) return { success: false, error: replacementError };
+    if (this.replacementWouldDuplicate(target, entries, matches, newContent)) {
+      return { success: false, error: "Replacement would create a duplicate entry." };
+    }
     const today = new Date().toISOString().split("T")[0];
     const replacements = new Map(matches.map((entry) => {
       const decoded = this.decodeEntry(entry);
@@ -703,6 +709,22 @@ export class MemoryStore {
       }
     }
     return undefined;
+  }
+
+  private replacementWouldDuplicate(
+    target: "memory" | "user" | "failure",
+    entries: string[],
+    matches: string[],
+    content: string,
+  ): boolean {
+    const replacedEntries = new Set(matches);
+    const replacedProjects = new Set(matches.map((entry) => this.decodeEntry(entry).project));
+    return entries.some((entry) => {
+      if (replacedEntries.has(entry)) return false;
+      const decoded = this.decodeEntry(entry);
+      return decoded.text === content
+        && (target !== "failure" || replacedProjects.has(decoded.project));
+    });
   }
 
   private areDistinctScopedFailureCopies(
