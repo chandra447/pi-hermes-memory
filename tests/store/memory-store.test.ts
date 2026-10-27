@@ -796,6 +796,43 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.ok(store.getUserEntries().some((entry) => entry.includes("Arch Linux")));
     });
 
+    it("refuses a fragment replacement of a one-line entry that holds several sentences", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      const entry = "Hub is reachable without a proxy. Prior-art tool: claude_cmr. The old router was removed in MR !7.";
+      await store.add("memory", entry);
+
+      const refused = await store.replace("memory", "The old router was removed", "The old router was removed in MR !7 (merged).");
+
+      assert.equal(refused.success, false);
+      assert.match(refused.error ?? "", /Refusing replace: the matched entry has 3 sentences/);
+      assert.deepEqual(store.getMemoryEntries(), [entry]);
+    });
+
+    it("accepts a one-line multi-sentence replacement that keeps every sibling sentence", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", "Hub is reachable without a proxy. Prior-art tool: claude_cmr. The old router was removed in MR !7.");
+      const updated = "Hub is reachable without a proxy. Prior-art tool: claude_cmr (claude-model-router). The old router was removed in MR !7.";
+
+      const replaced = await store.replace("memory", "Prior-art tool: claude_cmr", updated);
+
+      assert.equal(replaced.success, true);
+      assert.deepEqual(store.getMemoryEntries(), [updated]);
+    });
+
+    it("splits a one-line CJK entry at end punctuation with no following space", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", "事实一。事实二。事实三。");
+
+      const refused = await store.replace("memory", "事实二", "事实二已更新。");
+
+      assert.equal(refused.success, false);
+      assert.match(refused.error ?? "", /3 sentences/);
+      assert.deepEqual(store.getMemoryEntries(), ["事实一。事实二。事实三。"]);
+    });
+
     it("strips metadata from multiline entries and accepts a full replacement", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
@@ -1358,6 +1395,21 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.match(result.error ?? "", /Refusing replace/);
       assert.equal(await readRaw(userPath), beforeDisk);
       assert.ok(store.getUserEntries().some((entry) => entry.includes("Arch Linux")));
+    });
+
+    it("refuses an atomic fragment replacement of a one-line multi-sentence entry", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", "Hub is reachable without a proxy. Prior-art tool: claude_cmr. The old router was removed in MR !7.");
+      const beforeDisk = await readRaw(memoryPath);
+
+      const result = await store.applyMutationPlan("memory", [
+        { action: "replace", oldText: "The old router was removed", content: "The old router was removed in MR !7 (merged)." },
+      ]);
+
+      assert.equal(result.success, false);
+      assert.match(result.error ?? "", /Refusing replace: the matched entry has 3 sentences/);
+      assert.equal(await readRaw(memoryPath), beforeDisk);
     });
 
     it("rejects invalid plans before publishing any draft", async () => {
