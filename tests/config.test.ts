@@ -43,6 +43,7 @@ describe("loadConfig", () => {
     assert.strictEqual(config.llmModelOverride, undefined);
     assert.strictEqual(config.llmThinkingOverride, undefined);
     assert.strictEqual(config.standingInstructionsEnabled, true);
+    assert.strictEqual(config.skillsEnabled, true);
     // Retention is disabled by default so existing history is never silently
     // deleted; a positive value opts in, 0/omitted disables.
     assert.strictEqual(config.sessionRetentionDays, 0);
@@ -184,6 +185,13 @@ describe("loadConfig", () => {
     for (const value of [true, false, "true", 1, null]) {
       fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ lazyInitialization: value }));
       assert.strictEqual(loadConfig(TEST_CONFIG_PATH).lazyInitialization, value === true);
+    }
+  });
+
+  it("only accepts boolean skillsEnabled overrides", () => {
+    for (const value of [true, false, "false", 0, null]) {
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ skillsEnabled: value }));
+      assert.strictEqual(loadConfig(TEST_CONFIG_PATH).skillsEnabled, value !== false);
     }
   });
 

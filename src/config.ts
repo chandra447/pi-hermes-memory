@@ -75,6 +75,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   autoConsolidationWarnOnFailure: true,
   nudgeToolCalls: DEFAULT_NUDGE_TOOL_CALLS,
   standingInstructionsEnabled: true,
+  skillsEnabled: true,
   projectsMemoryDir: DEFAULT_PROJECTS_MEMORY_DIR,
   sessionSearch: { variant: "legacy" },
   quickCheckOnOpen: true,
@@ -181,6 +182,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         config.sessionRetentionDays = parsed.sessionRetentionDays;
       }
       if (typeof parsed.standingInstructionsEnabled === "boolean") config.standingInstructionsEnabled = parsed.standingInstructionsEnabled;
+      if (typeof parsed.skillsEnabled === "boolean") config.skillsEnabled = parsed.skillsEnabled;
       if (typeof parsed.projectCharLimit === "number") config.projectCharLimit = parsed.projectCharLimit;
       if (typeof parsed.memoryDir === "string") {
         const normalizedMemoryDir = normalizeConfiguredMemoryDir(parsed.memoryDir);

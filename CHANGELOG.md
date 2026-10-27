@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`skillsEnabled`** (default `true`, [#287](https://github.com/chandra447/pi-hermes-memory/issues/287)): `false` turns off the extension's procedural skills for the agent. `skill_manage` is not registered, no skill directory is contributed to Pi or created at session start, and the built-in memory policies drop their skill guidance. Existing skill files stay on disk, and `/memory-skills` still manages them.
+
 ## [0.9.11] - 2026-10-22
 
 ### Changed
