@@ -551,6 +551,72 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.ok(raw.includes(existing));
     });
 
+    describe("bounded overflow report for large memory", () => {
+      const synthetic = Array.from(
+        { length: 260 },
+        (_, i) => `${TEST_MARKER} synthetic-${i} ${"lorem ".repeat(70)}`,
+      );
+      const fileContent = synthetic.join(ENTRY_DELIMITER);
+
+      function assertBounded(result: any): void {
+        assert.equal(result.success, false);
+        assert.equal(result.target, "memory");
+        assert.equal(result.entry_count, synthetic.length);
+        assert.match(result.usage ?? "", /^\d+\/\d+ chars$/);
+        assert.ok(result.entries.length <= 5, `entries shown: ${result.entries.length}`);
+        const entryChars = result.entries.reduce((n: number, e: string) => n + e.length, 0);
+        assert.ok(entryChars <= 3000, `entry chars: ${entryChars}`);
+        assert.ok(JSON.stringify(result).length <= 4096, `json chars: ${JSON.stringify(result).length}`);
+        assert.match(result.error, /memory_search/);
+        assert.match(result.error, /of 260 entries/);
+      }
+
+      async function assertNoDataLost(): Promise<void> {
+        const raw = await readRaw(memoryPath);
+        for (const entry of synthetic) assert.ok(raw.includes(entry));
+        assert.ok(!raw.includes("incoming-overflow"));
+      }
+
+      it("bounds the reject-strategy error by entry count and chars", async () => {
+        await writeRaw(memoryPath, fileContent);
+        const store = new MemoryStore(makeConfig({
+          memoryCharLimit: fileContent.length - 1000,
+          memoryOverflowStrategy: "reject",
+        }));
+        await store.loadFromDisk();
+
+        const result = await store.add("memory", `${TEST_MARKER} incoming-overflow ${"y".repeat(200)}`);
+        await settle();
+
+        assertBounded(result);
+        await assertNoDataLost();
+      });
+
+      it("keeps the error bounded when auto-consolidation fails", async () => {
+        await writeRaw(memoryPath, fileContent);
+        const store = new MemoryStore(makeConfig({
+          memoryCharLimit: fileContent.length - 1000,
+          memoryOverflowStrategy: "auto-consolidate",
+          autoConsolidate: true,
+          overflowGraceMs: 0,
+        }));
+        let consolidatorCalls = 0;
+        store.setConsolidator(async () => {
+          consolidatorCalls++;
+          return { consolidated: false, error: "synthetic consolidator failure" };
+        });
+        await store.loadFromDisk();
+
+        const result = await store.add("memory", `${TEST_MARKER} incoming-overflow ${"y".repeat(200)}`);
+        await settle();
+
+        assert.equal(consolidatorCalls, 1);
+        assert.match(result.error ?? "", /synthetic consolidator failure/);
+        assertBounded(result);
+        await assertNoDataLost();
+      });
+    });
+
     it("returns error for empty content", async () => {
       const store = new MemoryStore(makeConfig());
 

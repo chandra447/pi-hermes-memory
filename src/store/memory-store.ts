@@ -50,6 +50,10 @@ const CONFLICT_ACTIVE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 const CONFLICT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const CONFLICT_MAX_COUNT = 32;
 const CONFLICT_MAX_BYTES = 64 * 1024 * 1024;
+// Overflow error reports list at most this many entries / chars of entry text.
+const MEMORY_FULL_ERROR_MAX_ENTRIES = 5;
+const MEMORY_FULL_ERROR_ENTRY_CHARS = 3000;
+const MEMORY_FULL_ERROR_PER_ENTRY_CHARS = 600;
 
 class ExternalMemoryWriteConflict extends Error {}
 
@@ -391,13 +395,31 @@ export class MemoryStore {
   private memoryFullError(target: "memory" | "user" | "failure", contentLength: number): MemoryResult {
     const current = this.charCount(target);
     const limit = this.charLimit(target);
-    const entries = this.entriesFor(target).map((raw) => this.decodeEntry(raw).text);
+    const allEntries = this.entriesFor(target);
+    // Bound the overflow report: a full target can hold hundreds of entries
+    // (100KB+), which must not be dumped into the model's context.
+    const entries: string[] = [];
+    let budget = MEMORY_FULL_ERROR_ENTRY_CHARS;
+    let truncated = false;
+    for (const raw of allEntries) {
+      if (entries.length >= MEMORY_FULL_ERROR_MAX_ENTRIES || budget <= 0) break;
+      const text = this.decodeEntry(raw).text;
+      const cap = Math.min(budget, MEMORY_FULL_ERROR_PER_ENTRY_CHARS);
+      const shown = text.length > cap ? `${text.slice(0, cap - 1)}…` : text;
+      if (shown !== text) truncated = true;
+      entries.push(shown);
+      budget -= shown.length;
+    }
+    const partial = truncated || entries.length < allEntries.length;
+    const listNote = partial
+      ? `see the ${entries.length} of ${allEntries.length} entries shown below; use memory_search to locate others for replace/remove`
+      : "see the entries list below";
     return {
       success: false,
-      error: `Memory at ${current}/${limit} chars. Adding this entry (${contentLength} chars) would exceed the limit. Replace or remove existing entries first (see the entries list below), then retry this add — all in this turn.`,
+      error: `Memory at ${current}/${limit} chars. Adding this entry (${contentLength} chars) would exceed the limit. Replace or remove existing entries first (${listNote}), then retry this add — all in this turn.`,
       target,
       usage: `${current}/${limit} chars`,
-      entry_count: entries.length,
+      entry_count: allEntries.length,
       entries,
     };
   }
