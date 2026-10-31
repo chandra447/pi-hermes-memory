@@ -6,6 +6,8 @@
 
 **Persistent memory + session search + secret scanning for Pi**
 
+[![omp status](https://omppackages.com/badge/pi-hermes-memory.svg)](https://omppackages.com/packages/pi-hermes-memory)
+
 ---
 
 </div>
