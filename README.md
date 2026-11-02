@@ -269,7 +269,7 @@ Targets are `memory`, `user`, `project`, and `failure`. Failure writes may also 
 
 ### The `skill_manage` Tool
 
-The agent also gets a `skill_manage` tool for saving reusable procedures. The explicit name is intentional: it manages saved procedures and avoids being mistaken for generic skill discovery.
+The agent also gets a `skill_manage` tool for saving reusable procedures. The explicit name is intentional: it manages saved procedures and avoids being mistaken for generic skill discovery. Set `"skillsEnabled": false` to turn skills off for the agent.
 
 | Action | What it does |
 |---|---|
@@ -554,7 +554,8 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "flushOnShutdown": true,
   "flushMinTurns": 6,
   "flushRecentMessages": 0,
-  "standingInstructionsEnabled": true
+  "standingInstructionsEnabled": true,
+  "skillsEnabled": true
 }
 ```
 
@@ -565,6 +566,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `memoryPolicyStyle` | `full` | Policy text used in `policy-only` mode: `full` preserves the default v0.7 policy; `compact` uses shorter built-in guidance; `custom` uses `memoryPolicyCustomText`; `none` injects no policy text |
 | `memoryPolicyCustomText` | unset | Custom policy text used when `memoryPolicyStyle` is `custom`; blank or missing text falls back to `compact` |
 | `standingInstructionsEnabled` | `true` | Inject `STANDING.md` (pinned via `/memory-pin`) into every session, in every memory mode |
+| `skillsEnabled` | `true` | Offer the extension's procedural skills to the agent. `false` registers no `skill_manage` tool, contributes and creates no skill directories, and drops the skill guidance from the built-in memory policy; existing skill files stay on disk and `/memory-skills` still manages them |
 | `memoryCharLimit` | `5000` | Max characters in MEMORY.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
 | `userCharLimit` | `5000` | Max characters in USER.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
 | `projectCharLimit` | `5000` | Max characters in project-scoped MEMORY.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |

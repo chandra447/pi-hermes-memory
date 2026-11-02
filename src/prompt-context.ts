@@ -3,23 +3,33 @@ import type { MemoryConfig } from "./types.js";
 import type { MemoryStore } from "./store/memory-store.js";
 import type { StandingInstructions } from "./store/standing-instructions.js";
 
-type MemoryPolicyConfig = Pick<MemoryConfig, "memoryPolicyStyle" | "memoryPolicyCustomText">;
+type MemoryPolicyConfig = Pick<MemoryConfig, "memoryPolicyStyle" | "memoryPolicyCustomText"> & { skillsEnabled?: boolean };
+
+/** A built-in policy without its skill guidance: the skill paragraph and the skill_manage tool line. */
+function withoutSkillGuidance(prompt: string): string {
+  return prompt
+    .split("\n\n")
+    .filter((block) => !/^(Procedural skills:|Use the skill_manage tool)/.test(block))
+    .map((block) => block.split("\n").filter((line) => !line.startsWith("- skill_manage:")).join("\n"))
+    .join("\n\n");
+}
 
 export function resolveMemoryPolicyPrompt(config: MemoryPolicyConfig): string {
   const style = config.memoryPolicyStyle ?? "full";
+  const builtIn = (prompt: string) => (config.skillsEnabled === false ? withoutSkillGuidance(prompt) : prompt);
 
   switch (style) {
     case "compact":
-      return MEMORY_POLICY_PROMPT_COMPACT;
+      return builtIn(MEMORY_POLICY_PROMPT_COMPACT);
     case "custom":
       return config.memoryPolicyCustomText && config.memoryPolicyCustomText.trim().length > 0
         ? config.memoryPolicyCustomText
-        : MEMORY_POLICY_PROMPT_COMPACT;
+        : builtIn(MEMORY_POLICY_PROMPT_COMPACT);
     case "none":
       return "";
     case "full":
     default:
-      return MEMORY_POLICY_PROMPT;
+      return builtIn(MEMORY_POLICY_PROMPT);
   }
 }
 
@@ -31,7 +41,7 @@ export function resolveMemoryPolicyPrompt(config: MemoryPolicyConfig): string {
  * operative directive rather than as recalled context.
  */
 export async function buildPromptContext(
-  config: Pick<MemoryConfig, "memoryMode" | "memoryPolicyStyle" | "memoryPolicyCustomText">,
+  config: Pick<MemoryConfig, "memoryMode" | "memoryPolicyStyle" | "memoryPolicyCustomText"> & { skillsEnabled?: boolean },
   store: MemoryStore,
   projectStore: MemoryStore | null,
   projectName: string,
