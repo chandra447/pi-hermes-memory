@@ -171,6 +171,7 @@ export default function (pi: ExtensionAPI) {
     if (!cwd) return;
     const nextProject = detectProject(config.projectsMemoryDir, cwd);
     const nextProjectMemoryDir = nextProject.memoryDir ?? null;
+    let newlyBound: MemoryStore | null = null;
     if (nextProjectMemoryDir !== projectMemoryDir) {
       projectMemoryDir = nextProjectMemoryDir;
       projectStore = createProjectStore(nextProject);
@@ -183,9 +184,19 @@ export default function (pi: ExtensionAPI) {
         projectLoad = undefined;
         throw error;
       });
+      newlyBound = projectStore;
     }
     await projectLoad;
     projectName = nextProject.name ?? "";
+    if (newlyBound) {
+      // Same lifecycle boundary as the global store's sweep (#284): once per
+      // newly bound project store, off the write path.
+      void newlyBound.runOverflowSweep().then((sweep) => {
+        for (const note of sweep.notes) console.info(`🧠 ${note}`);
+      }).catch(() => {
+        // Best effort — project-store consolidation never blocks the session.
+      });
+    }
   };
   // Never written by review, consolidation or the correction detector — see
   // store/standing-instructions.ts for why provenance has to be structural.
@@ -259,6 +270,15 @@ export default function (pi: ExtensionAPI) {
       } catch (err) {
         console.warn(`⚠️ Snapshot retention sweep failed: ${err instanceof Error ? err.message : String(err)}`);
       }
+      // Overflow episodes recorded by earlier writes are acted on here, at the
+      // session-start boundary, not on the write path (#284). Fire-and-forget:
+      // the consolidation is an LLM turn, and blocking startup on it would just
+      // move the 180s wait from the tool call to the first prompt.
+      void store.runOverflowSweep().then((sweep) => {
+        for (const note of sweep.notes) console.info(`🧠 ${note}`);
+      }).catch((err) => {
+        console.warn(`⚠️ Overflow consolidation sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
       scheduleSessionBackfill(dbManager, sessionsDir, {
         state: backfillState,
         notify: (message, level) => {
