@@ -51,6 +51,11 @@ const CONFLICT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const CONFLICT_MAX_COUNT = 32;
 const CONFLICT_MAX_BYTES = 64 * 1024 * 1024;
 
+/** Sentences of a one-line entry: split after `.` `!` `?` `;` plus whitespace, or after CJK end punctuation. */
+function splitSentences(line: string): string[] {
+  return line.split(/(?<=[.!?;])\s+|(?<=[。！？；])/u).map((sentence) => sentence.trim()).filter(Boolean);
+}
+
 class ExternalMemoryWriteConflict extends Error {}
 
 export class MemoryStore {
@@ -462,6 +467,9 @@ export class MemoryStore {
         if (scanError) return { success: false, error: scanError };
         const replacementError = this.validateWholeEntryReplacement(matches, oldText, content);
         if (replacementError) return { success: false, error: replacementError };
+        if (this.replacementWouldDuplicate(target, plannedEntries, matches, content)) {
+          return { success: false, error: "Replacement would create a duplicate entry." };
+        }
         const replacements = new Map(matches.map((entry) => {
           const decoded = this.decodeEntry(entry);
           return [entry, this.encodeEntry(content, decoded.created, today, decoded.project ?? undefined)];
@@ -529,6 +537,9 @@ export class MemoryStore {
 
     const replacementError = this.validateWholeEntryReplacement(matches, oldText, newContent);
     if (replacementError) return { success: false, error: replacementError };
+    if (this.replacementWouldDuplicate(target, entries, matches, newContent)) {
+      return { success: false, error: "Replacement would create a duplicate entry." };
+    }
     const today = new Date().toISOString().split("T")[0];
     const replacements = new Map(matches.map((entry) => {
       const decoded = this.decodeEntry(entry);
@@ -683,19 +694,22 @@ export class MemoryStore {
   /**
    * A replacement always swaps an entire entry. Keep that contract safe for
    * both individual mutations and atomic plans by refusing a fragment that
-   * omits sibling lines from a multi-fact entry.
+   * omits sibling facts from a multi-fact entry: sibling lines, or sibling
+   * sentences when the whole entry is one line.
    */
   private validateWholeEntryReplacement(entries: string[], oldText: string, newContent: string): string | undefined {
     for (const entry of entries) {
       const entryLines = this.stripMetadata(entry).split("\n").map((line) => line.trim()).filter(Boolean);
-      if (entryLines.length <= 1) continue;
-      const missingLines = entryLines.filter(
-        (line) => !line.includes(oldText) && !newContent.includes(line),
+      const units = entryLines.length === 1 ? splitSentences(entryLines[0]) : entryLines;
+      if (units.length <= 1) continue;
+      const unitName = entryLines.length === 1 ? "sentences" : "lines";
+      const missingUnits = units.filter(
+        (unit) => !unit.includes(oldText) && !newContent.includes(unit),
       );
-      if (missingLines.length > 0) {
+      if (missingUnits.length > 0) {
         return (
-          `Refusing replace: the matched entry has ${entryLines.length} lines, but 'content' ` +
-          `does not include ${missingLines.length} of them: ${JSON.stringify(missingLines)}. ` +
+          `Refusing replace: the matched entry has ${units.length} ${unitName}, but 'content' ` +
+          `does not include ${missingUnits.length} of them: ${JSON.stringify(missingUnits)}. ` +
           `replace() swaps the WHOLE entry, so 'content' must contain everything you want to ` +
           `keep from it (not just the changed part), or split the entry into separate ` +
           `single-fact entries first.`
@@ -703,6 +717,22 @@ export class MemoryStore {
       }
     }
     return undefined;
+  }
+
+  private replacementWouldDuplicate(
+    target: "memory" | "user" | "failure",
+    entries: string[],
+    matches: string[],
+    content: string,
+  ): boolean {
+    const replacedEntries = new Set(matches);
+    const replacedProjects = new Set(matches.map((entry) => this.decodeEntry(entry).project));
+    return entries.some((entry) => {
+      if (replacedEntries.has(entry)) return false;
+      const decoded = this.decodeEntry(entry);
+      return decoded.text === content
+        && (target !== "failure" || replacedProjects.has(decoded.project));
+    });
   }
 
   private areDistinctScopedFailureCopies(

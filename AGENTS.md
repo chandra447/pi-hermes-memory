@@ -29,6 +29,8 @@ This is a Pi coding agent extension that brings Hermes-style persistent memory a
 | `PLAN.md` | Full v0.1 implementation plan with Hermes source file reference map |
 | `docs/ROADMAP.md` | Full roadmap with Hermes competitive analysis + gap analysis |
 | `docs/0.2/TASKS.md` | v0.2 task breakdown — Skills + Smart Curation |
+| `.github/workflows/publish.yml` | Release gate → npm publish (OIDC trusted publishing) → GitHub Release |
+| `.github/workflows/release.yml` | One-dispatch release: bump, promote changelog, tag, publish |
 
 ## Design Decisions
 
@@ -66,6 +68,10 @@ npm run check
 # Test locally
 pi -e ./src/index.ts
 ```
+
+## Releasing
+
+Releases are automated — do not `npm publish` by hand. **Actions → Prepare release → Run workflow** bumps `package.json`, promotes the CHANGELOG's `[Unreleased]` section, commits to `main`, pushes the tag, and runs the publish pipeline (gate → npm via OIDC trusted publishing → GitHub Release). Full details, recovery paths, and the npm trusted-publisher setup: `docs/PUBLISHING.md`.
 
 ## Installation (for users)
 

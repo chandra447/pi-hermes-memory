@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, beforeEach, afterEach, describe, it } from "node:test";
+import { rmTestDir } from "./helpers/cleanup.js";
 
 // Bind the entry point to a disposable agent root, never the user's memory.
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-startup-"));
@@ -79,16 +80,30 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await emit("session_shutdown", { reason: "quit" });
-  for (const name of await fs.readdir(root)) await fs.rm(path.join(root, name), { recursive: true, force: true });
+  for (const name of await fs.readdir(root)) await rmTestDir(path.join(root, name));
 });
 
 after(async () => {
   if (previousRoot === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = previousRoot;
-  await fs.rm(root, { recursive: true, force: true });
+  await rmTestDir(root);
 });
 
 describe("lazy startup lifecycle", () => {
+  it("offers no skills to the agent when skillsEnabled is false", async () => {
+    await configure({ skillsEnabled: false });
+    register();
+    await emit("session_start");
+    assert.equal(await emit("resources_discover", { cwd, reason: "startup" }), undefined);
+    assert.equal(tools.skill_manage, undefined);
+    assert.ok(tools.memory_search);
+    const prompt = await emit("before_agent_start", { systemPrompt: "base" });
+    assert.match(prompt.systemPrompt, /memory-policy/);
+    assert.doesNotMatch(prompt.systemPrompt, /skill/i);
+    assert.equal(existsSync(path.join(globalDir, "skills")), false);
+    assert.equal(existsSync(path.join(projectDir, "skills")), false);
+  });
+
   it("keeps generic conversation, skills, preview and cold shutdown free of memory/DB loading", async (t) => {
     const loads = t.mock.method(MemoryStore.prototype, "loadFromDisk");
     const opens = t.mock.method(DatabaseManager.prototype, "getDb");

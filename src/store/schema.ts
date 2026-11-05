@@ -114,6 +114,7 @@ export const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
   CREATE INDEX IF NOT EXISTS idx_memories_target ON memories(target);
   CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
+  CREATE INDEX IF NOT EXISTS idx_memories_scope_content ON memories(target, project, category, content);
   CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
   CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
   CREATE INDEX IF NOT EXISTS idx_session_files_session_id ON session_files(session_id);

@@ -1,62 +1,275 @@
 name: Publish to npm
 
+# Two entry points, converging on the same jobs:
+#   * publish a GitHub Release      — release-first release (npm's documented pattern); the
+#                                     tag comes from the release, creating one if needed
+#   * workflow_dispatch             — re-run, backport, dry-run, staged publish; also fired
+#                                     by "Prepare release" (npm validates the top-level
+#                                     workflow, so this file must never be a workflow_call)
+#
+# There is deliberately no `push: tags` trigger. Publishing a Release for a new tag
+# pushes that tag as well, so listening to both fired two runs for every release; the
+# second raced the first on the registry check and failed at `npm publish`. A tag
+# pushed by hand starts nothing: publish its Release, or dispatch with `ref: <tag>`.
+#
+# A Release created by this workflow's own `release` job uses GITHUB_TOKEN, which
+# cascades nothing, so the `release` trigger cannot re-enter itself.
 on:
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
-      dry-run:
-        description: "Dry run (skip actual publish)"
+      ref:
+        description: "Tag, branch or commit SHA to publish. Defaults to the ref this dispatch runs from."
         required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
+        type: string
+      dist-tag:
+        description: "npm dist-tag to publish under. Use something other than latest for prereleases."
+        required: true
+        default: latest
+        type: string
+      stage:
+        description: "Stage for approval on npmjs.com (npm stage publish + 2FA) instead of publishing directly."
+        required: true
+        default: false
+        type: boolean
+      dry-run:
+        description: "Run the full gate and npm publish --dry-run. Nothing reaches the registry."
+        required: true
+        default: false
+        type: boolean
+
+# One publish at a time. Never cancel a run that may already be mid-publish.
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
 
 jobs:
   verify:
-    name: Verify before publish
+    name: Verify release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      ref: ${{ steps.resolve.outputs.ref }}
+      version: ${{ steps.version.outputs.version }}
+      dist-tag: ${{ steps.resolve.outputs.dist-tag }}
+      mode: ${{ steps.resolve.outputs.mode }}
+      dry-run: ${{ steps.resolve.outputs.dry-run }}
+      already-published: ${{ steps.version.outputs.already-published }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Resolve target ref and mode
+        id: resolve
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_DIST_TAG: ${{ inputs.dist-tag }}
+          INPUT_STAGE: ${{ inputs.stage }}
+          INPUT_DRY_RUN: ${{ inputs.dry-run }}
+          TRIGGER_REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          ref="${INPUT_REF:-$TRIGGER_REF}"
+          if [ -z "$ref" ]; then
+            echo "::error::Could not resolve a ref to publish."
+            exit 1
+          fi
+          mode="publish"
+          if [ "${INPUT_STAGE:-false}" = "true" ]; then
+            mode="stage"
+          fi
+          # A prerelease published through the GitHub Releases UI has no inputs to
+          # read, so its dist-tag defaults to next instead of latest.
+          dist_tag="${INPUT_DIST_TAG:-latest}"
+          if [ "${EVENT_NAME:-}" = "release" ] && [ "${RELEASE_PRERELEASE:-false}" = "true" ]; then
+            dist_tag="next"
+          fi
+          {
+            echo "ref=$ref"
+            echo "dist-tag=$dist_tag"
+            echo "mode=$mode"
+            echo "dry-run=${INPUT_DRY_RUN:-false}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved ref=$ref mode=$mode dist-tag=$dist_tag dry-run=${INPUT_DRY_RUN:-false}"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
         with:
-          node-version: 22
+          ref: ${{ steps.resolve.outputs.ref }}
+          fetch-depth: 0
 
-      - run: npm install
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Verify version, tag and registry state
+        id: version
+        env:
+          RESOLVED_REF: ${{ steps.resolve.outputs.ref }}
+          DIST_TAG: ${{ steps.resolve.outputs.dist-tag }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "package.json version: $version"
+          echo "node $(node --version), npm $(npm --version)"
+          echo "commit $(git rev-parse HEAD)"
+
+          # A v* ref must name exactly the version being published, so a stray
+          # or reused tag can never publish a different package.json.
+          tag="${RESOLVED_REF#refs/tags/}"
+          case "$tag" in
+            v*)
+              if [ "$tag" != "v$version" ]; then
+                echo "::error::Tag $tag does not match package.json version $version. Bump package.json before tagging."
+                exit 1
+              fi
+              echo "Tag $tag matches package.json."
+              ;;
+          esac
+
+          # npm publishes a prerelease to latest unless told otherwise.
+          case "$version" in
+            *-*)
+              if [ "$DIST_TAG" = "latest" ]; then
+                echo "::error::$version is a prerelease. Pass a non-latest dist-tag (for example: next)."
+                exit 1
+              fi
+              ;;
+          esac
+
+          # Already on npm is not a failure: it means this is a re-run or a second
+          # dispatch for the same version. Skip publishing and carry on, so the rest of the
+          # pipeline — notably a missing GitHub Release — still gets completed.
+          if npm view "pi-hermes-memory@$version" version >/dev/null 2>&1; then
+            echo "already-published=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::pi-hermes-memory@$version is already on npm — skipping the publish step. The GitHub Release is still reconciled."
+          else
+            echo "already-published=false" >> "$GITHUB_OUTPUT"
+            echo "npm has no pi-hermes-memory@$version yet."
+          fi
+
+      - run: npm ci
 
       - name: Type check
         run: npm run check
 
-      - name: Run tests
+      - name: Tests
         run: npm test
 
-      - name: Check for uncommitted changes
-        run: git diff --exit-code
+      - name: Production install smoke test
+        run: npm run check:production
+
+      - name: Check release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if node scripts/release-notes.mjs "$VERSION" > /dev/null; then
+            echo "CHANGELOG.md has a $VERSION section."
+          else
+            echo "::warning::CHANGELOG.md has no $VERSION section — the GitHub Release will fall back to generated notes."
+          fi
 
   publish:
     name: Publish to npm
     needs: verify
+    # Skipped when npm already has this version (a second trigger fired, or this
+    # is a re-run) — the release job below can still reconcile a missing Release.
+    if: needs.verify.outputs.already-published != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The npm trusted publisher may be scoped to this environment. It is also
+    # where required-reviewer protection would go for a manual approval gate.
     environment: publish
+    permissions:
+      contents: read
+      id-token: write # OIDC trusted publishing + provenance. No NPM_TOKEN.
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
+          ref: ${{ needs.verify.outputs.ref }}
+          fetch-depth: 0
 
-      - run: npm install
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - run: npm ci
+
+      - name: Publish (dry run)
+        if: needs.verify.outputs.dry-run == 'true'
+        run: npm publish --dry-run --access public --tag "${{ needs.verify.outputs.dist-tag }}"
+
+      - name: Stage for 2FA approval
+        if: needs.verify.outputs.dry-run != 'true' && needs.verify.outputs.mode == 'stage'
+        run: npm stage publish --tag "${{ needs.verify.outputs.dist-tag }}"
 
       - name: Publish
-        if: github.event.inputs.dry-run == 'false'
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        if: needs.verify.outputs.dry-run != 'true' && needs.verify.outputs.mode == 'publish'
+        run: npm publish --access public --tag "${{ needs.verify.outputs.dist-tag }}"
 
-      - name: Dry run
-        if: github.event.inputs.dry-run == 'true'
-        run: npm publish --dry-run --access public
+  release:
+    name: GitHub Release
+    needs: [verify, publish]
+    # always() so a skipped publish job (version already on npm) does not skip
+    # the Release reconciliation too. A failed publish must NOT produce a Release.
+    if: |
+      always() &&
+      needs.verify.result == 'success' &&
+      (needs.publish.result == 'success' || needs.publish.result == 'skipped') &&
+      needs.verify.outputs.mode == 'publish' &&
+      needs.verify.outputs.dry-run != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Create GitHub Release
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          DIST_TAG: ${{ needs.verify.outputs.dist-tag }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists — leaving it untouched."
+            exit 0
+          fi
+
+          args=(--title "$tag")
+
+          # --verify-tag for an existing tag; --target creates it at this commit.
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            args+=(--verify-tag)
+          else
+            args+=(--target "$(git rev-parse HEAD)")
+          fi
+
+          if node scripts/release-notes.mjs "$VERSION" /tmp/release-notes.md; then
+            args+=(--notes-file /tmp/release-notes.md)
+          else
+            echo "::warning::CHANGELOG.md has no $VERSION section; using generated notes."
+            args+=(--generate-notes)
+          fi
+
+          if [ "$DIST_TAG" != "latest" ]; then
+            args+=(--prerelease)
+          fi
+
+          gh release create "$tag" "${args[@]}"
+          echo "Created GitHub Release $tag"

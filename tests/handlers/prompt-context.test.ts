@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildPromptContext } from "../../src/prompt-context.js";
+import { buildPromptContext, resolveMemoryPolicyPrompt } from "../../src/prompt-context.js";
 import { MEMORY_POLICY_PROMPT, MEMORY_POLICY_PROMPT_COMPACT, MEMORY_WRITE_TOOL_NAMES } from "../../src/constants.js";
 
 describe("buildPromptContext", () => {
@@ -206,6 +206,30 @@ describe("buildPromptContext", () => {
     );
 
     assert.strictEqual(result, "<memory-context>MEMORY</memory-context>\n\n<memory-context>PROJECT demo</memory-context>");
+  });
+});
+
+describe("skillsEnabled in the memory policy", () => {
+  it("drops the skill guidance from both built-in policies when skills are disabled", () => {
+    for (const memoryPolicyStyle of ["full", "compact"] as const) {
+      const prompt = resolveMemoryPolicyPrompt({ memoryPolicyStyle, skillsEnabled: false });
+      assert.doesNotMatch(prompt, /skill/i);
+      assert.match(prompt, /- memory_search:/);
+      assert.match(prompt, /<\/available-memory-tools>$/);
+    }
+  });
+
+  it("keeps the built-in policies unchanged when skills are enabled or unset", () => {
+    assert.strictEqual(resolveMemoryPolicyPrompt({ memoryPolicyStyle: "full" }), MEMORY_POLICY_PROMPT);
+    assert.strictEqual(resolveMemoryPolicyPrompt({ memoryPolicyStyle: "compact", skillsEnabled: true }), MEMORY_POLICY_PROMPT_COMPACT);
+  });
+
+  it("leaves custom policy text alone", () => {
+    const memoryPolicyCustomText = "Use skill_manage for procedures.";
+    assert.strictEqual(
+      resolveMemoryPolicyPrompt({ memoryPolicyStyle: "custom", memoryPolicyCustomText, skillsEnabled: false }),
+      memoryPolicyCustomText,
+    );
   });
 });
 

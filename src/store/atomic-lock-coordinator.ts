@@ -115,6 +115,8 @@ const DEAD_LOCK_SWEEP_GRACE_MS = 60_000;
 const DEAD_LOCK_SWEEP_INTERVAL_MS = 60_000;
 const pendingReleases = new Map<string, () => void>();
 const sharedCoordinators = new Map<string, AtomicLockCoordinator>();
+/** Every coordinator that currently holds an open connection, shared or not. */
+const openCoordinators = new Set<AtomicLockCoordinator>();
 
 export class AtomicLockCoordinator {
   private readonly pid: number;
@@ -322,6 +324,7 @@ export class AtomicLockCoordinator {
   private discardCachedDb(): void {
     const db = this.cachedDb;
     this.cachedDb = null;
+    openCoordinators.delete(this);
     if (db) {
       try { db.close(); } catch {}
     }
@@ -355,6 +358,7 @@ export class AtomicLockCoordinator {
       }
       if (!existed) fs.chmodSync(this.dbPath, 0o600);
       this.cachedDb = db;
+      openCoordinators.add(this);
       return db;
     } catch (error) {
       db.close();
@@ -379,5 +383,21 @@ export class AtomicLockCoordinator {
       sharedCoordinators.set(key, coordinator);
     }
     return coordinator;
+  }
+
+  /**
+   * Close every coordinator connection this process holds open.
+   *
+   * Windows refuses to delete a directory while any file inside it is still
+   * open, so anything that removes a store directory (tests, maintenance
+   * tooling) has to drop the pinned connections first — including the ones
+   * created directly via `new AtomicLockCoordinator(...)`, which the shared
+   * registry does not know about. Later calls open fresh connections, so
+   * callers do not need to re-register anything.
+   */
+  static closeHandles(): void {
+    for (const coordinator of [...openCoordinators]) coordinator.discardCachedDb();
+    openCoordinators.clear();
+    sharedCoordinators.clear();
   }
 }

@@ -15,6 +15,7 @@ import { ENTRY_DELIMITER, MDSYNC_METADATA_KEY_PREFIX } from '../../src/constants
 import { addMemory, getMemories, reconcileMarkdownMemoryScope, searchMemories } from '../../src/store/sqlite-memory-store.js';
 import { AtomicLockCoordinator } from '../../src/store/atomic-lock-coordinator.js';
 import { MemoryStore } from '../../src/store/memory-store.js';
+import { rmTestDirSync } from "../helpers/cleanup.js";
 
 async function withBlockedMemoryWrites<T>(dbManager: DatabaseManager, fn: () => T | Promise<T>): Promise<T> {
   const db = dbManager.getDb() as { prepare: (sql: string) => unknown };
@@ -49,7 +50,7 @@ describe('memory sqlite sync + markdown backfill', () => {
 
   afterEach(() => {
     dbManager.close();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    rmTestDirSync(tmpDir);
   });
 
   it('memory tool writes are immediately searchable in SQLite', async () => {
@@ -273,7 +274,7 @@ describe('memory sqlite sync + markdown backfill', () => {
       INSERT INTO memories (project, target, category, content, created, last_referenced)
       VALUES ('deleted-project', 'user', NULL, 'unrelated project user', '2026-07-01', '2026-07-01')
     `).run();
-    fs.rmSync(deletedProjectDir, { recursive: true });
+    rmTestDirSync(deletedProjectDir);
 
     const counters = await syncMarkdownMemoriesToSqlite(dbManager, globalDir, undefined, agentRoot);
 

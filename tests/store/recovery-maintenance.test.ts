@@ -1,3 +1,4 @@
+import { rmTestDir } from "../helpers/cleanup.js";
 /**
  * Regression tests for the dormant-store snapshot retention sweep (#202).
  *
@@ -76,7 +77,7 @@ describe("recovery maintenance sweep", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await rmTestDir(tmpDir);
   });
 
   it("bounds dormant recovery snapshots by count without a write", async () => {

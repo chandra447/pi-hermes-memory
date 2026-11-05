@@ -999,6 +999,7 @@ export class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
       CREATE INDEX IF NOT EXISTS idx_memories_target ON memories(target);
       CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
+      CREATE INDEX IF NOT EXISTS idx_memories_scope_content ON memories(target, project, category, content);
     `);
   }
 
