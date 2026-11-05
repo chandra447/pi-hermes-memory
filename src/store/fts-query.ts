@@ -30,7 +30,12 @@ export function hasExplicitFts5Operator(query: string): boolean {
   return FTS5_OPERATOR_PATTERN.test(query.trim());
 }
 
-function collectNaturalLanguageTerms(query: string): string[] {
+/**
+ * Collect the searchable terms of a natural-language query: quoted phrases are
+ * kept whole, connectors and stop words are dropped. The FTS query and the
+ * literal fallback both search exactly these terms.
+ */
+export function collectNaturalLanguageTerms(query: string): string[] {
   const terms: string[] = [];
 
   for (const match of query.matchAll(FTS5_TOKEN_PATTERN)) {
