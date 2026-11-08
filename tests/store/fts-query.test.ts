@@ -68,6 +68,27 @@ describe('fts-query', () => {
     it('preserves explicit operator queries verbatim in normalizeFts5Query', () => {
       assert.strictEqual(normalizeFts5Query('auth OR database'), 'auth OR database');
     });
+
+    it('quotes a hyphenated bareword instead of letting FTS5 read it as syntax (#307)', () => {
+      // FTS5 parses `policy-only` as column `policy` minus `only` and fails the
+      // whole statement with "no such column: only"; the term has to stay data
+      // while the operator stays syntax.
+      assert.strictEqual(normalizeFts5Query('alpha OR policy-only'), 'alpha OR "policy-only"');
+      assert.strictEqual(normalizeFts5Query('alpha NOT develop-tdd'), 'alpha NOT "develop-tdd"');
+      assert.strictEqual(normalizeFts5Query('PA-14 AND 2-5'), '"PA-14" AND "2-5"');
+      assert.strictEqual(normalizeFts5Query('version-2.1 OR alpha'), '"version-2.1" OR alpha');
+    });
+
+    it('leaves query syntax the caller wrote deliberately untouched (#307)', () => {
+      // Already-quoted phrases, column filters, NEAR groups, prefix markers and
+      // a leading hyphen are syntax, not data; quoting them would change the
+      // query the caller asked for.
+      assert.strictEqual(normalizeFts5Query('"policy-only" OR alpha'), '"policy-only" OR alpha');
+      assert.strictEqual(normalizeFts5Query('alpha OR content:policy-only'), 'alpha OR content:policy-only');
+      assert.strictEqual(normalizeFts5Query('NEAR(policy-only alpha, 5)'), 'NEAR(policy-only alpha, 5)');
+      assert.strictEqual(normalizeFts5Query('policy-only* OR alpha'), 'policy-only* OR alpha');
+      assert.strictEqual(normalizeFts5Query('alpha OR -policy-only'), 'alpha OR -policy-only');
+    });
   });
 
   describe('natural language recovery', () => {
