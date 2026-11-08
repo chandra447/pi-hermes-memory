@@ -6,6 +6,8 @@
 
 **Persistent memory + session search + secret scanning for Pi**
 
+[![omp status](https://omppackages.com/badge/pi-hermes-memory.svg)](https://omppackages.com/packages/pi-hermes-memory)
+
 ---
 
 </div>
@@ -269,7 +271,7 @@ Targets are `memory`, `user`, `project`, and `failure`. Failure writes may also 
 
 ### The `skill_manage` Tool
 
-The agent also gets a `skill_manage` tool for saving reusable procedures. The explicit name is intentional: it manages saved procedures and avoids being mistaken for generic skill discovery.
+The agent also gets a `skill_manage` tool for saving reusable procedures. The explicit name is intentional: it manages saved procedures and avoids being mistaken for generic skill discovery. Set `"skillsEnabled": false` to turn skills off for the agent.
 
 | Action | What it does |
 |---|---|
@@ -527,6 +529,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "projectsMemoryDir": "projects-memory",
   "sessionSearch": { "variant": "legacy" },
   "sessionRetentionDays": 0,
+  "sessionIndexExclude": [],
   "quickCheckOnOpen": true,
   "llmModelOverride": "openrouter/deepseek/deepseek-v4-flash",
   "llmThinkingOverride": "off",
@@ -554,7 +557,8 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "flushOnShutdown": true,
   "flushMinTurns": 6,
   "flushRecentMessages": 0,
-  "standingInstructionsEnabled": true
+  "standingInstructionsEnabled": true,
+  "skillsEnabled": true
 }
 ```
 
@@ -565,6 +569,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `memoryPolicyStyle` | `full` | Policy text used in `policy-only` mode: `full` preserves the default v0.7 policy; `compact` uses shorter built-in guidance; `custom` uses `memoryPolicyCustomText`; `none` injects no policy text |
 | `memoryPolicyCustomText` | unset | Custom policy text used when `memoryPolicyStyle` is `custom`; blank or missing text falls back to `compact` |
 | `standingInstructionsEnabled` | `true` | Inject `STANDING.md` (pinned via `/memory-pin`) into every session, in every memory mode |
+| `skillsEnabled` | `true` | Offer the extension's procedural skills to the agent. `false` registers no `skill_manage` tool, contributes and creates no skill directories, and drops the skill guidance from the built-in memory policy; existing skill files stay on disk and `/memory-skills` still manages them |
 | `memoryCharLimit` | `5000` | Max characters in MEMORY.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
 | `userCharLimit` | `5000` | Max characters in USER.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
 | `projectCharLimit` | `5000` | Max characters in project-scoped MEMORY.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
@@ -572,6 +577,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `projectsMemoryDir` | `projects-memory` | Subdirectory under `~/.pi/agent/` for project-scoped memory |
 | `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.pi/agent/sessions/` |
 | `sessionRetentionDays` | `0` | Opt-in SQLite session retention, in days. `0` (default) disables pruning entirely and keeps the legacy count-only backfill preflight. When positive, sessions whose JSONL source file was last modified longer ago than the window are pruned from SQLite at startup — **rows only; the JSONL files in `~/.pi/agent/sessions/` are never deleted** — and both the deferred backfill and `/memory-index-sessions` skip files outside the window, so pruned sessions stay pruned instead of being re-indexed |
+| `sessionIndexExclude` | `[]` | First-level directory names under the sessions root to exclude from session indexing (exact names or `*` globs). The sessions directory is a shared namespace — extensions may store non-session JSONL artifacts there. Non-session files are already skipped by content sniffing (first line must be a `{"type":"session",...}` header) and no longer surface as backfill errors; use this setting to also skip whole directories regardless of content, e.g. `["subagent-artifacts"]`. Entries must be first-level directory names: blank values, path separators, and `..` segments are ignored with a warning |
 | `quickCheckOnOpen` | `true` | Run a full SQLite integrity check asynchronously after opening the database; set to `false` to skip the startup scan (operation-time recovery remains enabled) |
 | `llmModelOverride` | unset | Optional model override for background review (direct and subprocess), correction save, session flush, and consolidation |
 | `llmThinkingOverride` | unset | Optional thinking override for those LLM calls; valid values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. If `llmModelOverride` is set and this is omitted, review/child calls default to `off` |
