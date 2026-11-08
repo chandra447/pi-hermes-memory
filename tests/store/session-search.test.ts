@@ -73,6 +73,20 @@ describe('session-search', () => {
       assert.ok(results.some((result) => result.content.includes('设备清单')));
     });
 
+    it('does not throw on an operator query whose term contains a hyphen (#307)', () => {
+      // `policy-only` reached FTS5 verbatim and was read as column syntax, so
+      // session search failed with `no such column: only` too.
+      indexSession(dbManager, createTestSession({ id: 'hyphen-session', messages: [
+        { id: 'hyphen-session-msg-1', role: 'assistant', content: 'we run policy-only mode here', timestamp: '2026-05-03T00:01:00Z' },
+        { id: 'hyphen-session-msg-2', role: 'user', content: 'alpha rollout finished', timestamp: '2026-05-03T00:02:00Z' },
+      ] }));
+
+      const results = searchSessions(dbManager, 'alpha OR policy-only');
+
+      assert.ok(results.length > 0, 'operator query with a hyphenated term must not throw');
+      assert.ok(results.some((result) => result.content.includes('policy-only')));
+    });
+
     it('retains English token searches in the trigram index', () => {
       indexSession(dbManager, createTestSession({ id: 'english-trigram-session', messages: [
         { id: 'english-trigram-session-msg-1', role: 'assistant', content: 'The NAS backup completed successfully.', timestamp: '2026-05-03T00:01:00Z' },

@@ -838,6 +838,19 @@ describe('sqlite-memory-store', () => {
       assert.ok(results.some((r) => r.content.includes('AEST')));
     });
 
+    it('recovers an operator query whose term contains a hyphen (#307)', () => {
+      addMemory(dbManager, 'we run policy-only mode here');
+      addMemory(dbManager, 'alpha rollout finished');
+
+      // Before #307 the raw operator query reached FTS5 verbatim, which read
+      // `policy-only` as column syntax and threw `no such column: only`, so the
+      // whole search failed instead of returning the two matches.
+      const results = searchMemories(dbManager, 'alpha OR policy-only');
+
+      assert.ok(results.some((r) => r.content.includes('policy-only')), 'hyphenated term matched');
+      assert.ok(results.some((r) => r.content.includes('alpha rollout')), 'operator term matched');
+    });
+
     it('should limit results', () => {
       const results = searchMemories(dbManager, 'pnpm OR Prisma OR AEST', { limit: 2 });
       assert.ok(results.length <= 2);

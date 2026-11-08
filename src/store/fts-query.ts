@@ -2,6 +2,12 @@ const FTS5_OPERATOR_PATTERN = /\b(OR|AND|NOT|NEAR)\b/;
 const FTS5_TOKEN_PATTERN = /"([^"]*)"|(\S+)/g;
 const NATURAL_LANGUAGE_CONNECTORS = new Set(['and', 'or', 'not', 'near']);
 
+// A bareword FTS5 can be handed as data once quoted: letters, digits, marks,
+// underscores, dots and internal hyphens. Anything carrying query syntax
+// (quotes, parentheses, `*`, `:`, a leading hyphen) is left alone so column
+// filters, NEAR groups and prefix queries keep their meaning.
+const FTS5_QUOTABLE_BAREWORD = /^[\p{L}\p{N}\p{M}_][\p{L}\p{N}\p{M}_.-]*$/u;
+
 // Common English stop words that add noise to FTS5 searches. They are silently
 // dropped from natural-language queries so common filler words cannot dominate
 // the FTS5 ranking or produce misleading "AND"-style misses. The list is
@@ -30,6 +36,25 @@ export function hasExplicitFts5Operator(query: string): boolean {
   return FTS5_OPERATOR_PATTERN.test(query.trim());
 }
 
+/**
+ * Quote barewords that carry an unquoted hyphen.
+ *
+ * In raw-operator mode the query is passed through so OR/AND/NOT/NEAR keep
+ * working, but FTS5 reads `policy-only` as query syntax and the whole statement
+ * fails with `no such column: only` (#307). Quoting the term makes it data again
+ * while the operators stay syntax, so the caller keeps the semantics it asked
+ * for instead of degrading to natural-language terms. `NEAR(a-b, 5)`,
+ * `content:policy-only` and already-quoted phrases are deliberately untouched:
+ * they either contain their own grouping or are syntax the caller asked for.
+ */
+function quoteFts5HyphenatedBarewords(query: string): string {
+  return query.replace(FTS5_TOKEN_PATTERN, (full, phrase, term) => {
+    if (phrase !== undefined || !term) return full;
+    if (!term.includes('-') || !FTS5_QUOTABLE_BAREWORD.test(term)) return full;
+    return `"${term.replace(/"/g, '""')}"`;
+  });
+}
+
 function collectNaturalLanguageTerms(query: string): string[] {
   const terms: string[] = [];
 
@@ -55,14 +80,16 @@ function collectNaturalLanguageTerms(query: string): string[] {
  * Normalize natural-language search input into an FTS5 query.
  * Plain terms become individually quoted for implicit AND matching.
  * Explicit quoted phrases are preserved, connector stopwords are ignored in
- * natural-language mode, and raw uppercase FTS5 operators pass through.
+ * natural-language mode, and raw uppercase FTS5 operators pass through — with
+ * one exception: a bareword carrying an unquoted hyphen is quoted, because FTS5
+ * reads it as syntax and fails the whole statement (#307).
  */
 export function normalizeFts5Query(query: string): string {
   const trimmed = query.trim();
   if (trimmed.length === 0) return '';
 
   if (hasExplicitFts5Operator(trimmed)) {
-    return trimmed;
+    return quoteFts5HyphenatedBarewords(trimmed);
   }
 
   return collectNaturalLanguageTerms(trimmed)
