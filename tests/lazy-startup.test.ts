@@ -90,6 +90,20 @@ after(async () => {
 });
 
 describe("lazy startup lifecycle", () => {
+  it("offers no skills to the agent when skillsEnabled is false", async () => {
+    await configure({ skillsEnabled: false });
+    register();
+    await emit("session_start");
+    assert.equal(await emit("resources_discover", { cwd, reason: "startup" }), undefined);
+    assert.equal(tools.skill_manage, undefined);
+    assert.ok(tools.memory_search);
+    const prompt = await emit("before_agent_start", { systemPrompt: "base" });
+    assert.match(prompt.systemPrompt, /memory-policy/);
+    assert.doesNotMatch(prompt.systemPrompt, /skill/i);
+    assert.equal(existsSync(path.join(globalDir, "skills")), false);
+    assert.equal(existsSync(path.join(projectDir, "skills")), false);
+  });
+
   it("keeps generic conversation, skills, preview and cold shutdown free of memory/DB loading", async (t) => {
     const loads = t.mock.method(MemoryStore.prototype, "loadFromDisk");
     const opens = t.mock.method(DatabaseManager.prototype, "getDb");

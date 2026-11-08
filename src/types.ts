@@ -129,12 +129,25 @@ export interface MemoryConfig {
   /** Inject pinned STANDING.md instructions into every session. Default: true */
   standingInstructionsEnabled: boolean;
   /**
+   * Offer this extension's procedural skills to the agent: the skill_manage tool, the skill
+   * directories contributed to Pi, and the skill guidance in the built-in memory policy. Default: true
+   */
+  skillsEnabled: boolean;
+  /**
    * Session retention window in days. A positive value opts in to pruning
    * sessions (and their messages) older than the window on startup; `0`/omitted
    * disables pruning so no existing searchable history is silently deleted.
    * Default: 0 (disabled).
    */
   sessionRetentionDays?: number;
+  /**
+   * First-level directory names (exact or `*` globs) under the sessions root
+   * to exclude from session indexing. The sessions directory is shared with
+   * extension artifacts (e.g. pi-subagents writes `subagent-artifacts/`);
+   * non-session JSONL is already skipped by content sniffing — use this to
+   * also skip whole directories regardless of content.
+   */
+  sessionIndexExclude?: string[];
 }
 
 export type MemoryCategory =

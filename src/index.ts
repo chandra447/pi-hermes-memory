@@ -274,6 +274,7 @@ export default function (pi: ExtensionAPI) {
         // Exclude files older than the retention cutoff so sessions pruned by
         // retention are never re-indexed and never schedule another backfill.
         retentionCutoffMs: retentionCutoffMs(config.sessionRetentionDays),
+        sessionIndexExclude: config.sessionIndexExclude,
       });
     }
   }, async (ctx) => {
@@ -295,11 +296,13 @@ export default function (pi: ExtensionAPI) {
     if (standingStore) await standingStore.load();
     if (!lazy) await ensureMemoryReady(ctx);
     refreshSkillProjectContext(ctx.cwd);
-    await skillStore.migrateLegacySkills();
-    await skillStore.ensureDiscoveredRoots();
+    if (config.skillsEnabled) {
+      await skillStore.migrateLegacySkills();
+      await skillStore.ensureDiscoveredRoots();
+    }
   });
 
-  registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir);
+  if (config.skillsEnabled) registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir);
 
   // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
   pi.on("before_agent_start", async (event, _ctx) => {
@@ -335,7 +338,7 @@ export default function (pi: ExtensionAPI) {
   configureMemoryToolProjectStore = registerMemoryTool(memoryPi, store, projectStoreRef, dbManager, projectNameRef, bindProjectFromCwd);
 
   // ── 4. Register the skill tool ──
-  registerSkillTool(pi, skillStore);
+  if (config.skillsEnabled) registerSkillTool(pi, skillStore);
 
   // ── 5. Setup background learning loop (with tool-call-aware nudge) ──
   setupBackgroundReview(pi, store, projectStoreRef, config, {
