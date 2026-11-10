@@ -27,11 +27,11 @@ import * as fs from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
-import { DatabaseManager } from "./store/db.js";
+import { DatabaseManager, DATABASE_CLOSED_MESSAGE } from "./store/db.js";
 import { indexSession, upsertSessionFileMetadata, pruneEphemeralReviewSessions, pruneOldSessions, retentionCutoffMs } from "./store/session-indexer.js";
 import { runRecoveryMaintenance } from "./store/recovery-maintenance.js";
 import { scheduleSessionBackfill, joinSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS, type SessionBackfillState } from "./handlers/session-backfill.js";
-import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-live-index.js";
+import { scheduleLiveSessionIndex, waitForLiveSessionIndex, closeLiveSessionIndex, reportLiveSessionIndexError, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS, type SessionLiveIndexState } from "./handlers/session-live-index.js";
 import { parseSessionFile } from "./store/session-parser.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
 import { registerSkillTool } from "./tools/skill-tool.js";
@@ -127,12 +127,16 @@ export default function (pi: ExtensionAPI) {
   const dbManager = new DatabaseManager(globalDir);
   let databaseClosed = false;
   const backfillState: SessionBackfillState = { inProgress: false, promise: null };
+  // Per-session live-index state: closing it at shutdown stops a message_end
+  // that lands during teardown from queuing a timer that can only run into the
+  // closed database (#313).
+  const liveIndexState: SessionLiveIndexState = { inProgress: false, promise: null };
   dbManager.setQuickCheckOnOpen(config.quickCheckOnOpen ?? true);
   // No database may open before first-use migration has completed.
   let databaseMigrationPending = (lazy && shouldMigrateExtensionRoot) || (shouldMigrateExtensionRoot
     && isDatabaseMigrationPending(legacyGlobalDir, globalDir));
   dbManager.setOpenGuard(() => {
-    if (databaseClosed) throw new Error("Memory session has shut down");
+    if (databaseClosed) throw new Error(DATABASE_CLOSED_MESSAGE);
     if (databaseMigrationPending) throw new Error("Legacy sessions.db migration is pending");
   });
   const sessionsDir = path.join(agentRoot, "sessions");
@@ -407,7 +411,9 @@ export default function (pi: ExtensionAPI) {
     // Cold lazy sessions remain in Pi's JSONL files and are backfilled on use.
     if (lazy && !initialization.isReady()) return;
     scheduleLiveSessionIndex(dbManager, ctx.sessionManager, {
-      onError: (err) => console.warn(`⚠️ Live session indexing failed: ${err instanceof Error ? err.message : String(err)}`),
+      state: liveIndexState,
+      // A close is teardown noise, not a failure; real errors still warn.
+      onError: (err) => reportLiveSessionIndexError(err, (message) => console.warn(message)),
     });
   });
 
@@ -429,6 +435,9 @@ export default function (pi: ExtensionAPI) {
   // DB-writing session_shutdown handler after this block — it would run after
   // close() and silently no-op.
   pi.on("session_shutdown", async (_event, ctx) => {
+    // First, before anything is closed: no further live-index timer may be
+    // queued for this session (#313).
+    closeLiveSessionIndex(liveIndexState);
     await initialization.close();
     if (lazy && !initialization.isReady()) {
       databaseClosed = true;
@@ -458,7 +467,7 @@ export default function (pi: ExtensionAPI) {
       try {
         await measureLifecycle("shutdown.index-waits", () => Promise.all([
           waitForSessionBackfill(SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS, backfillState),
-          waitForLiveSessionIndex(SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS),
+          waitForLiveSessionIndex(SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS, liveIndexState),
         ]));
       } catch {
         // Best effort only — shutdown should not be held up by indexing errors.

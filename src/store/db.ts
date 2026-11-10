@@ -76,6 +76,17 @@ export const SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const FTS5_MIGRATION_MAX_LOCK_ATTEMPTS = 3;
 
+/**
+ * Thrown by the open guard once the extension has closed the database on
+ * `session_shutdown`. Callers use it to tell an intentional close apart from a
+ * real failure — for example a live-index timer that fires during teardown.
+ */
+export const DATABASE_CLOSED_MESSAGE = 'Memory session has shut down';
+
+export function isDatabaseClosedError(error: unknown): boolean {
+  return error instanceof Error && error.message === DATABASE_CLOSED_MESSAGE;
+}
+
 const FTS5_TOKENIZER_VERSION_KEY = 'fts5_tokenizer_version';
 const FTS5_TOKENIZER_VERSION = 'trigram-v1';
 const FTS5_TRIGRAM_TABLES = {
@@ -561,11 +572,15 @@ export class DatabaseManager {
   }
 
   private clearRecoveryFailuresBestEffort(): void {
-    try { this.clearRecoveryFailures(); } catch {}
+    // Best effort: a stale circuit-breaker file must never turn a successful
+    // recovery into a failure.
+    try { this.clearRecoveryFailures(); } catch { /* intentionally ignored */ }
   }
 
   private cleanupRecoveryArtifactsBestEffort(): void {
-    try { this.cleanupRecoveryArtifacts(); } catch {}
+    // Best effort: leftover snapshots are reclaimed by the next maintenance
+    // sweep, so a failed cleanup must not fail the caller.
+    try { this.cleanupRecoveryArtifacts(); } catch { /* intentionally ignored */ }
   }
 
   private cleanupRecoveryArtifacts(): void {

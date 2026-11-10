@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import Database from 'better-sqlite3';
-import { DatabaseManager, SQLITE_BUSY_TIMEOUT_MS, SQLITE_WAL_AUTOCHECKPOINT_PAGES } from '../../src/store/db.js';
+import { DatabaseManager, DATABASE_CLOSED_MESSAGE, isDatabaseClosedError, SQLITE_BUSY_TIMEOUT_MS, SQLITE_WAL_AUTOCHECKPOINT_PAGES } from '../../src/store/db.js';
 import { AtomicLockCoordinator } from '../../src/store/atomic-lock-coordinator.js';
 import { rmTestDirSync } from "../helpers/cleanup.js";
 
@@ -1086,6 +1086,16 @@ describe('DatabaseManager', () => {
           VALUES (?, ?, ?, ?, ?)
         `).run('bad-msg', 'nonexistent-session', 'user', 'test', '2026-05-03T00:00:00Z');
       }, /FOREIGN KEY/);
+    });
+  });
+
+  describe('isDatabaseClosedError', () => {
+    it('matches only the intentional-close sentinel', () => {
+      assert.equal(isDatabaseClosedError(new Error(DATABASE_CLOSED_MESSAGE)), true);
+      assert.equal(isDatabaseClosedError(new Error('Memory session has shut down now')), false);
+      assert.equal(isDatabaseClosedError(new Error('database is locked')), false);
+      assert.equal(isDatabaseClosedError(new Error('Legacy sessions.db migration is pending')), false);
+      assert.equal(isDatabaseClosedError(DATABASE_CLOSED_MESSAGE), false);
     });
   });
 });

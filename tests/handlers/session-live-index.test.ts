@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { DatabaseManager } from '../../src/store/db.js';
+import { DatabaseManager, DATABASE_CLOSED_MESSAGE } from '../../src/store/db.js';
 import {
   scheduleLiveSessionIndex,
   waitForLiveSessionIndex,
+  closeLiveSessionIndex,
+  reportLiveSessionIndexError,
   type SessionLiveIndexState,
 } from '../../src/handlers/session-live-index.js';
 import { rmTestDirSync } from "../helpers/cleanup.js";
@@ -222,5 +224,41 @@ describe('session live indexing handler', () => {
     const completed = await waitForLiveSessionIndex(5, state);
 
     assert.equal(completed, false);
+  });
+
+  it('stops scheduling once the session has closed the database (#313)', () => {
+    const entries = [{
+      type: 'message',
+      id: 'entry-1',
+      timestamp: '2026-05-03T00:01:00Z',
+      message: { role: 'user', content: 'message that lands during teardown' },
+    }];
+    const callbacks: (() => void)[] = [];
+    const state: SessionLiveIndexState = { inProgress: false, promise: null };
+    closeLiveSessionIndex(state);
+
+    const scheduled = scheduleLiveSessionIndex(dbManager, createSnapshot(entries), {
+      state,
+      delayMs: 0,
+      setTimeoutFn: (callback) => {
+        callbacks.push(callback);
+        return 0;
+      },
+    });
+
+    assert.equal(scheduled, false, 'no work may be queued after close');
+    assert.equal(callbacks.length, 0, 'no timer may be created after close');
+    assert.equal(state.promise, null);
+    assert.equal(dbManager.getStats().messages, 0);
+  });
+
+  it('does not report the intentional close as a live-index failure (#313)', () => {
+    const warnings: string[] = [];
+
+    reportLiveSessionIndexError(new Error(DATABASE_CLOSED_MESSAGE), (message) => warnings.push(message));
+    reportLiveSessionIndexError(new Error('database is locked'), (message) => warnings.push(message));
+
+    assert.equal(warnings.length, 1, 'only the real failure is reported');
+    assert.match(warnings[0], /^⚠️ Live session indexing failed: database is locked$/);
   });
 });
