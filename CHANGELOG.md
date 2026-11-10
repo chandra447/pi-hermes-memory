@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-11
+
 ### Added
 - **`sessionIndexExclude`: skip whole directories when indexing sessions** ([#223](https://github.com/chandra447/pi-hermes-memory/pull/223)): new `sessionIndexExclude` setting (default `[]`, disabled). `~/.pi/agent/sessions/` is a shared namespace, so extensions such as pi-subagents' `subagent-artifacts/` legitimately keep JSONL there that is not a session. Non-session *files* are already skipped by content sniffing; this setting also skips entire first-level directories regardless of content, e.g. `"sessionIndexExclude": ["subagent-artifacts"]` — exact names or `*` globs (`["artifact-*"]`). The list applies to the startup backfill preflight, the deferred backfill, live indexing, and `/memory-index-sessions`. Entries must be plain first-level directory names: values that are blank after trimming, or that contain a path separator or a `..` segment, are dropped with a warning instead of being accepted as a config value that can never match a directory.
 
