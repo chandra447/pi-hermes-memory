@@ -19,8 +19,10 @@ import {
   DEFAULT_MEMORY_CHAR_LIMIT,
   DEFAULT_USER_CHAR_LIMIT,
   MEMORY_FILE,
+  OVERFLOW_EPISODE_FILE,
   USER_FILE,
 } from "../../src/constants.js";
+import { readOverflowEpisodes } from "../../src/store/overflow-episodes.js";
 import type { MemoryConfig } from "../../src/types.js";
 
 // ─── Helpers (module-level) ───
@@ -112,6 +114,10 @@ describe("MemoryStore", { concurrency: 1 }, () => {
     await removeFile(memoryPath);
     await removeFile(userPath);
     await removeFile(failurePath);
+    // Episode/cooldown sidecars are keyed by storage identity, which is stable
+    // across tests, so they must go too (#284).
+    await removeFile(path.join(MEMORY_DIR, OVERFLOW_EPISODE_FILE));
+    await removeFile(path.join(MEMORY_DIR, "project", OVERFLOW_EPISODE_FILE));
     await new Promise((r) => setTimeout(r, 250));
     // Remove again in case a pending write sneaked in during the wait
     await removeFile(memoryPath);
@@ -432,6 +438,73 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.equal(manual.success, true);
       assert.equal((await store.add("memory", `${TEST_MARKER} ${"incoming-again".repeat(20)}`)).success, false);
       assert.equal(consolidatorCalls, 0);
+    });
+
+    it("records one overflow episode per crossing in policy-only mode instead of firing the consolidator per write (#284)", async (t) => {
+      const originalNow = Date.now;
+      let now = originalNow();
+      Date.now = () => now;
+      t.after(() => {
+        Date.now = originalNow;
+      });
+
+      let consolidatorCalls = 0;
+      const store = new MemoryStore(makeConfig({
+        memoryMode: "policy-only",
+        memoryCharLimit: 180,
+        memoryOverflowStrategy: "auto-consolidate",
+        autoConsolidate: true,
+        overflowGraceMs: 60_000,
+      }));
+      // A consolidator that cannot free space: the store stays over its goal
+      // for the whole test, which is exactly the steady state that used to fire
+      // on every write.
+      store.setConsolidator(async () => {
+        consolidatorCalls++;
+        return { consolidated: false, error: "cannot free space" };
+      });
+      await store.loadFromDisk();
+
+      const seed = await store.add("memory", `${TEST_MARKER} ${"seed".repeat(12)}`);
+      assert.equal(seed.success, true, seed.error);
+
+      // Two adds inside the grace window: both land, the consolidator is not
+      // called at all (it is no longer on the write path), and the first one
+      // that crosses the goal records an episode.
+      const first = await store.add("memory", `${TEST_MARKER} ${"incoming".repeat(20)}`);
+      const second = await store.add("memory", `${TEST_MARKER} ${"incoming-again".repeat(20)}`);
+      assert.equal(first.success, true, first.error);
+      assert.equal(second.success, true, second.error);
+      assert.match(first.message ?? "", /overflow episode is recorded/);
+      assert.equal(consolidatorCalls, 0);
+
+      const identity = await store.getStorageIdentity("memory");
+      const recorded = await readOverflowEpisodes(MEMORY_DIR);
+      assert.equal(recorded[identity]?.openAt, now, "the crossing should open an episode");
+
+      // Still inside the grace window: the lifecycle sweep does not act yet.
+      assert.equal((await store.runOverflowSweep()).attempted, 0);
+      assert.equal(consolidatorCalls, 0);
+
+      // Past the grace window the episode is acted on exactly once.
+      now += 60_001;
+      const sweep = await store.runOverflowSweep();
+      assert.equal(sweep.attempted, 1);
+      assert.equal(sweep.failed, 1, "a run that frees nothing is reported, not thrown");
+      assert.equal(consolidatorCalls, 1);
+
+      // A second immediate add cannot re-arm the episode: it was closed and a
+      // cross-session cooldown stamped, so the store's steady state does not
+      // buy another consolidation child.
+      const third = await store.add("memory", `${TEST_MARKER} ${"incoming-third".repeat(20)}`);
+      assert.equal(third.success, true, third.error);
+      assert.match(third.message ?? "", /arms after the cooldown/);
+      assert.equal((await store.runOverflowSweep()).attempted, 0);
+      assert.equal(consolidatorCalls, 1);
+
+      const cooled = await readOverflowEpisodes(MEMORY_DIR);
+      assert.equal(cooled[identity]?.openAt, null, "the episode should be closed after the sweep");
+      assert.ok((cooled[identity]?.cooldownUntil ?? 0) > now, "the cooldown should be visible to other sessions");
     });
 
     it("evicts oldest entries in file order when memoryOverflowStrategy is fifo-evict", async () => {
