@@ -3,7 +3,7 @@
 // npm access installs production dependencies; model traffic is loopback-only.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -52,6 +52,9 @@ try {
   await writeFile(join(install, "package.json"), JSON.stringify({ name: "production-smoke", private: true }));
   npm(["install", "--omit=dev", "--omit=peer", "--ignore-scripts", "--no-audit", "--no-fund", join(root, packed.filename)], install);
   const installed = join(install, "node_modules", "pi-hermes-memory");
+  const installedManifest = JSON.parse(await readFile(join(installed, "package.json"), "utf8"));
+  assert.deepEqual(installedManifest.pi?.extensions, ["./dist/index.js"]);
+  const extensionEntry = join(installed, installedManifest.pi.extensions[0]);
   const requireFromPackage = createRequire(join(installed, "package.json"));
   for (const specifier of ["@earendil-works/pi-ai/compat", "@earendil-works/pi-coding-agent"]) {
     assert.throws(() => requireFromPackage.resolve(specifier), { code: "MODULE_NOT_FOUND" });
@@ -88,7 +91,7 @@ export default function (pi) {
   // production package. Only Pi's loader can provide its aliases to the probe.
   const hostSdk = import.meta.resolve("@earendil-works/pi-coding-agent");
   const { loadExtensions } = await import(new URL("./core/extensions/loader.js", hostSdk).href);
-  const loaded = await loadExtensions([join(installed, "src", "index.ts"), probe], install);
+  const loaded = await loadExtensions([extensionEntry, probe], install);
   assert.deepEqual(loaded.errors, []);
   const tool = loaded.extensions.find((extension) => extension.tools.has("production_probe"))
     ?.tools.get("production_probe").definition;
