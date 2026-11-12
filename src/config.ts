@@ -16,6 +16,7 @@ import {
   DEFAULT_CONSOLIDATION_TIMEOUT_MS,
   DEFAULT_FLUSH_COMPACT_TIMEOUT_MS,
   CONSOLIDATION_CHUNK_CHARS_MIN,
+  DEFAULT_REVIEW_COMPLETION_TIMEOUT_MS,
   DEFAULT_OVERFLOW_GRACE_MS,
   DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
   DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
@@ -97,6 +98,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   flushMinTurns: DEFAULT_FLUSH_MIN_TURNS,
   flushRecentMessages: DEFAULT_FLUSH_RECENT_MESSAGES,
   flushCompactTimeoutMs: DEFAULT_FLUSH_COMPACT_TIMEOUT_MS,
+  reviewCompletionTimeoutMs: DEFAULT_REVIEW_COMPLETION_TIMEOUT_MS,
   memoryOverflowStrategy: "auto-consolidate",
   overflowGraceMs: DEFAULT_OVERFLOW_GRACE_MS,
   autoConsolidate: true,
@@ -166,6 +168,19 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
           console.warn(
             `⚠️ flushCompactTimeoutMs is set to ${parsed.flushCompactTimeoutMs}ms, below the ${DEFAULT_FLUSH_COMPACT_TIMEOUT_MS}ms default.`
             + " Compact flush is one LLM turn over the conversation; local models are routinely cut off below this.",
+          );
+        }
+      }
+      // Positive values only: a review ceiling of 0 would abort every review
+      // immediately, which is a misconfiguration rather than a disable.
+      if (typeof parsed.reviewCompletionTimeoutMs === "number"
+        && Number.isFinite(parsed.reviewCompletionTimeoutMs)
+        && parsed.reviewCompletionTimeoutMs > 0) {
+        config.reviewCompletionTimeoutMs = parsed.reviewCompletionTimeoutMs;
+        if (parsed.reviewCompletionTimeoutMs < DEFAULT_REVIEW_COMPLETION_TIMEOUT_MS) {
+          console.warn(
+            `⚠️ reviewCompletionTimeoutMs is set to ${parsed.reviewCompletionTimeoutMs}ms, below the ${DEFAULT_REVIEW_COMPLETION_TIMEOUT_MS}ms default.`
+            + " A background review is one LLM turn over the recent conversation; slow or local providers are routinely cut off below this.",
           );
         }
       }

@@ -811,7 +811,7 @@ describe("setupBackgroundReview", () => {
     );
     assert.deepStrictEqual(execCalls[0][2], {
       cwd: "/tmp/local-session",
-      timeout: 125000,
+      timeout: 605000,
     });
   });
 
@@ -842,6 +842,27 @@ describe("setupBackgroundReview", () => {
     assert.match(failures[0].msg, /Provider credit balance exhausted/);
     assert.doesNotMatch(failures[0].msg, /Warning: No models match pattern/);
     assert.doesNotMatch(failures[0].msg, /\u001b\[/);
+  });
+
+  it("honors a configured reviewCompletionTimeoutMs on both transports", async () => {
+    const pi = createMockPi();
+    setupWithDirectDeps(pi, { ok: false, appliedCount: 0, fallbackReason: "no_auth" }, {
+      ...defaultConfig,
+      reviewTransport: "direct",
+      reviewCompletionTimeoutMs: 900000,
+    });
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(makeBranch(10));
+    }
+    await reviewSettledSignal.promise;
+
+    const directOptions = directCalls[0][3] as { timeoutMs: number };
+    assert.strictEqual(directOptions.timeoutMs, 900000, "direct review should use the configured ceiling");
+    assert.strictEqual(execCalls[0][2].timeout, 905000, "subprocess fallback should use the configured ceiling plus watchdog grace");
   });
 
   it("surfaces one actionable diagnostic when direct and subprocess review both fail", async () => {

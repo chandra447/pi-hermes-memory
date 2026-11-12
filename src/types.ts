@@ -50,6 +50,8 @@ export interface MemoryConfig {
   flushRecentMessages?: number;
   /** Ceiling for the compact-path flush (direct + subprocess). Default: 60000 */
   flushCompactTimeoutMs?: number;
+  /** Ceiling for one background-review completion (direct + subprocess). Default: 600000 */
+  reviewCompletionTimeoutMs?: number;
 
   /** Override extension storage directory. Default: ~/.pi/agent/pi-hermes-memory */
   memoryDir?: string;

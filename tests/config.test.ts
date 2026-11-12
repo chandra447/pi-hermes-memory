@@ -30,6 +30,7 @@ describe("loadConfig", () => {
     assert.strictEqual(config.flushMinTurns, 6);
     assert.strictEqual(config.flushRecentMessages, 0);
     assert.strictEqual(config.flushCompactTimeoutMs, 60000);
+    assert.strictEqual(config.reviewCompletionTimeoutMs, 600000);
     assert.strictEqual(config.memoryOverflowStrategy, "auto-consolidate");
     assert.strictEqual(config.autoConsolidate, true);
     assert.strictEqual(config.consolidationTimeoutMs, 180000);
@@ -118,6 +119,38 @@ describe("loadConfig", () => {
         "the disable sentinel must be honored",
       );
       assert.strictEqual(warnings.length, 1, "disabling the flush is not a too-low timeout");
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  it("honors a configured reviewCompletionTimeoutMs, warning only when it is below the default", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => { warnings.push(String(message)); };
+
+    try {
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ reviewCompletionTimeoutMs: 900000 }));
+      assert.strictEqual(loadConfig(TEST_CONFIG_PATH).reviewCompletionTimeoutMs, 900000);
+      assert.deepStrictEqual(warnings, [], "a value above the default should not warn");
+
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ reviewCompletionTimeoutMs: 120000 }));
+      assert.strictEqual(
+        loadConfig(TEST_CONFIG_PATH).reviewCompletionTimeoutMs,
+        120000,
+        "a lower configured value must be honored, not clamped",
+      );
+      assert.strictEqual(warnings.length, 1, "a sub-default value should warn once");
+      assert.match(warnings[0], /120000ms.*below the 600000ms default/);
+
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ reviewCompletionTimeoutMs: 0 }));
+      assert.strictEqual(
+        loadConfig(TEST_CONFIG_PATH).reviewCompletionTimeoutMs,
+        600000,
+        "a review ceiling of 0 would abort every review, so the default is kept",
+      );
+      assert.strictEqual(warnings.length, 1, "an ignored value is not a too-low timeout");
     } finally {
       console.warn = originalWarn;
     }
