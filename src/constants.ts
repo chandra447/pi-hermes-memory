@@ -42,6 +42,14 @@ export const DEFAULT_CONSOLIDATION_TIMEOUT_MS = 180000;
  * configured values verbatim; loadConfig warns below this.
  */
 export const DEFAULT_FLUSH_COMPACT_TIMEOUT_MS = 60_000;
+/**
+ * Ceiling for one background-review completion, shared by the in-process
+ * direct transport and the `pi -p` subprocess fallback. A review is one LLM
+ * turn over the recent conversation, so 120s cut slow/local providers off
+ * mid-turn and reported a misleading timeout. Configured values are honored
+ * verbatim; `loadConfig` warns when a value below this is set.
+ */
+export const DEFAULT_REVIEW_COMPLETION_TIMEOUT_MS = 600_000;
 
 /** Shutdown flush cap. Not configurable. */
 export const DEFAULT_FLUSH_SHUTDOWN_TIMEOUT_MS = 10_000;

@@ -8,6 +8,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import type { DatabaseManager } from "../store/db.js";
 import type { MemoryCategory, MemoryConfig, MemoryResult, ThinkingLevel } from "../types.js";
+import { DEFAULT_REVIEW_COMPLETION_TIMEOUT_MS } from "../constants.js";
 
 export interface ReviewMemoryOperation {
   action: "add" | "replace" | "remove";
@@ -49,14 +50,22 @@ export function usesDirectTransport(config: Pick<MemoryConfig, "reviewTransport"
   return (config.reviewTransport ?? "direct") === "direct";
 }
 
-/** One shared budget for a single review/flush/correction/consolidation
- * completion, on both the direct transport and the `pi -p` subprocess
- * fallback. Deliberately not configurable (#197): the bug was the double
- * spend, not the number — after the empty-response short-circuit the
- * painful case is one 120s call. Consolidation keeps its separate
- * `consolidationTimeoutMs` because it is user-visible and must actually
- * shrink. */
-export const REVIEW_COMPLETION_TIMEOUT_MS = 120_000;
+/** One shared budget for a single review completion, on both the direct
+ * transport and the `pi -p` subprocess fallback. Configurable through
+ * `reviewCompletionTimeoutMs`: providers with a slow prefill routinely exceed
+ * the old fixed 120s number and surfaced it as `parse_error` plus a
+ * subprocess timeout instead of a clear budget error. The cap bounds one
+ * completion, not the whole review, so raising it cannot re-introduce the
+ * #197 double spend. Consolidation keeps its separate `consolidationTimeoutMs`
+ * because it is user-visible and must actually shrink. */
+export const REVIEW_COMPLETION_TIMEOUT_MS = DEFAULT_REVIEW_COMPLETION_TIMEOUT_MS;
+
+/** Configured review ceiling, or the package default when unset. */
+export function resolveReviewCompletionTimeoutMs(
+  config: Pick<MemoryConfig, "reviewCompletionTimeoutMs">,
+): number {
+  return config.reviewCompletionTimeoutMs ?? REVIEW_COMPLETION_TIMEOUT_MS;
+}
 
 type ReviewLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmFallbackModels" | "llmThinkingOverride">;
 
