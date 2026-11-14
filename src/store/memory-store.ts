@@ -634,12 +634,15 @@ export class MemoryStore {
   }
 
   /**
-   * All failure entries (no age filter), metadata stripped.
-   * Used by consolidation, which must consider the full file size —
-   * unlike getFailureEntries(), which filters by age for injection.
+   * Failure entries without an age filter, with metadata stripped.
+   * When a project is supplied, include global entries and entries scoped
+   * to that project. Passing null selects global entries only.
    */
-  getAllFailureEntries(): string[] {
-    return this.failureEntries.map((e) => this.stripMetadata(e));
+  getAllFailureEntries(project?: string | null): string[] {
+    const entries = this.failureEntries.map((entry) => this.decodeEntry(entry));
+    return entries
+      .filter((entry) => project === undefined || entry.project === null || entry.project === project)
+      .map((entry) => entry.text);
   }
 
   getMemoryEntries(): string[] {
