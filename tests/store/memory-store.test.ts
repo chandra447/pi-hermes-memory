@@ -693,6 +693,21 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.equal(count, 1);
     });
 
+    it("reads only global failures and failures from the selected project", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.addFailure(`${TEST_MARKER} global lesson`, { category: "failure" });
+      await store.addFailure(`${TEST_MARKER} project A lesson`, { category: "failure", project: "project-a" });
+      await store.addFailure(`${TEST_MARKER} project B lesson`, { category: "failure", project: "project-b" });
+
+      const selected = store.getAllFailureEntries("project-a").join("\n");
+      assert.match(selected, /global lesson/);
+      assert.match(selected, /project A lesson/);
+      assert.doesNotMatch(selected, /project B lesson/);
+      assert.equal(store.getAllFailureEntries(null).length, 1);
+      assert.equal(store.getAllFailureEntries().length, 3);
+    });
+
     it("keeps identical failure text in global and distinct project scopes", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();

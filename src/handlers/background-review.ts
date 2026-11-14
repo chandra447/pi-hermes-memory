@@ -45,6 +45,29 @@ export interface ReviewPromptInput {
   currentMemory: string;
   currentUser: string;
   currentProject: string | null;
+  currentFailures?: string;
+}
+
+const REVIEW_FAILURE_MAX_CHARS = 2_000;
+
+function formatExistingFailures(entries: string[]): string {
+  const selected: string[] = [];
+  const separator = "\n§\n";
+  let remaining = REVIEW_FAILURE_MAX_CHARS;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    const length = entry.length + (selected.length ? separator.length : 0);
+    if (length > remaining) continue;
+    selected.push(entry);
+    remaining -= length;
+  }
+  return selected.reverse().join(separator);
+}
+
+function appendFailureMemory(sections: string[], failures: string | undefined): void {
+  if (failures) {
+    sections.push("", "--- Existing Failure Memories ---", failures);
+  }
 }
 
 export function buildSubprocessReviewPrompt(input: ReviewPromptInput): string {
@@ -68,6 +91,7 @@ export function buildSubprocessReviewPrompt(input: ReviewPromptInput): string {
     );
   }
 
+  appendFailureMemory(reviewPrompt, input.currentFailures);
   reviewPrompt.push(
     "",
     "--- Conversation to Review ---",
@@ -94,6 +118,7 @@ export function buildDirectReviewUserPrompt(input: ReviewPromptInput): string {
     );
   }
 
+  appendFailureMemory(sections, input.currentFailures);
   sections.push(
     "",
     "--- Conversation to Review ---",
@@ -266,6 +291,7 @@ export function setupBackgroundReview(
         currentMemory: store.getMemoryEntries().join("\n§\n"),
         currentUser: store.getUserEntries().join("\n§\n"),
         currentProject: activeProjectStore ? activeProjectStore.getMemoryEntries().join("\n§\n") : null,
+        currentFailures: formatExistingFailures(store.getAllFailureEntries(activeProjectName ?? null)),
       };
       const subprocessPrompt = buildSubprocessReviewPrompt(promptInput);
       const directPrompt = buildDirectReviewUserPrompt(promptInput);

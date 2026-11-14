@@ -122,6 +122,10 @@ const defaultConfig = {
 const mockStore = {
   getMemoryEntries: () => ["existing memory entry"],
   getUserEntries: () => ["existing user entry"],
+  getAllFailureEntries: (project: string | null) => {
+    assert.equal(project, null);
+    return ["oversized failure ".repeat(300), "Use the correct firmware profile"];
+  },
 } as any;
 
 function fireMessageEnd(role: string) {
@@ -217,6 +221,28 @@ describe("setupBackgroundReview", () => {
     // exec should have been called since we have 3 user turns and 10 turn_end events
     assert.ok(execCalls.length > 0, "exec should be called with 3 user turns and 10 turn_end events");
   });
+
+  for (const transport of ["direct", "subprocess"] as const) {
+    it(`includes a bounded failure memory section in ${transport} reviews`, async () => {
+      let prompt = "";
+      setup(createMockPi(), { ...defaultConfig, reviewTransport: transport }, {
+        runDirectReview: async (_ctx, _store, _projectStore, options) => {
+          prompt = options.userPrompt;
+          return { ok: true, appliedCount: 0 };
+        },
+        execChildPrompt: async (_pi, childPrompt) => {
+          prompt = childPrompt;
+          return { code: 0, stdout: "", stderr: "" };
+        },
+      });
+      for (let i = 0; i < 3; i++) fireMessageEnd("user");
+      for (let i = 0; i < 10; i++) fireTurnEnd();
+      await reviewSettledSignal.promise;
+
+      assert.match(prompt, /--- Existing Failure Memories ---\nUse the correct firmware profile/);
+      assert.doesNotMatch(prompt, /oversized failure/);
+    });
+  }
 
   it("triggers review at nudgeInterval (10) turns", async () => {
     const pi = createMockPi();
