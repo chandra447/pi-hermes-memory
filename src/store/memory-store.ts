@@ -15,7 +15,7 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { scanContent } from "./content-scanner.js";
-import { normalizeMemoryLookupText } from "./memory-lookup.js";
+import { normalizeMemoryLookupText, normalizePatchLookupText } from "./memory-lookup.js";
 import {
   ENTRY_DELIMITER,
   DEFAULT_MEMORY_CHAR_LIMIT,
@@ -563,6 +563,106 @@ export class MemoryStore {
     return this.successResponse(target, "Entry replaced.");
   }
 
+  async patch(target: "memory" | "user" | "failure", oldText: string, newText: string, signal?: AbortSignal): Promise<MemoryResult> {
+    return this.runTargetMutation(
+      target,
+      (markMutation) => this.patchUnlocked(target, oldText, newText, markMutation),
+      signal,
+    );
+  }
+
+  /**
+   * Splice the fragment out of one decoded entry body, or replace it.
+   * Replacing uses a callback so `$&` / "$`" in the replacement stay literal;
+   * deleting also swallows one adjacent plain space so prose does not keep a
+   * doubled gap — and so a deletion that turns an entry into another entry's
+   * exact body still trips the #306 duplicate guard instead of slipping past
+   * it with a leading space. Line structure is never touched.
+   */
+  private spliceFragment(text: string, fragment: string, replacement: string): string {
+    if (replacement) return text.replace(fragment, () => replacement);
+    const start = text.indexOf(fragment);
+    const after = text[start + fragment.length];
+    const spliceStart = after !== " " && start > 0 && text[start - 1] === " " ? start - 1 : start;
+    const spliceEnd = after === " " ? start + fragment.length + 1 : start + fragment.length;
+    return text.slice(0, spliceStart) + text.slice(spliceEnd);
+  }
+
+  /**
+   * Replace one fragment inside an existing entry (#314). The fragment must
+   * match exactly once in exactly one entry; every other sentence, `created`,
+   * and the project scope stay untouched by construction, so the whole-entry
+   * guard from #308 does not apply — but the #306 duplicate guard does: a
+   * patch that would turn an entry into an exact copy of another entry in
+   * the same target is refused.
+   */
+  private async patchUnlocked(
+    target: "memory" | "user" | "failure",
+    oldText: string,
+    newText: string,
+    markMutation: () => void,
+  ): Promise<MemoryResult> {
+    const fragment = normalizePatchLookupText(oldText);
+    if (!fragment) return { success: false, error: "old_text cannot be empty." };
+    const replacement = newText.trim();
+
+    await this.syncTargetFromDiskIfChanged(target);
+    const entries = this.entriesFor(target);
+    const matches = entries.filter((e) => this.stripMetadata(e).includes(fragment));
+
+    if (matches.length === 0) return { success: false, error: `No entry matched '${fragment}'.` };
+    if (matches.length > 1 && !this.areDistinctScopedFailureCopies(target, matches)) {
+      return {
+        success: false,
+        error: `Multiple entries matched '${fragment}'. Be more specific.`,
+        matches: matches.map((e) => this.stripMetadata(e).slice(0, 80) + (e.length > 80 ? "..." : "")),
+      };
+    }
+    for (const entry of matches) {
+      const text = this.stripMetadata(entry);
+      const first = text.indexOf(fragment);
+      if (text.indexOf(fragment, first + fragment.length) !== -1) {
+        return { success: false, error: `old_text occurs more than once in the matched entry. Be more specific.` };
+      }
+    }
+
+    const today = new Date().toISOString().split("T")[0];
+    const replacements = new Map<string, string>();
+    let patchedText = "";
+    for (const entry of matches) {
+      const decoded = this.decodeEntry(entry);
+      const patched = this.spliceFragment(decoded.text, fragment, replacement);
+      if (!patched.trim()) {
+        return { success: false, error: "Patch would empty the entry. Use memory_remove to delete the whole entry." };
+      }
+      if (!patchedText) patchedText = patched;
+      replacements.set(entry, this.encodeEntry(patched, decoded.created, today, decoded.project ?? undefined));
+    }
+
+    // The resulting entry text is what gets stored, so it carries the same
+    // scanContent gate a whole-entry replacement would pay.
+    const scanError = scanContent(patchedText);
+    if (scanError) return { success: false, error: scanError };
+    if (this.replacementWouldDuplicate(target, entries, matches, patchedText)) {
+      return { success: false, error: "Patch would create a duplicate entry." };
+    }
+
+    const testEntries = entries.map((entry) => replacements.get(entry) ?? entry);
+    const newTotal = testEntries.join(ENTRY_DELIMITER).length;
+    if (this.capEnforced && newTotal > this.charLimit(target)) {
+      return {
+        success: false,
+        error: `Patch would put memory at ${newTotal}/${this.charLimit(target)} chars. Shorten or remove other entries first.`,
+      };
+    }
+
+    this.setEntries(target, testEntries);
+    await this.saveToDisk(target);
+    markMutation();
+
+    return this.successResponse(target, "Entry patched.");
+  }
+
   async remove(target: "memory" | "user" | "failure", oldText: string, signal?: AbortSignal): Promise<MemoryResult> {
     return this.runTargetMutation(
       target,
@@ -677,7 +777,7 @@ export class MemoryStore {
     if (match) {
       let project: string | null = null;
       if (match[4]) {
-        try { project = Buffer.from(match[4], "base64url").toString("utf-8").trim() || null; } catch {}
+        try { project = Buffer.from(match[4], "base64url").toString("utf-8").trim() || null; } catch { /* a malformed project token degrades to global scope rather than dropping the entry */ }
       }
       return { text: match[1].trim(), created: match[2].trim(), lastReferenced: match[3].trim(), project };
     }
@@ -1032,6 +1132,8 @@ export class MemoryStore {
             try {
               await this.preserveConflictFile(tmpPath, filePath, "local");
             } catch {
+              // Best effort while already rolling back a failed publish; the
+              // rollback itself must proceed and report the original error.
             }
             try {
               await this.rollbackPublishedFile(recoveryPath, filePath, publishedIdentity);
@@ -1219,6 +1321,8 @@ export class MemoryStore {
         try {
           await this.retireRecoveryFile(item.path, filePath);
         } catch {
+          // One snapshot failing to retire must not abort the sweep; the
+          // next save retries the same retention policy.
         }
       }
 
@@ -1247,7 +1351,7 @@ export class MemoryStore {
           retainedBytes += item.state.size;
           continue;
         }
-        try { await fs.unlink(item.path); } catch {}
+        try { await fs.unlink(item.path); } catch { /* one unlink failure must not abort the sweep */ }
       }
 
       const conflictNames = (await fs.readdir(directory)).filter((name) => conflictPattern.test(name));
@@ -1277,9 +1381,10 @@ export class MemoryStore {
           conflictBytes += item.state.size;
           continue;
         }
-        try { await fs.unlink(item.path); } catch {}
+        try { await fs.unlink(item.path); } catch { /* one unlink failure must not abort the sweep */ }
       }
     } catch {
+      // The sweep is advisory: a memory write must not fail because cleanup did.
     }
   }
 
