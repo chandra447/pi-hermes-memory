@@ -1,5 +1,5 @@
 import { measureLifecycleSync } from '../lifecycle-timing.js';
-import type { DatabaseManager } from '../store/db.js';
+import { isDatabaseClosedError, type DatabaseManager } from '../store/db.js';
 import { indexLiveSession } from '../store/session-indexer.js';
 
 export const SESSION_LIVE_INDEX_DELAY_MS = 50;
@@ -12,12 +12,38 @@ type SessionManagerSnapshot = Parameters<typeof indexLiveSession>[1];
 export interface SessionLiveIndexState {
   inProgress: boolean;
   promise: Promise<void> | null;
+  /**
+   * Set once the session has closed the database. Scheduling is a no-op from
+   * then on: a `message_end` that lands during or after teardown must not queue
+   * a timer that can only run into the closed-DB guard (#313).
+   */
+  closed?: boolean;
 }
 
 export const sessionLiveIndexState: SessionLiveIndexState = {
   inProgress: false,
   promise: null,
 };
+
+/**
+ * Stop live indexing for this session. Call before the database is closed.
+ */
+export function closeLiveSessionIndex(state: SessionLiveIndexState = sessionLiveIndexState): void {
+  state.closed = true;
+}
+
+/**
+ * Report a live-index failure, except for the intentional close. The closed-DB
+ * error is only reachable after `session_shutdown` closed the database, so
+ * warning about it reads as a mid-session failure that never happened (#313).
+ */
+export function reportLiveSessionIndexError(
+  error: unknown,
+  warn: (message: string) => void,
+): void {
+  if (isDatabaseClosedError(error)) return;
+  warn(`⚠️ Live session indexing failed: ${error instanceof Error ? error.message : String(error)}`);
+}
 
 export interface ScheduleLiveSessionIndexOptions {
   state?: SessionLiveIndexState;
@@ -41,7 +67,7 @@ export function scheduleLiveSessionIndex(
   options: ScheduleLiveSessionIndexOptions = {},
 ): boolean {
   const state = options.state ?? sessionLiveIndexState;
-  if (state.inProgress) {
+  if (state.closed || state.inProgress) {
     return false;
   }
 
