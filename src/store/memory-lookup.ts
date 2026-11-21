@@ -22,3 +22,28 @@ export function normalizeMemoryLookupText(text: string): string {
 
   return normalized.trim();
 }
+
+/**
+ * Normalize lookup text for memory_patch (#314).
+ *
+ * Same pasted-line cleanup as normalizeMemoryLookupText (search-result scope
+ * prefixes and mutation-target labels are stripped), but internal newlines
+ * are preserved: a patch fragment is an exact substring and may span lines
+ * in a multi-line entry, while replace/remove keep their historical
+ * first-line lookup semantics. Junk pasted around a fragment fails loudly
+ * (no match) instead of being silently truncated to its first line.
+ */
+export function normalizePatchLookupText(text: string): string {
+  let normalized = text.trim();
+  if (!normalized) return "";
+
+  normalized = normalized.replace(
+    /^\S+\s+scope=(?:global|project:[^\s]+)\s+\[target=(?:memory|user|project|failure)\]\s+/u,
+    "",
+  );
+  normalized = normalized.replace(/^\S+\s+\[[^\]]+\]\s+/u, "");
+  normalized = normalized.replace(/^\[target=(?:memory|user|project|failure)\]\s+/u, "");
+  normalized = normalized.replace(/^(\[[^\]]+\])\s+\1(\s+|$)/, "$1 ");
+
+  return normalized.trim();
+}

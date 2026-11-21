@@ -145,7 +145,7 @@ Start a **new session** and ask:
 
 > Use memory_search to recall my project codename.
 
-Use `memory_replace` to update a saved fact and `memory_remove` to delete it.
+Use `memory_replace` to update a saved fact, `memory_patch` to change one fragment inside an entry, and `memory_remove` to delete it.
 The package manages its own memory files and SQLite store under
 `$DSH_HOME/pi2dsh/agent/` (with the default DSH home when `DSH_HOME` is unset).
 For the headless CLI, install into `--profile headless` instead of `web`.
@@ -265,6 +265,7 @@ The agent gets action-specific memory tools it can call proactively:
 |---|---|---|
 | `memory_add` | `target`, `content` | Append a new durable entry |
 | `memory_replace` | `target`, `old_text`, `content` | Update an existing entry matched by substring |
+| `memory_patch` | `target`, `old_text`, `new_text` | Replace one fragment inside an entry; an empty `new_text` deletes the fragment |
 | `memory_remove` | `target`, `old_text` | Delete an existing entry matched by substring |
 
 Targets are `memory`, `user`, `project`, and `failure`. Failure writes may also include `category` and `failure_reason`.
@@ -384,7 +385,7 @@ For users who prefer source anchors over snippets, `sessionSearch.variant` can b
 The extension keeps Markdown memory as the human-readable source of truth, and mirrors successful writes into the SQLite-backed search store used by `memory_search`.
 
 This means:
-- Fresh `memory_add`, `memory_replace`, and `memory_remove` writes become searchable immediately
+- Fresh `memory_add`, `memory_replace`, `memory_patch`, and `memory_remove` writes become searchable immediately
 - Older Markdown entries can be backfilled with `/memory-sync-markdown`
 - SQLite search does **not** replace the core Markdown limit
 
@@ -433,7 +434,7 @@ By default, background review, session flush, correction save, and the manual `/
 
 If direct mode fails (no model, no auth, provider error, unparseable response, or — for consolidation only — a result that didn't actually free any space), it automatically falls back to the legacy `pi -p --no-session` subprocess path. The automatic over-capacity consolidator triggered from `MemoryStore` itself always uses the subprocess path, since it runs without extension-runtime access.
 
-The subprocess path is restricted to memory operations by construction. Child `pi -p` processes run with `--tools memory_add,memory_replace,memory_remove` and `--exclude-tools mcp__*`, so a background child cannot edit files, run commands, touch skills, or reach MCP tools even when the fallback model is a weak one. Children skip the injected memory policy, which describes tools a child cannot call, and they keep your project as their working directory because the memory tools bind the project store from it. With file and shell tools unreachable, they can only write memory entries.
+The subprocess path is restricted to memory operations by construction. Child `pi -p` processes run with `--tools memory_add,memory_replace,memory_remove,memory_patch` and `--exclude-tools mcp__*`, so a background child cannot edit files, run commands, touch skills, or reach MCP tools even when the fallback model is a weak one. Children skip the injected memory policy, which describes tools a child cannot call, and they keep your project as their working directory because the memory tools bind the project store from it. With file and shell tools unreachable, they can only write memory entries.
 
 Set `reviewTransport` in config only when you need to override this:
 

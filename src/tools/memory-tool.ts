@@ -1,6 +1,6 @@
 /**
  * Memory write tools — registers the LLM-callable memory_add, memory_replace,
- * and memory_remove tools.
+ * memory_remove, and memory_patch tools.
  * See PLAN.md → "Hermes Source File Reference Map" for source lines.
  */
 
@@ -269,12 +269,13 @@ function degradedRepairMessage(result: { degraded?: boolean; degradedReason?: st
     : null;
 }
 
-type MemoryAction = "add" | "replace" | "remove";
+type MemoryAction = "add" | "replace" | "remove" | "patch";
 
 type MemoryToolParams = {
   target: "memory" | "user" | "project" | "failure";
   content?: string;
   old_text?: string;
+  new_text?: string;
   category?: MemoryCategory;
   failure_reason?: string;
 };
@@ -318,7 +319,7 @@ export function registerMemoryTool(
     params: MemoryToolParams,
     signal?: AbortSignal,
   ) => {
-    const { target: rawTarget, content, old_text, category, failure_reason } = params;
+    const { target: rawTarget, content, old_text, new_text, category, failure_reason } = params;
     const target = rawTarget === "project" ? "memory" : rawTarget;
     const activeProjectStore = resolveProjectStore(projectStore);
     const activeProjectName = resolveProjectName(projectName);
@@ -382,6 +383,13 @@ export function registerMemoryTool(
         if (result.success && !syncHandled) {
           syncWarning = await syncRemoveFromSqlite(rawTarget, old_text, dbManager, activeProjectName);
         }
+        break;
+      case "patch":
+        if (!old_text) throw new Error("old_text is required for 'patch' action.");
+        if (new_text === undefined) throw new Error("new_text is required for 'patch' action.");
+        // No targeted sync function: the full-scope reconcile below (and the
+        // mutation observer in the extension) re-mirrors the patched scope.
+        result = await store_.patch(target, old_text, new_text);
         break;
     }
 
@@ -481,6 +489,19 @@ Remove one existing entry. The target and old_text fields are required.`,
     Type.Object({
       target,
       old_text: Type.String({ description: "Substring identifying the entry to remove." }),
+    }),
+  );
+  registerActionTool(
+    "patch",
+    MEMORY_WRITE_TOOL_NAMES[3],
+    "Memory Patch",
+    `${commonDescription}
+
+Patch one fragment inside an existing entry. The target, old_text, and new_text fields are required.`,
+    Type.Object({
+      target,
+      old_text: Type.String({ description: "Existing fragment to replace; it must occur exactly once in exactly one entry." }),
+      new_text: Type.String({ description: "Replacement fragment. An empty string deletes the fragment." }),
     }),
   );
   return configureProjectStore;

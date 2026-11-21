@@ -41,7 +41,7 @@ describe("registerMemoryTool", () => {
 
     assert.deepStrictEqual(
       registeredTools.map((tool) => tool.name),
-      ["memory_add", "memory_replace", "memory_remove"],
+      ["memory_add", "memory_replace", "memory_remove", "memory_patch"],
     );
     for (const tool of registeredTools) {
       assert.ok(tool.description.length > 0);
@@ -633,6 +633,7 @@ describe("registerMemoryTool", () => {
 
     assert.deepStrictEqual(Object.keys(registeredTools).sort(), [
       "memory_add",
+      "memory_patch",
       "memory_remove",
       "memory_replace",
     ]);
@@ -658,6 +659,31 @@ describe("registerMemoryTool", () => {
       Value.Check(registeredTools.memory_remove.parameters, { target: "memory" }),
       false,
       "remove without old_text must fail schema validation",
+    );
+    assert.strictEqual(
+      Value.Check(registeredTools.memory_patch.parameters, {
+        target: "memory",
+        new_text: "new",
+      }),
+      false,
+      "patch without old_text must fail schema validation",
+    );
+    assert.strictEqual(
+      Value.Check(registeredTools.memory_patch.parameters, {
+        target: "memory",
+        old_text: "old",
+      }),
+      false,
+      "patch without new_text must fail schema validation",
+    );
+    assert.strictEqual(
+      Value.Check(registeredTools.memory_patch.parameters, {
+        target: "memory",
+        old_text: "old fragment",
+        new_text: "",
+      }),
+      true,
+      "patch accepts an empty new_text: that deletes the fragment (#314)",
     );
     assert.strictEqual(
       Value.Check(registeredTools.memory_add.parameters, {
@@ -727,6 +753,29 @@ describe("registerMemoryTool", () => {
     await capturedResult.execute("tc-1", { action: "replace", target: "memory", content: "new", old_text: "old" }, undefined as any, undefined as any, undefined as any);
 
     assert.deepStrictEqual(replaceArgs, ["memory", "old", "new"], "should pass target, old_text, content to store.replace");
+  });
+
+  it("execute delegates patch to store.patch", async () => {
+    let capturedResult: any;
+    let patchArgs: any;
+
+    const mockPi = {
+      registerTool: (def: any) => {
+        if (def.name === "memory_patch") capturedResult = def;
+      },
+    } as unknown as ExtensionAPI;
+
+    const mockStore = {
+      patch: (...args: any[]) => {
+        patchArgs = args;
+        return { success: true, target: "memory", entries: ["patched"], usage: "5% — 110/5000 chars", entry_count: 1 };
+      },
+    } as unknown as MemoryStore;
+
+    registerMemoryTool(mockPi, mockStore, null);
+    await capturedResult.execute("tc-1", { target: "memory", old_text: "old fragment", new_text: "new fragment" }, undefined as any, undefined as any, undefined as any);
+
+    assert.deepStrictEqual(patchArgs, ["memory", "old fragment", "new fragment"], "should pass target, old_text, new_text to store.patch");
   });
 
   it("binds project identity from execute ctx.cwd instead of a factory snapshot", async () => {
