@@ -149,3 +149,30 @@ it("treats replacement special patterns literally and permits a no-op patch", as
     assert.equal((await store.patch("memory", "$` backtick", "$` backtick")).success, true);
   });
 });
+
+it("preserves a literal bracketed fragment instead of eating it as a search-result prefix (#314 review)", async () => {
+  await fixture("memory", [entry("Use [build] command daily.")], async (store) => {
+    const result = await store.patch("memory", "Use [build] command", "Run tests");
+    assert.equal(result.success, true);
+    assert.equal(store.getMemoryEntries()[0], "Run tests daily.", "exact saved text");
+  });
+});
+
+it("preserves intentional whitespace in the replacement (#314 review)", async () => {
+  await fixture("memory", [entry("We use redcar daily.")], async (store) => {
+    const result = await store.patch("memory", "red", "blue ");
+    assert.equal(result.success, true);
+    assert.equal(store.getMemoryEntries()[0], "We use blue car daily.", "exact saved text");
+  });
+});
+
+it("refuses overlapping occurrences inside the matched entry, leaving it unchanged (#314 review)", async () => {
+  await fixture("memory", [entry("banana split recipe")], async (store, file) => {
+    const before = await fs.readFile(file, "utf8");
+    const result = await store.patch("memory", "ana", "ono");
+    assert.equal(result.success, false);
+    assert.match(result.error ?? "", /more than once/);
+    assert.equal(store.getMemoryEntries()[0], "banana split recipe");
+    assert.equal(await fs.readFile(file, "utf8"), before, "entry unchanged");
+  });
+});

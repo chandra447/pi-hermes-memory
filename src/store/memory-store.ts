@@ -573,19 +573,21 @@ export class MemoryStore {
 
   /**
    * Splice the fragment out of one decoded entry body, or replace it.
-   * Replacing uses a callback so `$&` / "$`" in the replacement stay literal;
-   * deleting also swallows one adjacent plain space so prose does not keep a
-   * doubled gap — and so a deletion that turns an entry into another entry's
-   * exact body still trips the #306 duplicate guard instead of slipping past
-   * it with a leading space. Line structure is never touched.
+   * Replacing uses a callback so `$&` / "$`" in the replacement stay
+   * literal; deleting collapses the one doubled plain space the removal can
+   * create, so prose does not keep a gap and a deletion that turns an entry
+   * into another entry's exact body still trips the #306 duplicate guard
+   * instead of slipping past it with a leading space. A fragment carrying
+   * its own boundary whitespace is deleted verbatim, and line structure is
+   * never touched.
    */
   private spliceFragment(text: string, fragment: string, replacement: string): string {
     if (replacement) return text.replace(fragment, () => replacement);
     const start = text.indexOf(fragment);
-    const after = text[start + fragment.length];
-    const spliceStart = after !== " " && start > 0 && text[start - 1] === " " ? start - 1 : start;
-    const spliceEnd = after === " " ? start + fragment.length + 1 : start + fragment.length;
-    return text.slice(0, spliceStart) + text.slice(spliceEnd);
+    const head = text.slice(0, start);
+    const tail = text.slice(start + fragment.length);
+    if (head.endsWith(" ") && tail.startsWith(" ")) return head + tail.slice(1);
+    return head + tail;
   }
 
   /**
@@ -602,15 +604,35 @@ export class MemoryStore {
     newText: string,
     markMutation: () => void,
   ): Promise<MemoryResult> {
-    const fragment = normalizePatchLookupText(oldText);
-    if (!fragment) return { success: false, error: "old_text cannot be empty." };
-    const replacement = newText.trim();
+    if (newText === undefined) return { success: false, error: "new_text is required." };
 
     await this.syncTargetFromDiskIfChanged(target);
     const entries = this.entriesFor(target);
-    const matches = entries.filter((e) => this.stripMetadata(e).includes(fragment));
 
-    if (matches.length === 0) return { success: false, error: `No entry matched '${fragment}'.` };
+    // Fragment ladder (review on #314): the exact supplied substring is tried
+    // first so literal text a search-result prefix stripper would eat
+    // (`Use [build] command`) is never rewritten behind the caller's back.
+    // The trimmed and prefix-stripped forms are fallbacks for whitespace
+    // padding and pasted search-result lines, and each is consulted only when
+    // every earlier form matched nothing. The replacement is used verbatim —
+    // its trailing whitespace can be meaningful (`red` -> `blue `).
+    const display = oldText.trim();
+    if (!display) return { success: false, error: "old_text cannot be empty." };
+    const candidates: string[] = [];
+    for (const candidate of [oldText, display, normalizePatchLookupText(oldText)]) {
+      if (candidate && !candidates.includes(candidate)) candidates.push(candidate);
+    }
+    let fragment = "";
+    let matches: string[] = [];
+    for (const candidate of candidates) {
+      const candidateMatches = entries.filter((e) => this.stripMetadata(e).includes(candidate));
+      if (candidateMatches.length === 0) continue;
+      fragment = candidate;
+      matches = candidateMatches;
+      break;
+    }
+
+    if (!fragment) return { success: false, error: `No entry matched '${display}'.` };
     if (matches.length > 1 && !this.areDistinctScopedFailureCopies(target, matches)) {
       return {
         success: false,
@@ -620,8 +642,11 @@ export class MemoryStore {
     }
     for (const entry of matches) {
       const text = this.stripMetadata(entry);
-      const first = text.indexOf(fragment);
-      if (text.indexOf(fragment, first + fragment.length) !== -1) {
+      // Step by one so overlapping occurrences count too (`ana` twice inside
+      // `banana`): an ambiguous fragment must never pick silently.
+      let count = 0;
+      for (let at = text.indexOf(fragment); at !== -1; at = text.indexOf(fragment, at + 1)) count++;
+      if (count > 1) {
         return { success: false, error: `old_text occurs more than once in the matched entry. Be more specific.` };
       }
     }
@@ -631,7 +656,7 @@ export class MemoryStore {
     let patchedText = "";
     for (const entry of matches) {
       const decoded = this.decodeEntry(entry);
-      const patched = this.spliceFragment(decoded.text, fragment, replacement);
+      const patched = this.spliceFragment(decoded.text, fragment, newText);
       if (!patched.trim()) {
         return { success: false, error: "Patch would empty the entry. Use memory_remove to delete the whole entry." };
       }
