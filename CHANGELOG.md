@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Operator queries with a hyphenated term no longer fail with `no such column`** ([#307](https://github.com/chandra447/pi-hermes-memory/issues/307)): `normalizeFts5Query` handed raw-operator queries to FTS5 untouched, and FTS5 reads `policy-only` as column `policy` minus `only`, so `alpha OR policy-only` died with `no such column: only`. That message contains neither `fts5` nor `unterminated string`, so `isFts5QueryError` did not recognize it, the #122 retry never ran, and the raw SQLite error surfaced to the tool instead of returning the matches. Barewords carrying an unquoted hyphen (`policy-only`, `develop-tdd`, `PA-14`, `2-5`) are now quoted before the query reaches FTS5, while the operators and every piece of syntax the caller wrote — already-quoted phrases, column filters, `NEAR(...)` groups, `*` and a leading hyphen — stay byte-identical. `session_search` shares the normalizer, so it no longer fails on the same shape either. `isFts5QueryError` deliberately still does not match `no such column`: once the hyphen is quoted, that message means a genuine missing column and must stay visible.
+
 ## [0.11.0] - 2026-11-11
 
 ### Added

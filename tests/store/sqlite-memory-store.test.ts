@@ -838,6 +838,33 @@ describe('sqlite-memory-store', () => {
       assert.ok(results.some((r) => r.content.includes('AEST')));
     });
 
+    it('recovers an operator query whose term contains a hyphen (#307)', () => {
+      addMemory(dbManager, 'we run policy-only mode here');
+      addMemory(dbManager, 'alpha rollout finished');
+
+      // Before #307 the raw operator query reached FTS5 verbatim, which read
+      // `policy-only` as column syntax and threw `no such column: only`, so the
+      // whole search failed instead of returning the two matches.
+      const results = searchMemories(dbManager, 'alpha OR policy-only');
+
+      assert.ok(results.some((r) => r.content.includes('policy-only')), 'hyphenated term matched');
+      assert.ok(results.some((r) => r.content.includes('alpha rollout')), 'operator term matched');
+    });
+
+    it('keeps a column-filtered quoted phrase with a hyphenated term working (#307 review)', () => {
+      addMemory(dbManager, 'alpha policy-only mode notes');
+      addMemory(dbManager, 'beta rollout finished');
+
+      // At the previous head the normalizer lost quote sync on `content:"alpha`
+      // and rewrote the term inside the phrase, producing
+      // `content:"alpha "policy-only" mode" OR beta` — which FTS5 rejected
+      // with `no such column: only` even though the original query parses.
+      const results = searchMemories(dbManager, 'content:"alpha policy-only mode" OR beta');
+
+      assert.ok(results.some((r) => r.content.includes('policy-only mode')), 'phrase-filtered match returned');
+      assert.ok(results.some((r) => r.content.includes('beta rollout')), 'operator term matched');
+    });
+
     it('should limit results', () => {
       const results = searchMemories(dbManager, 'pnpm OR Prisma OR AEST', { limit: 2 });
       assert.ok(results.length <= 2);
