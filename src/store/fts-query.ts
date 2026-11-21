@@ -46,13 +46,43 @@ export function hasExplicitFts5Operator(query: string): boolean {
  * for instead of degrading to natural-language terms. `NEAR(a-b, 5)`,
  * `content:policy-only` and already-quoted phrases are deliberately untouched:
  * they either contain their own grouping or are syntax the caller asked for.
+ *
+ * The scan is character-level and tracks whether it is inside a quoted
+ * phrase, because the tokenizer regex loses sync when a bareword ends with
+ * an opening quote (`content:"alpha`): it then treats the rest of a
+ * column-filtered phrase as barewords and rewrites the hyphenated term inside
+ * it, producing `content:"alpha "policy-only" mode"` (#307 review). Text
+ * between quotes is copied verbatim; only top-level barewords are examined.
  */
 function quoteFts5HyphenatedBarewords(query: string): string {
-  return query.replace(FTS5_TOKEN_PATTERN, (full, phrase, term) => {
-    if (phrase !== undefined || !term) return full;
-    if (!term.includes('-') || !FTS5_QUOTABLE_BAREWORD.test(term)) return full;
-    return `"${term.replace(/"/g, '""')}"`;
-  });
+  let out = '';
+  let bare = '';
+  let inQuote = false;
+  const flushBare = (): void => {
+    if (!bare) return;
+    // A bareword cannot contain a quote here (a quote toggles inQuote), so
+    // no escaping is needed; the guard above FTS5_QUOTABLE_BAREWORD keeps
+    // column filters (`content:policy-only`), NEAR groups and `*`/`-`
+    // prefixes untouched.
+    out += bare.includes('-') && FTS5_QUOTABLE_BAREWORD.test(bare)
+      ? `"${bare}"`
+      : bare;
+    bare = '';
+  };
+  for (const ch of query) {
+    if (ch === '"') {
+      flushBare();
+      inQuote = !inQuote;
+      out += ch;
+    } else if (inQuote || /\s/.test(ch)) {
+      flushBare();
+      out += ch;
+    } else {
+      bare += ch;
+    }
+  }
+  flushBare();
+  return out;
 }
 
 function collectNaturalLanguageTerms(query: string): string[] {

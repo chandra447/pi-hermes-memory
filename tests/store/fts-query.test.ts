@@ -89,6 +89,21 @@ describe('fts-query', () => {
       assert.strictEqual(normalizeFts5Query('policy-only* OR alpha'), 'policy-only* OR alpha');
       assert.strictEqual(normalizeFts5Query('alpha OR -policy-only'), 'alpha OR -policy-only');
     });
+
+    it('leaves a column-filtered quoted phrase byte-identical, hyphenated term included (#307 review)', () => {
+      // The old regex tokenizer lost quote sync on the opening quote inside
+      // `content:"alpha` and rewrote the term inside the phrase, producing
+      // `content:"alpha "policy-only" mode" OR beta` — which FTS5 rejects
+      // with `no such column: only` even though the original query parses.
+      assert.strictEqual(
+        normalizeFts5Query('content:"alpha policy-only mode" OR beta'),
+        'content:"alpha policy-only mode" OR beta',
+      );
+      assert.strictEqual(
+        normalizeFts5Query('"alpha policy-only mode" OR beta'),
+        '"alpha policy-only mode" OR beta',
+      );
+    });
   });
 
   describe('natural language recovery', () => {

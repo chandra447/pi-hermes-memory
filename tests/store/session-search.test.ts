@@ -87,6 +87,21 @@ describe('session-search', () => {
       assert.ok(results.some((result) => result.content.includes('policy-only')));
     });
 
+    it('does not throw on a column-filtered quoted phrase with a hyphenated term (#307 review)', () => {
+      // The normalizer used to rewrite the term inside the quoted phrase and
+      // FTS5 rejected the mangled statement; the original query is valid
+      // against the `content` column of message_fts.
+      indexSession(dbManager, createTestSession({ id: 'colfilter-session', messages: [
+        { id: 'colfilter-session-msg-1', role: 'assistant', content: 'alpha policy-only mode notes', timestamp: '2026-05-03T00:01:00Z' },
+        { id: 'colfilter-session-msg-2', role: 'user', content: 'beta rollout finished', timestamp: '2026-05-03T00:02:00Z' },
+      ] }));
+
+      const results = searchSessions(dbManager, 'content:"alpha policy-only mode" OR beta');
+
+      assert.ok(results.length > 0, 'column-filtered phrase with a hyphenated term must not throw');
+      assert.ok(results.some((result) => result.content.includes('policy-only mode')));
+    });
+
     it('retains English token searches in the trigram index', () => {
       indexSession(dbManager, createTestSession({ id: 'english-trigram-session', messages: [
         { id: 'english-trigram-session-msg-1', role: 'assistant', content: 'The NAS backup completed successfully.', timestamp: '2026-05-03T00:01:00Z' },
