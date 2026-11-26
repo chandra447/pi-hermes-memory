@@ -16,9 +16,13 @@ import {
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
-  type Focusable,
-  type TUI,
-} from "@earendil-works/pi-tui";
+} from "../tui-compat.js";
+
+interface SkillsManagerUi {
+  requestRender(): void;
+  size?: () => { rows: number; columns: number };
+  terminal?: { rows: number };
+}
 
 export const MEMORY_SKILLS_KEYMAP = {
   moveGlobal: "g",
@@ -575,7 +579,7 @@ interface SkillsManagerCallbacks {
   projectName: string | null;
 }
 
-export class SkillsManagerModal implements Focusable {
+export class SkillsManagerModal {
   private _focused = false;
 
   get focused(): boolean {
@@ -606,7 +610,7 @@ export class SkillsManagerModal implements Focusable {
   ];
 
   constructor(
-    private readonly tui: TUI,
+    private readonly tui: SkillsManagerUi,
     private readonly theme: Theme,
     initialRows: SkillModalRow[],
     private readonly callbacks: SkillsManagerCallbacks,
@@ -974,7 +978,8 @@ export class SkillsManagerModal implements Focusable {
   }
 
   private getMaxVisibleRows(): number {
-    return Math.max(6, Math.min(14, this.tui.terminal.rows - 22));
+    const rows = this.tui.size?.().rows ?? this.tui.terminal?.rows ?? 24;
+    return Math.max(6, Math.min(14, rows - 22));
   }
 
   private focusSearchWithOptionalInput(data?: string): void {
@@ -1306,16 +1311,7 @@ export function registerSkillsCommand(pi: ExtensionAPI, store: SkillStore): void
               loadedSkills,
             },
           ),
-          {
-            overlay: true,
-            overlayOptions: {
-              anchor: "center",
-              width: "92%",
-              minWidth: 76,
-              maxHeight: "88%",
-              margin: 1,
-            },
-          },
+          { overlay: true },
         );
       } catch {
         const latestManagedSkills = await store.loadIndex();

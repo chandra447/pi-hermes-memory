@@ -1,12 +1,13 @@
-import { keyHint, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import type { ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import stripAnsi from "strip-ansi";
 import {
-  Text,
+  keyHint,
   sliceByColumn,
   truncateToWidth,
   visibleWidth,
-  type Component,
-} from "@earendil-works/pi-tui";
+  wrapTextWithAnsi,
+  type RowsView,
+} from "../tui-compat.js";
 
 export type SharedStatus = "success" | "failure" | "empty";
 
@@ -110,14 +111,16 @@ function renderView(
   options: ToolRenderResultOptions,
   theme: SharedOutputTheme | undefined,
   background: ToolCardBackground,
-): Component {
+): RowsView {
   if (options.expanded) {
-    return new Text(
-      view.expandedText || view.summary,
-      0,
-      0,
-      (line) => restoreBackground(line, background, theme),
-    );
+    const text = (view.expandedText || view.summary).replace(/\t/g, "   ");
+    return {
+      render(width: number): string[] {
+        return wrapTextWithAnsi(text, Math.max(1, width))
+          .map((line) => restoreBackground(line, background, theme));
+      },
+      invalidate(): void {},
+    };
   }
 
   return {
@@ -152,7 +155,7 @@ export function createSharedToolResultRenderer(
     options: ToolRenderResultOptions,
     theme: SharedOutputTheme,
     context?: { isError?: boolean },
-  ): Component => {
+  ): RowsView => {
     const adapted = adapt(result);
     const displayView = {
       ...adapted,
