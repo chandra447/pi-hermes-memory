@@ -148,6 +148,8 @@ export interface MemoryConfig {
    * also skip whole directories regardless of content.
    */
   sessionIndexExclude?: string[];
+  /** Exact Pi custom message types treated as user input by memory and session search. */
+  userMessageCustomTypes?: string[];
 }
 
 export type MemoryCategory =

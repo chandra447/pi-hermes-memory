@@ -56,14 +56,14 @@ export function registerSessionSearchTool(
   options: SessionSearchToolOptions = {},
 ): void {
   if (sessionSearchConfig.variant === 'anchors') {
-    registerAnchorSessionSearchTool(pi, options.sessionsDir ?? DEFAULT_SESSIONS_DIR);
+    registerAnchorSessionSearchTool(pi, options.sessionsDir ?? DEFAULT_SESSIONS_DIR, dbManager.userMessageCustomTypes);
     return;
   }
 
   registerLegacySessionSearchTool(pi, dbManager);
 }
 
-function registerAnchorSessionSearchTool(pi: ExtensionAPI, sessionsDir: string): void {
+function registerAnchorSessionSearchTool(pi: ExtensionAPI, sessionsDir: string, userMessageCustomTypes: readonly string[]): void {
   pi.registerTool({
     name: 'session_search',
     label: 'Session Search',
@@ -104,7 +104,7 @@ exclude:
         return { content: [{ type: 'text' as const, text: result.message! }], details: result };
       }
 
-      const searchResult = searchSessionAnchors(markdown, { sessionsDir });
+      const searchResult = searchSessionAnchors(markdown, { sessionsDir, userMessageCustomTypes });
       if (!searchResult.success) {
         const result: SearchResult = { success: false, message: searchResult.message ?? 'Anchor session search failed.' };
         return { content: [{ type: 'text' as const, text: result.message! }], details: result };

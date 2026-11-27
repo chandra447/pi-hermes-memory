@@ -23,6 +23,7 @@
  * | Shutdown                                      | budget 10000, no session signal  | n/a            | never                           |
  */
 
+import { projectUserMessage } from "../user-message.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
@@ -156,7 +157,8 @@ export function setupSessionFlush(
   const runDirect = deps.runDirectMemoryCompletion ?? runDirectMemoryCompletion;
 
   pi.on("message_end", async (event, _ctx) => {
-    if (event.message.role === "user") userTurnCount++;
+    const message = projectUserMessage(event.message, config.userMessageCustomTypes);
+    if (message) userTurnCount++;
   });
 
   /** Shared flush logic — builds conversation snapshot and saves memories */
@@ -176,7 +178,7 @@ export function setupSessionFlush(
         return; // Context already stale
       }
 
-      const parts = collectMessageParts(entries, config.flushRecentMessages);
+      const parts = collectMessageParts(entries, config.flushRecentMessages, config.userMessageCustomTypes);
       try {
         await deps.ensureMemoryReady?.(ctx);
       } catch {

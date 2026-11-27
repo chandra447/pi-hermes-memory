@@ -1,3 +1,5 @@
+import { getMessageText } from "../types.js";
+import { userMessageFromEntry } from "../user-message.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -30,6 +32,7 @@ export interface SessionAnchorSearchOptions {
   sessionsDir?: string;
   maxFiles?: number;
   maxLines?: number;
+  userMessageCustomTypes?: readonly string[];
 }
 
 interface ParsedAnchorRequest {
@@ -102,7 +105,7 @@ export function searchSessionAnchors(
 
   for (const file of files) {
     const remainingLines = maxLines - scannedLines;
-    const fileResult = searchJsonlFile(file, parsed.request, remainingLines, scannedLines, maxLines);
+    const fileResult = searchJsonlFile(file, parsed.request, remainingLines, scannedLines, maxLines, options.userMessageCustomTypes);
     if (!fileResult.success) {
       return { success: false, ranges: [], message: fileResult.message };
     }
@@ -267,6 +270,7 @@ function searchJsonlFile(
   maxLines: number,
   scannedBefore: number,
   scanCap: number,
+  userMessageCustomTypes?: readonly string[],
 ): { success: true; ranges: PendingRange[]; scannedLines: number } | { success: false; message: string } {
   const content = fs.readFileSync(filePath, "utf-8");
   const lines = content.split(/\r?\n/);
@@ -312,7 +316,8 @@ function searchJsonlFile(
       if (request.to && timestampMs > request.to.getTime()) continue;
     }
 
-    const text = textualizeEvent(event);
+    const projected = userMessageFromEntry(event, userMessageCustomTypes);
+    const text = projected ? getMessageText(projected, Infinity) ?? "" : textualizeEvent(event);
     const termScore = scoreTerms(text, request);
     const matchesTerms = request.hasTextConstraint ? termScore > 0 : true;
     if (!matchesTerms) continue;

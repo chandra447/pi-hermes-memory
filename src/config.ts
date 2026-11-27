@@ -118,6 +118,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   quickCheckOnOpen: true,
   sessionRetentionDays: DEFAULT_SESSION_RETENTION_DAYS,
   sessionIndexExclude: [],
+  userMessageCustomTypes: [],
 };
 
 export const DEFAULT_CONFIG_PATH = path.join(
@@ -221,6 +222,10 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       }
       if (typeof parsed.standingInstructionsEnabled === "boolean") config.standingInstructionsEnabled = parsed.standingInstructionsEnabled;
       if (typeof parsed.skillsEnabled === "boolean") config.skillsEnabled = parsed.skillsEnabled;
+      const customTypes: unknown = parsed.userMessageCustomTypes;
+      if (isStringArray(customTypes)) {
+        config.userMessageCustomTypes = [...new Set(customTypes.filter(type => type.trim().length > 0))].sort();
+      }
       if (isStringArray(parsed.sessionIndexExclude)) {
         config.sessionIndexExclude = sanitizeSessionIndexExclude(parsed.sessionIndexExclude);
       }

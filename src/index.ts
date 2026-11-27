@@ -28,11 +28,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { MemoryStore } from "./store/memory-store.js";
 import { SkillStore } from "./store/skill-store.js";
 import { DatabaseManager, DATABASE_CLOSED_MESSAGE } from "./store/db.js";
-import { indexSession, upsertSessionFileMetadata, pruneEphemeralReviewSessions, pruneOldSessions, retentionCutoffMs } from "./store/session-indexer.js";
+import { indexSessionFromFile, pruneEphemeralReviewSessions, pruneOldSessions, retentionCutoffMs } from "./store/session-indexer.js";
 import { runRecoveryMaintenance } from "./store/recovery-maintenance.js";
 import { scheduleSessionBackfill, joinSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS, type SessionBackfillState } from "./handlers/session-backfill.js";
 import { scheduleLiveSessionIndex, waitForLiveSessionIndex, closeLiveSessionIndex, reportLiveSessionIndexError, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS, type SessionLiveIndexState } from "./handlers/session-live-index.js";
-import { parseSessionFile } from "./store/session-parser.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
 import { registerSkillTool } from "./tools/skill-tool.js";
 import { registerSessionSearchTool } from "./tools/session-search-tool.js";
@@ -124,7 +123,7 @@ export default function (pi: ExtensionAPI) {
     legacySkillsDir: path.join(legacyGlobalDir, "skills"),
     migrationSentinelPath: path.join(globalDir, ".skills-migrated-to-extension-storage"),
   });
-  const dbManager = new DatabaseManager(globalDir);
+  const dbManager = new DatabaseManager(globalDir, { userMessageCustomTypes: config.userMessageCustomTypes });
   let databaseClosed = false;
   const backfillState: SessionBackfillState = { inProgress: false, promise: null };
   // Per-session live-index state: closing it at shutdown stops a message_end
@@ -448,17 +447,7 @@ export default function (pi: ExtensionAPI) {
       measureLifecycleSync("shutdown.active-index", () => {
         const sessionFile = ctx.sessionManager.getSessionFile();
         if (sessionFile && fs.existsSync(sessionFile)) {
-          const sessionData = parseSessionFile(sessionFile);
-          if (sessionData) {
-            dbManager.withCorruptionRecovery(() => {
-              indexSession(dbManager, sessionData);
-              // Keep session_files metadata in sync with the final on-disk state.
-              // Pi appends the closing session entry on shutdown after the last
-              // message_end, so without this upsert the stored size/mtime would be
-              // stale and the next startup would re-parse this file unnecessarily.
-              upsertSessionFileMetadata(dbManager, sessionFile, sessionData.id);
-            });
-          }
+          indexSessionFromFile(dbManager, sessionFile);
         }
       });
     } catch {

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { DEFAULT_MAX_MESSAGE_CONTENT_LENGTH } from '../constants.js';
 import { DatabaseManager } from './db.js';
-import { parseSessionFile, getSessionFiles, isSessionFile, type ParsedSession } from './session-parser.js';
+import { parseMessageEntry, parseSessionFile, getSessionFiles, isSessionFile, type ParsedSession } from './session-parser.js';
 
 export const LAST_SESSION_BACKFILL_KEY = 'last_session_backfill';
 export const SESSION_BACKFILL_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -94,11 +94,20 @@ export function indexSession(dbManager: DatabaseManager, session: ParsedSession)
   return dbManager.withCorruptionRecovery(() => indexSessionOnce(dbManager, session));
 }
 
-function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): IndexResult {
+/** Capture the file stamp before reading so a concurrent append remains eligible for backfill. */
+export function indexSessionFromFile(dbManager: DatabaseManager, filePath: string): IndexResult | null {
+  const metadata = getSessionFileMetadata(filePath);
+  const session = parseSessionFile(filePath, dbManager.userMessageCustomTypes);
+  if (!session) return null;
+  return dbManager.withCorruptionRecovery(() => indexSessionOnce(dbManager, session, metadata));
+}
+
+function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession, metadata?: SessionFileMetadata): IndexResult {
   const db = dbManager.getDb();
 
   const existingSession = db.prepare('SELECT id FROM sessions WHERE id = ?').get(session.id) as { id: string } | undefined;
-  const before = db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?').get(session.id) as { count: number };
+  let added = 0;
+  let removed = 0;
 
   const insertSession = db.prepare(`
     INSERT OR IGNORE INTO sessions (id, project, cwd, started_at, ended_at, message_count)
@@ -106,8 +115,8 @@ function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): I
   `);
 
   const insertMsg = db.prepare(`
-    INSERT OR IGNORE INTO messages (id, session_id, role, content, timestamp, tool_calls)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO messages (id, session_id, role, content, timestamp, tool_calls, custom_type)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
   const updateSession = db.prepare(`
@@ -129,18 +138,24 @@ function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): I
       session.messages.length
     );
 
+    removed = db.prepare(`
+      DELETE FROM messages WHERE session_id = ? AND custom_type IS NOT NULL
+        AND custom_type NOT IN (SELECT value FROM json_each(?))
+    `).run(session.id, dbManager.sessionProjectionKey).changes;
     for (const msg of session.messages) {
-      insertMsg.run(
+      added += insertMsg.run(
         msg.id,
         session.id,
         msg.role,
         truncateMessageContent(msg.content),
         msg.timestamp,
-        msg.toolCalls ? JSON.stringify(msg.toolCalls) : null
-      );
+        msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
+        msg.customType ?? null,
+      ).changes;
     }
 
     updateSession.run(session.project, session.cwd, session.endedAt, session.id, session.id);
+    if (metadata) upsertSessionFileMetadata(dbManager, metadata.path, session.id, metadata);
   };
 
   if (db.transaction) {
@@ -150,10 +165,7 @@ function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): I
     writeSession();
   }
 
-  const after = db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?').get(session.id) as { count: number };
-  const messagesIndexed = after.count - before.count;
-
-  return { sessionId: session.id, messagesIndexed, skipped: Boolean(existingSession) && messagesIndexed === 0 };
+  return { sessionId: session.id, messagesIndexed: added, skipped: Boolean(existingSession) && !added && !removed };
 }
 
 type SessionManagerSnapshot = {
@@ -162,80 +174,12 @@ type SessionManagerSnapshot = {
   getSessionFile?: () => string | undefined;
 };
 
-type SessionMessageEntryLike = {
-  type?: unknown;
-  id?: unknown;
-  timestamp?: unknown;
-  message?: {
-    role?: unknown;
-    content?: unknown;
-  };
-};
-
-function extractTextContent(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== 'object') continue;
-    const b = block as Record<string, unknown>;
-
-    switch (b.type) {
-      case 'text':
-        if (typeof b.text === 'string') parts.push(b.text);
-        break;
-      case 'tool_result':
-        // Tool results can contain unbounded file or command output. Tool
-        // calls are indexed separately, so retaining their output adds bloat
-        // without improving session search.
-        break;
-    }
-  }
-
-  return parts.join('\n').trim();
-}
-
-function extractToolCalls(content: unknown): string[] | undefined {
-  if (!Array.isArray(content)) return undefined;
-
-  const toolNames: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== 'object') continue;
-    const b = block as Record<string, unknown>;
-    if ((b.type === 'toolCall' || b.type === 'tool_use') && typeof b.name === 'string') {
-      toolNames.push(b.name);
-    }
-  }
-  return toolNames.length > 0 ? toolNames : undefined;
-}
-
-function parseMessageEntry(entry: unknown): ParsedSession['messages'][number] | null {
-  if (!entry || typeof entry !== 'object') return null;
-  const e = entry as SessionMessageEntryLike;
-  if (e.type !== 'message' || typeof e.id !== 'string' || typeof e.timestamp !== 'string' || !e.message) return null;
-
-  const role = e.message.role;
-  if (role !== 'user' && role !== 'assistant' && role !== 'system') return null;
-
-  const content = extractTextContent(e.message.content);
-  if (!content) return null;
-
-  return {
-    id: e.id,
-    role,
-    content,
-    timestamp: e.timestamp,
-    toolCalls: role === 'assistant' ? extractToolCalls(e.message.content) : undefined,
-  };
-}
-
-export function parseSessionManagerSnapshot(sessionManager: SessionManagerSnapshot): ParsedSession | null {
+export function parseSessionManagerSnapshot(sessionManager: SessionManagerSnapshot, types?: readonly string[]): ParsedSession | null {
   const header = sessionManager.getHeader();
   if (!header?.id || !header.cwd || !header.timestamp) return null;
 
   const messages = sessionManager.getEntries()
-    .map(parseMessageEntry)
+    .map(entry => parseMessageEntry(entry, types))
     .filter((msg): msg is ParsedSession['messages'][number] => msg !== null);
 
   return {
@@ -249,7 +193,7 @@ export function parseSessionManagerSnapshot(sessionManager: SessionManagerSnapsh
 }
 
 export function indexCurrentSession(dbManager: DatabaseManager, sessionManager: SessionManagerSnapshot): IndexResult | null {
-  const session = parseSessionManagerSnapshot(sessionManager);
+  const session = parseSessionManagerSnapshot(sessionManager, dbManager.userMessageCustomTypes);
   if (!session) return null;
   return indexSession(dbManager, session);
 }
@@ -262,12 +206,8 @@ function indexLiveSessionOnce(dbManager: DatabaseManager, sessionManager: Sessio
   const sessionFile = sessionManager.getSessionFile?.();
   if (sessionManager.getSessionFile && !sessionFile) return null;
   if (sessionFile && fs.existsSync(sessionFile)) {
-    const session = parseSessionFile(sessionFile);
-    if (session) {
-      const result = indexSession(dbManager, session);
-      upsertSessionFileMetadata(dbManager, sessionFile, session.id);
-      return result;
-    }
+    const result = indexSessionFromFile(dbManager, sessionFile);
+    if (result) return result;
   }
 
   return indexCurrentSession(dbManager, sessionManager);
@@ -326,13 +266,13 @@ function getSessionFileMetadata(filePath: string): SessionFileMetadata {
   return { path: filePath, size: stat.size, mtimeMs: Math.trunc(stat.mtimeMs) };
 }
 
-function getStoredSessionFileMetadata(dbManager: DatabaseManager, filePath: string): { size: number; mtime_ms: number } | undefined {
-  return dbManager.getDb().prepare('SELECT size, mtime_ms FROM session_files WHERE path = ?').get(filePath) as { size: number; mtime_ms: number } | undefined;
+function getStoredSessionFileMetadata(dbManager: DatabaseManager, filePath: string): { size: number; mtime_ms: number; projection: string } | undefined {
+  return dbManager.getDb().prepare('SELECT size, mtime_ms, projection FROM session_files WHERE path = ?').get(filePath) as { size: number; mtime_ms: number; projection: string } | undefined;
 }
 
 function storedSessionFileMatches(dbManager: DatabaseManager, metadata: SessionFileMetadata): boolean {
   const row = getStoredSessionFileMetadata(dbManager, metadata.path);
-  return Boolean(row && row.size === metadata.size && row.mtime_ms === metadata.mtimeMs);
+  return Boolean(row && row.size === metadata.size && row.mtime_ms === metadata.mtimeMs && row.projection === dbManager.sessionProjectionKey);
 }
 
 export function upsertSessionFileMetadata(
@@ -344,14 +284,15 @@ export function upsertSessionFileMetadata(
 ): void {
   const db = dbManager.getDb();
   db.prepare(`
-    INSERT INTO session_files (path, session_id, size, mtime_ms, indexed_at)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO session_files (path, session_id, size, mtime_ms, indexed_at, projection)
+    VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(path) DO UPDATE SET
       session_id = excluded.session_id,
       size = excluded.size,
       mtime_ms = excluded.mtime_ms,
+      projection = excluded.projection,
       indexed_at = excluded.indexed_at
-  `).run(metadata.path, sessionId, metadata.size, metadata.mtimeMs, indexedAt.toISOString());
+  `).run(metadata.path, sessionId, metadata.size, metadata.mtimeMs, indexedAt.toISOString(), dbManager.sessionProjectionKey);
 }
 
 function emptyBulkIndexResult(): BulkIndexResult {
@@ -375,14 +316,12 @@ function indexSessionFile(dbManager: DatabaseManager, file: string, result: Bulk
 
   result.sessionsProcessed++;
 
-  const session = parseSessionFile(file);
-  if (!session) {
+  const indexResult = indexSessionFromFile(dbManager, file);
+  if (!indexResult) {
     result.errors.push(`Failed to parse: ${file}`);
     return;
   }
 
-  const indexResult = indexSession(dbManager, session);
-  upsertSessionFileMetadata(dbManager, file, session.id);
   if (indexResult.skipped) {
     result.sessionsSkipped++;
   } else {
