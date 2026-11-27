@@ -8,6 +8,8 @@
  * - Negative patterns: suppress even if a positive pattern matched
  */
 
+import { collectMessageParts } from "./message-parts.js";
+import { projectUserMessage } from "../user-message.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
@@ -141,8 +143,9 @@ export function setupCorrectionDetector(
 
   // Flag on message_end (user role)
   pi.on("message_end", async (event, _ctx) => {
-    if (event.message.role !== "user") return;
-    const text = getMessageText(event.message);
+    const message = projectUserMessage(event.message, config.userMessageCustomTypes);
+    if (!message) return;
+    const text = getMessageText(message);
     if (!text) return;
     if (isCorrection(text, config)) {
       pendingCorrection = text;
@@ -176,19 +179,7 @@ export function setupCorrectionDetector(
       turnsSinceLastCorrection = 0;
       // Build conversation snapshot
       const entries = ctx.sessionManager.getBranch();
-      const parts: string[] = [];
-
-      for (const entry of entries) {
-        if (entry.type !== "message") continue;
-        const msg = entry.message;
-        const text = getMessageText(msg);
-        if (!text) continue;
-        const prefix = msg.role === "user" ? "[USER]" : "[ASSISTANT]";
-        parts.push(`${prefix}: ${text}`);
-      }
-
-      // Only include last few exchanges (correction context is recent)
-      const recentParts = parts.slice(-6);
+      const recentParts = collectMessageParts(entries, 6, config.userMessageCustomTypes);
 
       const activeProjectStore = resolveProjectStore(projectStore);
       const activeProjectName = resolveProjectName(projectName);

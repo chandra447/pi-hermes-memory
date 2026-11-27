@@ -7,6 +7,7 @@
  * Fallback when the direct transport is unavailable or fails: a `pi -p` child built by `execChildPrompt` in `pi-child-process.ts`, behind the process-tree watchdog.
  */
 
+import { projectUserMessage } from "../user-message.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   buildMemoryTargetRoutingGuidance,
@@ -190,7 +191,8 @@ export function setupBackgroundReview(
   pi.on("session_shutdown", () => shutdownReview());
 
   pi.on("message_end", async (event, _ctx) => {
-    if (event.message.role === "user") {
+    const message = projectUserMessage(event.message, config.userMessageCustomTypes);
+    if (message) {
       userTurnCount++;
     }
   });
@@ -250,7 +252,7 @@ export function setupBackgroundReview(
       let allParts: string[] = [];
       try {
         const entries = ctx.sessionManager.getBranch();
-        allParts = collectMessageParts(entries);
+        allParts = collectMessageParts(entries, 0, config.userMessageCustomTypes);
       } catch {
         return;
       }

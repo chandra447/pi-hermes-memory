@@ -179,7 +179,13 @@ export class DatabaseManager {
   private quickCheckOnOpen = true;
   private activeRecoveryLease: { coordinator: AtomicLockCoordinator; key: string; token: string } | null = null;
 
-  constructor(memoryDir: string, recoveryOptions: DatabaseRecoveryOptions = {}) {
+  readonly userMessageCustomTypes: readonly string[];
+  readonly sessionProjectionKey: string;
+
+  constructor(memoryDir: string, options: DatabaseRecoveryOptions & { userMessageCustomTypes?: readonly string[] } = {}) {
+    const { userMessageCustomTypes = [], ...recoveryOptions } = options;
+    this.userMessageCustomTypes = Object.freeze([...new Set(userMessageCustomTypes)].sort());
+    this.sessionProjectionKey = JSON.stringify(this.userMessageCustomTypes);
     this.displayDbPath = path.join(memoryDir, 'sessions.db');
     this.recoveryOptions = { ...DEFAULT_RECOVERY_OPTIONS, ...recoveryOptions };
   }
@@ -411,6 +417,26 @@ export class DatabaseManager {
     // removes indexes attached to the old memories table.
     this.ensureMemoryIndexes(db);
     this.migrateFtsTokenizer(db);
+    this.ensureProjectionColumns(db);
+  }
+
+  private ensureProjectionColumns(db: DatabaseLike): void {
+    if (this.getColumnNames(db, 'session_files').has('projection') &&
+        this.getColumnNames(db, 'messages').has('custom_type')) return;
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (!this.getColumnNames(db, 'session_files').has('projection')) {
+        db.exec("ALTER TABLE session_files ADD COLUMN projection TEXT NOT NULL DEFAULT '[]'");
+      }
+      if (!this.getColumnNames(db, 'messages').has('custom_type')) {
+        db.exec('ALTER TABLE messages ADD COLUMN custom_type TEXT');
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   private hasExistingMainDatabaseFile(): boolean {
@@ -723,12 +749,12 @@ export class DatabaseManager {
 
   private copyMessages(source: DatabaseLike, target: DatabaseLike): number {
     const insert = target.prepare(`
-      INSERT OR IGNORE INTO messages (id, session_id, role, content, timestamp, tool_calls)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT OR IGNORE INTO messages (id, session_id, role, content, timestamp, tool_calls, custom_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     let copied = 0;
 
-    for (const row of this.readTableRows(source, 'messages', ['id', 'session_id', 'role', 'content', 'timestamp', 'tool_calls'])) {
+    for (const row of this.readTableRows(source, 'messages', ['id', 'session_id', 'role', 'content', 'timestamp', 'tool_calls', 'custom_type'])) {
       if (
         typeof row.id !== 'string'
         || typeof row.session_id !== 'string'
@@ -739,7 +765,7 @@ export class DatabaseManager {
         continue;
       }
 
-      insert.run(row.id, row.session_id, row.role, row.content, row.timestamp, this.nullableString(row.tool_calls));
+      insert.run(row.id, row.session_id, row.role, row.content, row.timestamp, this.nullableString(row.tool_calls), this.nullableString(row.custom_type));
       copied++;
     }
 
@@ -748,12 +774,12 @@ export class DatabaseManager {
 
   private copySessionFiles(source: DatabaseLike, target: DatabaseLike): number {
     const insert = target.prepare(`
-      INSERT OR IGNORE INTO session_files (path, session_id, size, mtime_ms, indexed_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT OR IGNORE INTO session_files (path, session_id, size, mtime_ms, indexed_at, projection)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
     let copied = 0;
 
-    for (const row of this.readTableRows(source, 'session_files', ['path', 'session_id', 'size', 'mtime_ms', 'indexed_at'])) {
+    for (const row of this.readTableRows(source, 'session_files', ['path', 'session_id', 'size', 'mtime_ms', 'indexed_at', 'projection'])) {
       if (typeof row.path !== 'string' || typeof row.session_id !== 'string') continue;
       insert.run(
         row.path,
@@ -761,6 +787,7 @@ export class DatabaseManager {
         this.integerOr(row.size, 0),
         this.integerOr(row.mtime_ms, 0),
         typeof row.indexed_at === 'string' ? row.indexed_at : new Date(0).toISOString(),
+        typeof row.projection === 'string' ? row.projection : '[]',
       );
       copied++;
     }

@@ -48,7 +48,7 @@ export function registerIndexSessionsCommand(pi: ExtensionAPI, config: MemoryCon
         ctx.ui.notify(`📁 Found ${totalFiles} session files across ${projectDirs.length} projects${nonSessionFiles > 0 ? ` (${nonSessionFiles} non-session files will be skipped)` : ''}\n⏳ Indexing...`, 'info');
 
         const memoryDir = path.join(AGENT_ROOT, 'pi-hermes-memory');
-        const dbManager = new DatabaseManager(memoryDir);
+        const dbManager = new DatabaseManager(memoryDir, { userMessageCustomTypes: config.userMessageCustomTypes });
 
         try {
           // Retention is honored here too: a manual reindex must not re-add the

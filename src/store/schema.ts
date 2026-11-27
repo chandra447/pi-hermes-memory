@@ -33,6 +33,7 @@ export const SCHEMA_SQL = `
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     size INTEGER NOT NULL,
     mtime_ms INTEGER NOT NULL,
+    projection TEXT NOT NULL DEFAULT '[]',
     indexed_at TEXT NOT NULL
   );
 
@@ -43,6 +44,7 @@ export const SCHEMA_SQL = `
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
     content TEXT NOT NULL,
     timestamp TEXT NOT NULL,
+    custom_type TEXT,
     tool_calls TEXT
   );
 

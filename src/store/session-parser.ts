@@ -1,3 +1,4 @@
+import { userMessageFromEntry } from "../user-message.js";
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -22,6 +23,7 @@ export interface ParsedMessage {
   content: string;
   timestamp: string;
   toolCalls?: string[];
+  customType?: string;
 }
 
 /**
@@ -90,6 +92,22 @@ function extractToolCalls(content: unknown): string[] | undefined {
   return toolNames.length > 0 ? toolNames : undefined;
 }
 
+/** Index the same native entry identically from JSONL and from a live session snapshot. */
+export function parseMessageEntry(value: unknown, types?: readonly string[]): ParsedMessage | null {
+  const entry = value as Partial<JsonlEntry> | null;
+  if (!entry || typeof entry.id !== 'string' || typeof entry.timestamp !== 'string') return null;
+  const message = entry.type === 'message' ? entry.message : userMessageFromEntry(entry, types);
+  const role = message?.role;
+  if (!message || (role !== 'user' && role !== 'assistant' && role !== 'system')) return null;
+  const content = extractTextContent(message.content);
+  if (!content) return null;
+  return {
+    id: entry.id, role, content, timestamp: entry.timestamp,
+    toolCalls: role === 'assistant' ? extractToolCalls(message.content) : undefined,
+    ...(entry.type === 'custom_message' ? { customType: entry.customType } : {}),
+  };
+}
+
 /** Remove a leading UTF-8 byte-order mark (U+FEFF) from decoded text. */
 function stripLeadingBom(text: string): string {
   return text.startsWith('\uFEFF') ? text.slice(1) : text;
@@ -113,7 +131,7 @@ function readUtf8WithoutBom(filePath: string): string {
  * @param filePath — Path to the .jsonl file
  * @returns Parsed session data, or null if the file is invalid
  */
-export function parseSessionFile(filePath: string): ParsedSession | null {
+export function parseSessionFile(filePath: string, types?: readonly string[]): ParsedSession | null {
   const content = readUtf8WithoutBom(filePath);
   const lines = content.split('\n').filter(line => line.trim());
 
@@ -139,24 +157,10 @@ export function parseSessionFile(filePath: string): ParsedSession | null {
         sessionTimestamp = entry.timestamp ?? null;
         break;
 
-      case 'message': {
-        if (!entry.message || !entry.id || !entry.timestamp) break;
-
-        const role = entry.message.role;
-        if (role !== 'user' && role !== 'assistant' && role !== 'system') break;
-
-        const textContent = extractTextContent(entry.message.content);
-        if (!textContent) break; // Skip empty messages
-
-        const toolCalls = role === 'assistant' ? extractToolCalls(entry.message.content) : undefined;
-
-        messages.push({
-          id: entry.id,
-          role,
-          content: textContent,
-          timestamp: entry.timestamp,
-          toolCalls,
-        });
+      case 'message':
+      case 'custom_message': {
+        const message = parseMessageEntry(entry, types);
+        if (message) messages.push(message);
         break;
       }
       // Skip other entry types (model_change, thinking_level_change, custom, etc.)

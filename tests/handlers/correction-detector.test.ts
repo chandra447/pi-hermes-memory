@@ -552,6 +552,26 @@ describe("setupCorrectionDetector handler", () => {
       );
     });
 
+    it("uses configured native input for both the live correction signal and its branch context", async () => {
+      const { store } = storeWithFailureTracking();
+      setupCorrectionDetector(createMockPi(), store as unknown as MemoryStore, null,
+        { ...directTransportConfig, userMessageCustomTypes: ["example.input"] }, null, null,
+        makeDirectDeps({ ok: true, appliedCount: 1 }));
+      const timestamp = new Date().toISOString();
+      const branch = [];
+      for (const customType of ["example.background", "example.input"]) {
+        const content = "No, use pnpm instead. " + customType;
+        const message = { role: "custom", customType, content, display: false, timestamp: Date.parse(timestamp) };
+        for (const fn of handlers["message_end"]) await fn({ message }, makeCtx());
+        branch.push({ type: "custom_message", customType, timestamp, content });
+        await fireTurnEnd(branch);
+        assert.equal(directCalls.length, customType === "example.input" ? 1 : 0);
+      }
+      const { userPrompt } = directCalls[0][3] as { userPrompt: string };
+      assert.match(userPrompt, /\[USER\]: No, use pnpm instead. example\.input/);
+      assert.doesNotMatch(userPrompt, /example\.background/);
+    });
+
     it("includes project and failure target routing in direct correction prompts", async () => {
       const pi = createMockPi();
       const { store } = storeWithFailureTracking();

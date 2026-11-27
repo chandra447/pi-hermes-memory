@@ -1,3 +1,4 @@
+import { userMessageFromEntry } from "../user-message.js";
 import { getMessageText } from "../types.js";
 
 export function applyRecentMessageLimit(parts: string[], recentMessages = 0): string[] {
@@ -7,14 +8,14 @@ export function applyRecentMessageLimit(parts: string[], recentMessages = 0): st
   return parts;
 }
 
-export function collectMessageParts(entries: unknown[], recentMessages = 0): string[] {
+export function collectMessageParts(entries: unknown[], recentMessages = 0, userMessageCustomTypes?: readonly string[]): string[] {
   const parts: string[] = [];
 
   for (const entry of entries) {
     if (typeof entry !== "object" || entry === null) continue;
-    if ((entry as { type?: unknown }).type !== "message") continue;
-
-    const msg = (entry as { message?: unknown }).message;
+    const msg = (entry as { type?: unknown }).type === "message"
+      ? (entry as { message?: unknown }).message
+      : userMessageFromEntry(entry, userMessageCustomTypes);
     const text = getMessageText(msg);
     if (!text) continue;
 
